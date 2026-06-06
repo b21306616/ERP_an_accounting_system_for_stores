@@ -32,6 +32,12 @@ def validate_database_name(database_name: str) -> None:
         raise ValueError("Database name cannot contain line breaks or semicolons.")
 
 
+def escape_alembic_config_value(value: str) -> str:
+    """Escape percent signs before storing a value in Alembic's config parser."""
+
+    return value.replace("%", "%%")
+
+
 def create_database_if_missing(config: AppConfig) -> None:
     """Create the configured SQL Server database when it does not exist."""
 
@@ -57,7 +63,8 @@ def run_migrations(config: AppConfig) -> None:
 
     project_root = Path(__file__).resolve().parents[2]
     alembic_cfg = Config(str(project_root / "alembic.ini"))
-    alembic_cfg.set_main_option("sqlalchemy.url", build_sqlalchemy_url(config.database))
+    sqlalchemy_url = build_sqlalchemy_url(config.database)
+    alembic_cfg.set_main_option("sqlalchemy.url", escape_alembic_config_value(sqlalchemy_url))
     command.upgrade(alembic_cfg, "head")
 
 
