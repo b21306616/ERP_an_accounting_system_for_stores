@@ -23,7 +23,7 @@ from server_app.db.base import Base, ReprMixin, TimestampMixin
 
 
 class Role(Base, ReprMixin, TimestampMixin):
-    """Built-in access role such as Owner, Accountant, Manager, Cashier, Auditor."""
+    """Built-in access role such as Super Admin, Accountant, Manager, Cashier, Auditor."""
 
     __tablename__ = "roles"
 

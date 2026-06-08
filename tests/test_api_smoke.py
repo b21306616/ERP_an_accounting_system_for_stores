@@ -15,8 +15,13 @@ import uvicorn
 
 from server_app.api.app import create_app
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
-from server_app.core.constants import BUILTIN_ROLES
-from server_app.core.security import hash_password
+from server_app.core.constants import (
+    BUILTIN_ROLES,
+    SUPER_ADMIN_FULL_NAME,
+    SUPER_ADMIN_ROLE,
+    SUPER_ADMIN_USERNAME,
+)
+from server_app.core.security import hash_password, verify_password
 from server_app.db.base import Base
 from server_app.db.models import Role, User
 
@@ -46,10 +51,10 @@ class ApiSmokeTests(unittest.TestCase):
             session.add_all(roles.values())
             session.add(
                 User(
-                    username="owner",
-                    full_name="Owner",
+                    username=SUPER_ADMIN_USERNAME,
+                    full_name=SUPER_ADMIN_FULL_NAME,
                     password_hash=hash_password("password123"),
-                    role=roles["Owner"],
+                    role=roles[SUPER_ADMIN_ROLE],
                     is_active=True,
                 )
             )
@@ -119,6 +124,20 @@ class ApiSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         return response.json()["access_token"]
 
+    def _super_admin_id(self, token: str) -> int:
+        """Return the seeded Super Admin user id."""
+
+        response = requests.get(
+            f"{self.base_url}/users",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+        self.assertEqual(response.status_code, 200)
+        for user in response.json():
+            if user["username"] == SUPER_ADMIN_USERNAME:
+                return int(user["id"])
+        raise AssertionError("Seeded super_admin user was not returned by /users")
+
     def test_health(self) -> None:
         """Health endpoint should report ok when DB is reachable."""
 
@@ -130,7 +149,7 @@ class ApiSmokeTests(unittest.TestCase):
     def test_login_and_me(self) -> None:
         """Login token should authorize the current-user endpoint."""
 
-        token = self._login("owner")
+        token = self._login(SUPER_ADMIN_USERNAME)
         response = requests.get(
             f"{self.base_url}/auth/me",
             headers={"Authorization": f"Bearer {token}"},
@@ -138,8 +157,8 @@ class ApiSmokeTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["username"], "owner")
-        self.assertEqual(response.json()["role"], "Owner")
+        self.assertEqual(response.json()["username"], SUPER_ADMIN_USERNAME)
+        self.assertEqual(response.json()["role"], SUPER_ADMIN_ROLE)
 
     def test_protected_endpoint_rejects_missing_token(self) -> None:
         """Protected endpoints should reject unauthenticated calls."""
@@ -148,10 +167,10 @@ class ApiSmokeTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    def test_owner_can_create_currency(self) -> None:
-        """Owner role should be allowed to create reference data."""
+    def test_super_admin_can_create_currency(self) -> None:
+        """Super Admin role should be allowed to create reference data."""
 
-        token = self._login("owner")
+        token = self._login(SUPER_ADMIN_USERNAME)
         response = requests.post(
             f"{self.base_url}/reference/currencies",
             json={"code": "USD", "name": "US Dollar", "symbol": "$"},
@@ -163,7 +182,7 @@ class ApiSmokeTests(unittest.TestCase):
         self.assertEqual(response.json()["code"], "USD")
 
     def test_cashier_cannot_create_currency(self) -> None:
-        """Non-owner roles should not pass Owner-only dependency checks."""
+        """Non-super-admin roles should not pass Super Admin dependency checks."""
 
         token = self._login("cashier")
         response = requests.post(
@@ -174,6 +193,117 @@ class ApiSmokeTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_user_api_blocks_super_admin_role_assignment(self) -> None:
+        """The reserved Super Admin role should not be assigned to regular users."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        response = requests.post(
+            f"{self.base_url}/users",
+            json={
+                "username": "extra_admin",
+                "full_name": "Extra Admin",
+                "password": "password123",
+                "role_name": SUPER_ADMIN_ROLE,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_user_api_blocks_duplicate_super_admin_creation(self) -> None:
+        """The fixed super_admin username should not be created through the API."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        response = requests.post(
+            f"{self.base_url}/users",
+            json={
+                "username": SUPER_ADMIN_USERNAME,
+                "full_name": SUPER_ADMIN_FULL_NAME,
+                "password": "password123",
+                "role_name": "Cashier",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_user_api_blocks_super_admin_profile_changes(self) -> None:
+        """The fixed Super Admin identity fields should not be editable."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        user_id = self._super_admin_id(token)
+        response = requests.patch(
+            f"{self.base_url}/users/{user_id}",
+            json={"full_name": "Changed Name"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_user_api_blocks_super_admin_role_changes(self) -> None:
+        """The fixed Super Admin role should not be editable."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        user_id = self._super_admin_id(token)
+        response = requests.patch(
+            f"{self.base_url}/users/{user_id}",
+            json={"role_name": "Cashier"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_user_api_changes_super_admin_password_with_current_password(self) -> None:
+        """Super Admin password changes should require the current password."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        user_id = self._super_admin_id(token)
+        response = requests.patch(
+            f"{self.base_url}/users/{user_id}",
+            json={"password": "changed123", "current_password": "password123"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        with self.session_factory() as session:
+            user = session.get(User, user_id)
+            self.assertIsNotNone(user)
+            assert user is not None
+            self.assertTrue(verify_password("changed123", user.password_hash))
+
+    def test_user_api_rejects_wrong_super_admin_current_password(self) -> None:
+        """The old password must match before changing the Super Admin password."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        user_id = self._super_admin_id(token)
+        response = requests.patch(
+            f"{self.base_url}/users/{user_id}",
+            json={"password": "changed123", "current_password": "wrong-password"},
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_user_api_blocks_super_admin_deactivation(self) -> None:
+        """The fixed Super Admin account should always remain active."""
+
+        token = self._login(SUPER_ADMIN_USERNAME)
+        user_id = self._super_admin_id(token)
+        response = requests.delete(
+            f"{self.base_url}/users/{user_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=2,
+        )
+
+        self.assertEqual(response.status_code, 400)
 
 
 if __name__ == "__main__":

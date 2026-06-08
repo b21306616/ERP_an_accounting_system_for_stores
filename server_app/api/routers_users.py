@@ -1,18 +1,25 @@
-"""Owner-only user administration API routes."""
+"""Super-admin-only user administration API routes."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from server_app.api.dependencies import get_db, require_owner
-from server_app.core.security import hash_password
+from server_app.api.dependencies import get_db, require_super_admin
+from server_app.core.constants import SUPER_ADMIN_FULL_NAME, SUPER_ADMIN_ROLE, SUPER_ADMIN_USERNAME
+from server_app.core.security import hash_password, verify_password
 from server_app.db.models import Role, User
 from server_app.schemas.users import UserCreate, UserRead, UserUpdate
 from server_app.services.auth import role_name_for_user
 
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+def _is_super_admin_username(username: str) -> bool:
+    """Return whether a username targets the fixed Super Admin account."""
+
+    return username.casefold() == SUPER_ADMIN_USERNAME.casefold()
 
 
 def _to_user_read(user: User) -> UserRead:
@@ -41,7 +48,7 @@ def _get_role(session: Session, role_name: str) -> Role:
 
 @router.get("", response_model=list[UserRead])
 def list_users(
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> list[UserRead]:
     """List all users."""
@@ -53,10 +60,21 @@ def list_users(
 @router.post("", response_model=UserRead, status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: UserCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> UserRead:
     """Create a user with a built-in role."""
+
+    if _is_super_admin_username(payload.username):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The fixed super_admin account cannot be created through the user API.",
+        )
+    if payload.role_name == SUPER_ADMIN_ROLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super Admin role is reserved for the fixed super_admin account.",
+        )
 
     existing = session.query(User).filter(User.username == payload.username).one_or_none()
     if existing is not None:
@@ -82,7 +100,7 @@ def create_user(
 @router.get("/{user_id}", response_model=UserRead)
 def get_user(
     user_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> UserRead:
     """Return one user by id."""
@@ -97,7 +115,7 @@ def get_user(
 def update_user(
     user_id: int,
     payload: UserUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> UserRead:
     """Update selected user fields."""
@@ -105,6 +123,42 @@ def update_user(
     user = session.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+
+    if _is_super_admin_username(user.username):
+        if (
+            payload.full_name is not None
+            or payload.role_name is not None
+            or payload.is_active is not None
+            or payload.password is None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only the Super Admin password can be changed.",
+            )
+        if not payload.current_password:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current Super Admin password is required.",
+            )
+        if not verify_password(payload.current_password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Current Super Admin password is incorrect.",
+            )
+
+        user.full_name = SUPER_ADMIN_FULL_NAME
+        user.password_hash = hash_password(payload.password)
+        user.role = _get_role(session, SUPER_ADMIN_ROLE)
+        user.is_active = True
+        session.commit()
+        session.refresh(user)
+        return _to_user_read(user)
+
+    if payload.role_name == SUPER_ADMIN_ROLE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super Admin role is reserved for the fixed super_admin account.",
+        )
 
     if payload.full_name is not None:
         user.full_name = payload.full_name
@@ -123,13 +177,18 @@ def update_user(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 def deactivate_user(
     user_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
-    """Deactivate a user instead of physically deleting the audit trail owner."""
+    """Deactivate a user instead of physically deleting audit history."""
 
     user = session.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if _is_super_admin_username(user.username):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Super Admin cannot be deactivated.",
+        )
     user.is_active = False
     session.commit()

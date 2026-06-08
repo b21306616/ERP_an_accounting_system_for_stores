@@ -11,8 +11,13 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from server_app.core.config import AppConfig, build_sqlalchemy_url
-from server_app.core.constants import BUILTIN_ROLES, OWNER_ROLE
-from server_app.core.security import hash_password
+from server_app.core.constants import (
+    BUILTIN_ROLES,
+    SUPER_ADMIN_FULL_NAME,
+    SUPER_ADMIN_ROLE,
+    SUPER_ADMIN_USERNAME,
+)
+from server_app.core.security import hash_password, verify_password
 from server_app.db.models import Role, User
 from server_app.db.session import create_db_engine, create_session_factory
 
@@ -85,39 +90,89 @@ def seed_builtin_roles(session: Session) -> dict[str, Role]:
     return existing_roles
 
 
-def seed_owner_user(
-    session: Session,
-    username: str,
-    full_name: str,
-    password: str,
-) -> User:
-    """Create or update the initial Owner user from setup."""
+def _find_other_super_admin(session: Session) -> User | None:
+    """Return any non-fixed user incorrectly assigned the Super Admin role."""
+
+    return (
+        session.query(User)
+        .join(Role)
+        .filter(Role.name == SUPER_ADMIN_ROLE, User.username != SUPER_ADMIN_USERNAME)
+        .first()
+    )
+
+
+def validate_super_admin_user(session: Session) -> User:
+    """Enforce the fixed Super Admin account invariant for runtime startup."""
 
     roles = seed_builtin_roles(session)
-    owner_role = roles[OWNER_ROLE]
-    user = session.query(User).filter(User.username == username).one_or_none()
+    super_admin_role = roles[SUPER_ADMIN_ROLE]
+    user_count = session.query(User).count()
+    user = session.query(User).filter(User.username == SUPER_ADMIN_USERNAME).one_or_none()
 
+    if user_count == 0:
+        raise ValueError("Database does not contain the fixed super_admin user. Run first setup.")
     if user is None:
+        raise ValueError("Existing database must contain the fixed super_admin user.")
+    if _find_other_super_admin(session) is not None:
+        raise ValueError("Super Admin role is reserved for the fixed super_admin account.")
+
+    user.full_name = SUPER_ADMIN_FULL_NAME
+    user.role = super_admin_role
+    user.is_active = True
+    session.flush()
+    return user
+
+
+def seed_super_admin_user(
+    session: Session,
+    current_password: str | None,
+    new_password: str,
+) -> User:
+    """Create or securely rotate the fixed Super Admin account."""
+
+    roles = seed_builtin_roles(session)
+    super_admin_role = roles[SUPER_ADMIN_ROLE]
+    user_count = session.query(User).count()
+    user = session.query(User).filter(User.username == SUPER_ADMIN_USERNAME).one_or_none()
+    other_super_admin = _find_other_super_admin(session)
+
+    if other_super_admin is not None:
+        raise ValueError("Super Admin role is reserved for the fixed super_admin account.")
+
+    if user_count == 0:
         user = User(
-            username=username,
-            full_name=full_name,
-            password_hash=hash_password(password),
-            role=owner_role,
+            username=SUPER_ADMIN_USERNAME,
+            full_name=SUPER_ADMIN_FULL_NAME,
+            password_hash=hash_password(new_password),
+            role=super_admin_role,
             is_active=True,
         )
         session.add(user)
     else:
-        user.full_name = full_name
-        user.password_hash = hash_password(password)
-        user.role = owner_role
+        if user is None:
+            raise ValueError(
+                "Existing database must contain the fixed super_admin user before setup can reset its password."
+            )
+        if not current_password:
+            raise ValueError("Current Super Admin password is required.")
+        if not verify_password(current_password, user.password_hash):
+            raise ValueError("Current Super Admin password is incorrect.")
+
+        user.full_name = SUPER_ADMIN_FULL_NAME
+        user.password_hash = hash_password(new_password)
+        user.role = super_admin_role
         user.is_active = True
 
     session.flush()
     return user
 
 
-def bootstrap_database(config: AppConfig, owner_username: str, owner_full_name: str, owner_password: str) -> None:
-    """Create DB, migrate schema, and seed built-in roles plus the first Owner."""
+def bootstrap_database(
+    config: AppConfig,
+    current_super_admin_password: str | None,
+    new_super_admin_password: str,
+) -> None:
+    """Create DB, migrate schema, and seed or rotate the fixed Super Admin."""
 
     create_database_if_missing(config)
     run_migrations(config)
@@ -126,7 +181,7 @@ def bootstrap_database(config: AppConfig, owner_username: str, owner_full_name: 
     session_factory = create_session_factory(engine)
     try:
         with session_factory() as session:
-            seed_owner_user(session, owner_username, owner_full_name, owner_password)
+            seed_super_admin_user(session, current_super_admin_password, new_super_admin_password)
             session.commit()
     finally:
         engine.dispose()
@@ -141,6 +196,7 @@ def prepare_existing_database(config: AppConfig) -> tuple[Engine, sessionmaker[S
     try:
         with session_factory() as session:
             seed_builtin_roles(session)
+            validate_super_admin_user(session)
             session.execute(text("SELECT 1"))
             session.commit()
     except Exception:

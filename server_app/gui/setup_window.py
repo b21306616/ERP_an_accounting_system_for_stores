@@ -20,13 +20,13 @@ from PyQt6.QtWidgets import (
 )
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig, create_default_config
-from server_app.core.constants import DEFAULT_ODBC_DRIVER
+from server_app.core.constants import DEFAULT_ODBC_DRIVER, SUPER_ADMIN_FULL_NAME, SUPER_ADMIN_USERNAME
 
 
 class SetupWindow(QWidget):
     """Collect all first-run settings needed to start the server."""
 
-    setup_requested = pyqtSignal(object, str, str, str)
+    setup_requested = pyqtSignal(object, object, str)
 
     def __init__(self, error_message: str | None = None) -> None:
         super().__init__()
@@ -45,10 +45,11 @@ class SetupWindow(QWidget):
         self.host_edit = QLineEdit(self.default_config.api.host)
         self.port_spin = QSpinBox()
 
-        self.owner_username_edit = QLineEdit("owner")
-        self.owner_full_name_edit = QLineEdit("System Owner")
-        self.owner_password_edit = QLineEdit()
-        self.owner_confirm_edit = QLineEdit()
+        self.super_admin_username_edit = QLineEdit(SUPER_ADMIN_USERNAME)
+        self.super_admin_full_name_edit = QLineEdit(SUPER_ADMIN_FULL_NAME)
+        self.current_password_edit = QLineEdit()
+        self.new_password_edit = QLineEdit()
+        self.confirm_password_edit = QLineEdit()
 
         self.status_label = QLabel(error_message or "")
         self.submit_button = QPushButton("Create database and start server")
@@ -84,14 +85,18 @@ class SetupWindow(QWidget):
         api_form.addRow("Bind host/IP", self.host_edit)
         api_form.addRow("Port", self.port_spin)
 
-        owner_group = QGroupBox("Initial Owner user")
-        owner_form = QFormLayout(owner_group)
-        self.owner_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.owner_confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        owner_form.addRow("Username", self.owner_username_edit)
-        owner_form.addRow("Full name", self.owner_full_name_edit)
-        owner_form.addRow("Password", self.owner_password_edit)
-        owner_form.addRow("Confirm password", self.owner_confirm_edit)
+        super_admin_group = QGroupBox("Super Admin account")
+        super_admin_form = QFormLayout(super_admin_group)
+        self.super_admin_username_edit.setReadOnly(True)
+        self.super_admin_full_name_edit.setReadOnly(True)
+        self.current_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.new_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        super_admin_form.addRow("Username", self.super_admin_username_edit)
+        super_admin_form.addRow("Full name", self.super_admin_full_name_edit)
+        super_admin_form.addRow("Current password", self.current_password_edit)
+        super_admin_form.addRow("New password", self.new_password_edit)
+        super_admin_form.addRow("Confirm new password", self.confirm_password_edit)
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
@@ -103,7 +108,7 @@ class SetupWindow(QWidget):
 
         main_layout.addWidget(database_group)
         main_layout.addWidget(api_group)
-        main_layout.addWidget(owner_group)
+        main_layout.addWidget(super_admin_group)
         main_layout.addWidget(self.status_label)
         main_layout.addLayout(button_row)
 
@@ -151,7 +156,7 @@ class SetupWindow(QWidget):
         """Validate form values and emit a setup request."""
 
         try:
-            config, owner_username, owner_full_name, owner_password = self._build_config_from_form()
+            config, current_password, new_password = self._build_config_from_form()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid setup values", str(exc))
             return
@@ -159,18 +164,17 @@ class SetupWindow(QWidget):
         self.status_label.setStyleSheet("color: #555;")
         self.status_label.setText("Creating database, running migrations, and starting API...")
         self.set_busy(True)
-        self.setup_requested.emit(config, owner_username, owner_full_name, owner_password)
+        self.setup_requested.emit(config, current_password, new_password)
 
-    def _build_config_from_form(self) -> tuple[AppConfig, str, str, str]:
-        """Create typed config and Owner credentials from validated form fields."""
+    def _build_config_from_form(self) -> tuple[AppConfig, str | None, str]:
+        """Create typed config and Super Admin password values from validated form fields."""
 
         server = self.server_edit.text().strip()
         database = self.database_edit.text().strip()
         host = self.host_edit.text().strip()
-        owner_username = self.owner_username_edit.text().strip()
-        owner_full_name = self.owner_full_name_edit.text().strip()
-        owner_password = self.owner_password_edit.text()
-        owner_confirm = self.owner_confirm_edit.text()
+        current_password = self.current_password_edit.text()
+        new_password = self.new_password_edit.text()
+        password_confirm = self.confirm_password_edit.text()
         auth_mode = self.auth_combo.currentData()
 
         if not server:
@@ -183,14 +187,10 @@ class SetupWindow(QWidget):
             raise ValueError("SQL username is required for SQL Login mode.")
         if auth_mode == "sql" and not self.password_edit.text():
             raise ValueError("SQL password is required for SQL Login mode.")
-        if not owner_username:
-            raise ValueError("Owner username is required.")
-        if not owner_full_name:
-            raise ValueError("Owner full name is required.")
-        if len(owner_password) < 6:
-            raise ValueError("Owner password must contain at least 6 characters.")
-        if owner_password != owner_confirm:
-            raise ValueError("Owner password and confirmation do not match.")
+        if len(new_password) < 6:
+            raise ValueError("Super Admin password must contain at least 6 characters.")
+        if new_password != password_confirm:
+            raise ValueError("Super Admin password and confirmation do not match.")
 
         database_config = DatabaseConfig(
             server=server,
@@ -207,4 +207,4 @@ class SetupWindow(QWidget):
             api=api_config,
             jwt_secret=self.default_config.jwt_secret,
         )
-        return config, owner_username, owner_full_name, owner_password
+        return config, current_password or None, new_password

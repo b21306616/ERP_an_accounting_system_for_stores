@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, selectinload
 
-from server_app.api.dependencies import get_current_user, get_db, require_owner
+from server_app.api.dependencies import get_current_user, get_db, require_super_admin
 from server_app.db.models import (
     Contract,
     Counterparty,
@@ -105,7 +105,7 @@ def list_currencies(
 @router.post("/currencies", response_model=CurrencyRead, status_code=status.HTTP_201_CREATED)
 def create_currency(
     payload: CurrencyCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Currency:
     """Create a currency."""
@@ -130,7 +130,7 @@ def get_currency(
 def update_currency(
     currency_id: int,
     payload: CurrencyUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Currency:
     """Update a currency."""
@@ -143,7 +143,7 @@ def update_currency(
 @router.delete("/currencies/{currency_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_currency(
     currency_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a currency."""
@@ -165,7 +165,7 @@ def list_exchange_rates(
 @router.post("/exchange-rates", response_model=ExchangeRateRead, status_code=status.HTTP_201_CREATED)
 def create_exchange_rate(
     payload: ExchangeRateCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> ExchangeRate:
     """Create an exchange-rate row."""
@@ -190,7 +190,7 @@ def get_exchange_rate(
 def update_exchange_rate(
     rate_id: int,
     payload: ExchangeRateUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> ExchangeRate:
     """Update an exchange-rate row."""
@@ -203,7 +203,7 @@ def update_exchange_rate(
 @router.delete("/exchange-rates/{rate_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_exchange_rate(
     rate_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Delete an exchange-rate row."""
@@ -225,7 +225,7 @@ def list_warehouses(
 @router.post("/warehouses", response_model=WarehouseRead, status_code=status.HTTP_201_CREATED)
 def create_warehouse(
     payload: WarehouseCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Warehouse:
     """Create a warehouse."""
@@ -250,7 +250,7 @@ def get_warehouse(
 def update_warehouse(
     warehouse_id: int,
     payload: WarehouseUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Warehouse:
     """Update a warehouse."""
@@ -263,7 +263,7 @@ def update_warehouse(
 @router.delete("/warehouses/{warehouse_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_warehouse(
     warehouse_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a warehouse."""
@@ -285,7 +285,7 @@ def list_products(
 @router.post("/products", response_model=ProductRead, status_code=status.HTTP_201_CREATED)
 def create_product(
     payload: ProductCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Product:
     """Create a product."""
@@ -310,7 +310,7 @@ def get_product(
 def update_product(
     product_id: int,
     payload: ProductUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Product:
     """Update a product."""
@@ -323,7 +323,7 @@ def update_product(
 @router.delete("/products/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
     product_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a product."""
@@ -373,7 +373,7 @@ def list_product_sets(
 @router.post("/product-sets", response_model=ProductSetRead, status_code=status.HTTP_201_CREATED)
 def create_product_set(
     payload: ProductSetCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> ProductSet:
     """Create a product set."""
@@ -419,7 +419,7 @@ def get_product_set(
 def update_product_set(
     product_set_id: int,
     payload: ProductSetUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> ProductSet:
     """Update a product set and optionally replace its items."""
@@ -444,7 +444,7 @@ def update_product_set(
 @router.delete("/product-sets/{product_set_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product_set(
     product_set_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a product set."""
@@ -466,7 +466,7 @@ def list_counterparties(
 @router.post("/counterparties", response_model=CounterpartyRead, status_code=status.HTTP_201_CREATED)
 def create_counterparty(
     payload: CounterpartyCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Counterparty:
     """Create a counterparty."""
@@ -491,7 +491,7 @@ def get_counterparty(
 def update_counterparty(
     counterparty_id: int,
     payload: CounterpartyUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Counterparty:
     """Update a counterparty."""
@@ -504,7 +504,7 @@ def update_counterparty(
 @router.delete("/counterparties/{counterparty_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_counterparty(
     counterparty_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a counterparty."""
@@ -526,7 +526,7 @@ def list_contracts(
 @router.post("/contracts", response_model=ContractRead, status_code=status.HTTP_201_CREATED)
 def create_contract(
     payload: ContractCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Contract:
     """Create a contract."""
@@ -554,7 +554,7 @@ def get_contract(
 def update_contract(
     contract_id: int,
     payload: ContractUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> Contract:
     """Update a contract."""
@@ -569,7 +569,7 @@ def update_contract(
 @router.delete("/contracts/{contract_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_contract(
     contract_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a contract."""
@@ -591,7 +591,7 @@ def list_money_accounts(
 @router.post("/money-accounts", response_model=MoneyAccountRead, status_code=status.HTTP_201_CREATED)
 def create_money_account(
     payload: MoneyAccountCreate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> MoneyAccount:
     """Create a cash or bank account."""
@@ -617,7 +617,7 @@ def get_money_account(
 def update_money_account(
     account_id: int,
     payload: MoneyAccountUpdate,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> MoneyAccount:
     """Update a cash or bank account."""
@@ -632,7 +632,7 @@ def update_money_account(
 @router.delete("/money-accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_money_account(
     account_id: int,
-    _: User = Depends(require_owner),
+    _: User = Depends(require_super_admin),
     session: Session = Depends(get_db),
 ) -> None:
     """Deactivate a cash or bank account."""

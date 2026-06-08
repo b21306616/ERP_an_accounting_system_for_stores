@@ -8,7 +8,6 @@ Equivalents to Laravel commands:
 from __future__ import annotations
 
 import argparse
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -19,9 +18,9 @@ sys.path.append(str(project_root))
 
 try:
     from sqlalchemy import text
-    from server_app.core.config import ConfigManager
+    from server_app.core.config import AppConfig, ConfigManager
+    from server_app.db.bootstrap import _quote_sql_identifier, validate_database_name
     from server_app.db.session import create_db_engine
-    from server_app.db.bootstrap import create_database_if_missing, run_migrations
 except ImportError as exc:
     print(f"Error: Missing dependencies. Please run within your python environment: {exc}")
     sys.exit(1)
@@ -29,7 +28,7 @@ except ImportError as exc:
 
 def clear_bytecode_cache() -> None:
     """Clear __pycache__ directories and compile files (equivalent of optimize:clear)."""
-    print("🧹 Clearing Python bytecode cache...")
+    print("[INFO] Clearing Python bytecode cache...")
     count = 0
     for path in project_root.rglob("__pycache__"):
         if path.is_dir():
@@ -39,13 +38,28 @@ def clear_bytecode_cache() -> None:
         if path.is_file():
             path.unlink()
             count += 1
-    print(f"✅ Cleared {count} cache folders/files.")
+    print(f"[OK] Cleared {count} cache folders/files.")
 
 
-def drop_mssql_database(config) -> None:
+def load_reset_config(config_manager: ConfigManager) -> AppConfig | None:
+    """Load saved DB settings when config.json exists and is readable."""
+
+    if config_manager.exists():
+        try:
+            return config_manager.load()
+        except Exception as exc:
+            print(f"[WARN] Could not load configuration file: {exc}")
+            print("[WARN] No database will be dropped without a readable config.json.")
+
+    return None
+
+
+def drop_mssql_database(config: AppConfig) -> None:
     """Drop the configured MSSQL database by forcing connections closed."""
     db_name = config.database.database
-    print(f"🗑️ Dropping MSSQL database '{db_name}'...")
+    validate_database_name(db_name)
+    quoted_db_name = _quote_sql_identifier(db_name)
+    print(f"[INFO] Dropping MSSQL database '{db_name}'...")
     
     # We must connect to the 'master' database to drop the application database
     engine = create_db_engine(config, database_override="master")
@@ -58,15 +72,15 @@ def drop_mssql_database(config) -> None:
             ).scalar_one_or_none()
             
             if exists:
-                print("⚠️  Forcing all active database connections to close...")
+                print("[WARN] Forcing all active database connections to close...")
                 # Put in single-user mode to close active connections, then drop
-                connection.execute(text(f"ALTER DATABASE [{db_name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE"))
-                connection.execute(text(f"DROP DATABASE [{db_name}]"))
-                print(f"✅ Database '{db_name}' dropped successfully.")
+                connection.execute(text(f"ALTER DATABASE {quoted_db_name} SET SINGLE_USER WITH ROLLBACK IMMEDIATE"))
+                connection.execute(text(f"DROP DATABASE {quoted_db_name}"))
+                print(f"[OK] Database '{db_name}' dropped successfully.")
             else:
-                print(f"ℹ️  Database '{db_name}' does not exist.")
+                print(f"[INFO] Database '{db_name}' does not exist.")
     except Exception as exc:
-        print(f"❌ Failed to drop database: {exc}")
+        print(f"[ERROR] Failed to drop database: {exc}")
         print("Note: Ensure your SQL Server instance is running and your user has permissions to drop databases.")
     finally:
         engine.dispose()
@@ -76,17 +90,17 @@ def clear_config_settings(config_manager: ConfigManager) -> None:
     """Delete the application settings file (equivalent of first-run state reset)."""
     config_path = config_manager.path
     if config_path.exists():
-        print(f"🗑️ Removing configuration file at: {config_path}")
+        print(f"[INFO] Removing configuration file at: {config_path}")
         try:
             config_path.unlink()
             # If the directory is now empty, remove it too
             if config_path.parent.exists() and not any(config_path.parent.iterdir()):
                 config_path.parent.rmdir()
-            print("✅ Configuration settings cleared. The app will launch in first-run setup mode.")
+            print("[OK] Configuration settings cleared. The app will launch in first-run setup mode.")
         except Exception as exc:
-            print(f"❌ Failed to delete configuration file: {exc}")
+            print(f"[ERROR] Failed to delete configuration file: {exc}")
     else:
-        print(f"ℹ️  No saved configuration found at {config_path} (already in initial state).")
+        print(f"[INFO] No saved configuration found at {config_path} (already in initial state).")
 
 
 def main() -> None:
@@ -111,12 +125,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config_manager = ConfigManager()
-    config = None
-    if config_manager.exists():
-        try:
-            config = config_manager.load()
-        except Exception as exc:
-            print(f"⚠️  Could not load configuration file: {exc}")
+    config = load_reset_config(config_manager)
 
     # 1. Purge Cache
     if args.cache_only:
@@ -129,20 +138,22 @@ def main() -> None:
         return
 
     if args.db_only:
-        if config:
-            drop_mssql_database(config)
-        else:
-            print("❌ Cannot drop database: config.json does not exist. Run in full reset mode.")
+        if config is None:
+            print("[INFO] No saved configuration found. No database will be dropped.")
+            return
+        drop_mssql_database(config)
         return
 
     # Full Reset (Default)
-    print("🚀 Starting FULL environment reset...")
-    if config:
+    print("[INFO] Starting FULL environment reset...")
+    if config is None:
+        print("[INFO] No saved configuration found. No database will be dropped.")
+    else:
         drop_mssql_database(config)
     clear_config_settings(config_manager)
     clear_bytecode_cache()
-    print("\n✨ Environment successfully reset to the initial state!")
-    print("👉 Next step: run 'python server.py' to launch the first-run GUI and recreate the database.")
+    print("\n[OK] Environment successfully reset to the initial state!")
+    print("[INFO] Next step: run 'python server.py' to launch the first-run GUI and recreate the database.")
 
 
 if __name__ == "__main__":

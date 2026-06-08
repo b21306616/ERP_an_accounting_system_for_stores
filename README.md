@@ -6,20 +6,20 @@ SQLAlchemy + pyodbc for MSSQL access, and Alembic for database migrations.
 
 ## What Is Implemented
 
-- First-run GUI for MSSQL connection, API host/port, and initial Owner user.
+- First-run GUI for MSSQL connection, API host/port, and fixed Super Admin password setup.
 - Saved config at `%LOCALAPPDATA%\ERPAccountingServer\config.json`.
 - Windows DPAPI protection for SQL password and JWT signing secret.
 - Automatic relaunch from saved config.
 - Background FastAPI server controlled from the PyQt6 summary window.
 - MSSQL database creation and Alembic migration bootstrap.
-- Built-in roles: Owner, Accountant, Manager, Cashier, Auditor.
+- Built-in roles: Super Admin, Accountant, Manager, Cashier, Auditor.
 - PBKDF2 password hashing and internal HS256 bearer tokens.
 - API endpoints:
   - `GET /health`
   - `GET /system/status`
   - `POST /auth/login`
   - `GET /auth/me`
-  - Owner-only `/users`
+  - Super-admin-only `/users`
   - Foundation CRUD under `/reference`
 
 ## Run

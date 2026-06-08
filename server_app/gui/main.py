@@ -70,27 +70,24 @@ class ApplicationCoordinator(QObject):
     def handle_setup_requested(
         self,
         config: AppConfig,
-        owner_username: str,
-        owner_full_name: str,
-        owner_password: str,
+        current_super_admin_password: str | None,
+        new_super_admin_password: str,
     ) -> None:
         """Start database bootstrap after the setup form validates."""
 
         self._start_database_worker(
             config,
             should_save_config=True,
-            owner_username=owner_username,
-            owner_full_name=owner_full_name,
-            owner_password=owner_password,
+            current_super_admin_password=current_super_admin_password,
+            new_super_admin_password=new_super_admin_password,
         )
 
     def _start_database_worker(
         self,
         config: AppConfig,
         should_save_config: bool,
-        owner_username: str | None = None,
-        owner_full_name: str | None = None,
-        owner_password: str | None = None,
+        current_super_admin_password: str | None = None,
+        new_super_admin_password: str | None = None,
     ) -> None:
         """Launch the database preparation thread."""
 
@@ -98,9 +95,8 @@ class ApplicationCoordinator(QObject):
         self.pending_save_config = should_save_config
         self.startup_worker = DatabaseStartupWorker(
             config,
-            owner_username=owner_username,
-            owner_full_name=owner_full_name,
-            owner_password=owner_password,
+            current_super_admin_password=current_super_admin_password,
+            new_super_admin_password=new_super_admin_password,
         )
         self.startup_worker.succeeded.connect(self.handle_database_ready)
         self.startup_worker.failed.connect(self.handle_database_failed)

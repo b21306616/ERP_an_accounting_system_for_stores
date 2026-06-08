@@ -8,7 +8,7 @@ from server_app.schemas.common import OrmModel
 
 
 class UserCreate(BaseModel):
-    """Owner-only payload for creating a user."""
+    """Super-admin-only payload for creating a user."""
 
     username: str = Field(min_length=1, max_length=80)
     full_name: str = Field(min_length=1, max_length=160)
@@ -18,10 +18,11 @@ class UserCreate(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    """Owner-only payload for updating a user."""
+    """Super-admin-only payload for updating a user."""
 
     full_name: str | None = Field(default=None, min_length=1, max_length=160)
     password: str | None = Field(default=None, min_length=6)
+    current_password: str | None = Field(default=None, min_length=1)
     role_name: str | None = Field(default=None, max_length=50)
     is_active: bool | None = None
 

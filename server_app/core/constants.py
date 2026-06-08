@@ -12,11 +12,13 @@ APP_DATA_DIR_NAME = "ERPAccountingServer"
 # Config file name stored inside the local app data directory.
 CONFIG_FILE_NAME = "config.json"
 
-# Built-in roles from the Russian business definition supplied by the user.
-BUILTIN_ROLES = ("Owner", "Accountant", "Manager", "Cashier", "Auditor")
+# Fixed privileged account used to administer the whole program.
+SUPER_ADMIN_USERNAME = "super_admin"
+SUPER_ADMIN_FULL_NAME = "Super Admin"
+SUPER_ADMIN_ROLE = "Super Admin"
 
-# Role with unrestricted administrative access in the MVP.
-OWNER_ROLE = "Owner"
+# Built-in roles from the Russian business definition supplied by the user.
+BUILTIN_ROLES = (SUPER_ADMIN_ROLE, "Accountant", "Manager", "Cashier", "Auditor")
 
 # The default MSSQL ODBC driver installed on the user's machine.
 DEFAULT_ODBC_DRIVER = "ODBC Driver 18 for SQL Server"
