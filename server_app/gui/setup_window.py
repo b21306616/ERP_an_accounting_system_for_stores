@@ -162,7 +162,7 @@ class SetupWindow(QWidget):
             return
 
         self.status_label.setStyleSheet("color: #555;")
-        self.status_label.setText("Creating database, running migrations, and starting API...")
+        self.status_label.setText("Creating database, running migrations, and preparing Windows service...")
         self.set_busy(True)
         self.setup_requested.emit(config, current_password, new_password)
 

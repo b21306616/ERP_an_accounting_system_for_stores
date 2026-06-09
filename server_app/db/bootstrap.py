@@ -20,12 +20,19 @@ from server_app.core.constants import (
 from server_app.core.security import hash_password, verify_password
 from server_app.db.models import Role, User
 from server_app.db.session import create_db_engine, create_session_factory
+from server_app.service_control import SERVICE_SQL_LOGIN_NAME
 
 
 def _quote_sql_identifier(identifier: str) -> str:
     """Quote a SQL Server identifier with square brackets."""
 
     return "[" + identifier.replace("]", "]]") + "]"
+
+
+def _quote_sql_string(value: str) -> str:
+    """Quote a SQL Server unicode string literal."""
+
+    return "N'" + value.replace("'", "''") + "'"
 
 
 def validate_database_name(database_name: str) -> None:
@@ -63,11 +70,70 @@ def create_database_if_missing(config: AppConfig) -> None:
         engine.dispose()
 
 
+def grant_windows_service_database_access(
+    config: AppConfig,
+    service_account: str = SERVICE_SQL_LOGIN_NAME,
+) -> None:
+    """Allow the LocalSystem Windows service to use the configured database."""
+
+    if config.database.auth_mode != "windows":
+        return
+
+    validate_database_name(config.database.database)
+    quoted_account = _quote_sql_identifier(service_account)
+    account_literal = _quote_sql_string(service_account)
+    master_engine = create_db_engine(config, database_override="master")
+
+    try:
+        with master_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.execute(
+                text(
+                    f"""
+                    IF SUSER_ID({account_literal}) IS NULL
+                    BEGIN
+                        CREATE LOGIN {quoted_account} FROM WINDOWS
+                    END
+                    """
+                )
+            )
+    finally:
+        master_engine.dispose()
+
+    database_engine = create_db_engine(config)
+    try:
+        with database_engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.execute(
+                text(
+                    f"""
+                    IF DATABASE_PRINCIPAL_ID({account_literal}) IS NULL
+                    BEGIN
+                        CREATE USER {quoted_account} FOR LOGIN {quoted_account}
+                    END
+
+                    IF ISNULL(IS_ROLEMEMBER(N'db_owner', {account_literal}), 0) <> 1
+                    BEGIN
+                        ALTER ROLE [db_owner] ADD MEMBER {quoted_account}
+                    END
+                    """
+                )
+            )
+    finally:
+        database_engine.dispose()
+
+
 def run_migrations(config: AppConfig) -> None:
     """Run Alembic migrations against the configured database."""
 
     project_root = Path(__file__).resolve().parents[2]
     alembic_cfg = Config(str(project_root / "alembic.ini"))
+    alembic_cfg.set_main_option(
+        "script_location",
+        escape_alembic_config_value(str(project_root / "alembic")),
+    )
+    alembic_cfg.set_main_option(
+        "prepend_sys_path",
+        escape_alembic_config_value(str(project_root)),
+    )
     sqlalchemy_url = build_sqlalchemy_url(config.database)
     alembic_cfg.set_main_option("sqlalchemy.url", escape_alembic_config_value(sqlalchemy_url))
     command.upgrade(alembic_cfg, "head")

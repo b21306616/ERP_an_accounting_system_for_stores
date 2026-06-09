@@ -7,10 +7,10 @@ SQLAlchemy + pyodbc for MSSQL access, and Alembic for database migrations.
 ## What Is Implemented
 
 - First-run GUI for MSSQL connection, API host/port, and fixed Super Admin password setup.
-- Saved config at `%LOCALAPPDATA%\ERPAccountingServer\config.json`.
-- Windows DPAPI protection for SQL password and JWT signing secret.
-- Automatic relaunch from saved config.
-- Background FastAPI server controlled from the PyQt6 summary window.
+- Saved config at `%PROGRAMDATA%\ERPAccountingServer\config.json`.
+- Machine-scope Windows DPAPI protection for SQL password and JWT signing secret.
+- Windows service registration/control for `ERPAccountingServer` / `ERP Accounting Server`.
+- Background FastAPI server runs as a Windows service and is controlled from the PyQt6 summary window.
 - MSSQL database creation and Alembic migration bootstrap.
 - Built-in roles: Super Admin, Accountant, Manager, Cashier, Auditor.
 - PBKDF2 password hashing and internal HS256 bearer tokens.
@@ -28,9 +28,19 @@ SQLAlchemy + pyodbc for MSSQL access, and Alembic for database migrations.
 python server.py
 ```
 
+Run the app as Administrator when setup, start, stop, or service repair is needed.
 On first launch, fill the setup form and click **Create database and start server**.
-On later launches, the app loads saved config, validates the database, runs
-migrations, starts the API, and shows the connection summary.
+The GUI creates/migrates the database, saves machine-wide config, installs or
+repairs the Windows service, starts it, and shows the connection summary.
+
+On later launches, the GUI loads saved config and shows the service state. Use
+**Start Connection** to re-enable Automatic startup and start the service. Use
+**Stop Connection** to stop the service and disable startup after reboot. Closing
+the GUI does not stop the service.
+
+The service runs as `LocalSystem` with the per-service SID
+`NT SERVICE\ERPAccountingServer` enabled. If Windows Authentication is used, the
+setup/start flow grants that service SID access to the selected database.
 
 ## Test
 

@@ -2,36 +2,43 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import sys
 
 from PyQt6.QtCore import QObject
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
 
 from server_app.core.config import AppConfig, ConfigManager
 from server_app.core.constants import APP_NAME
-from server_app.gui.server_thread import ApiServerThread
 from server_app.gui.setup_window import SetupWindow
 from server_app.gui.summary_window import SummaryWindow
-from server_app.gui.workers import DatabaseStartupWorker
+from server_app.gui.workers import DatabaseStartupWorker, ServiceActionWorker
+from server_app.db.bootstrap import grant_windows_service_database_access
+from server_app.service_control import (
+    ServiceRunState,
+    ServiceStatus,
+    WindowsServiceController,
+)
 
 
 class ApplicationCoordinator(QObject):
-    """Own the GUI windows, database workers, and API server thread."""
+    """Own the GUI windows and coordinate Windows service actions."""
 
-    def __init__(self, app: QApplication, config_manager: ConfigManager) -> None:
+    def __init__(
+        self,
+        app: QApplication,
+        config_manager: ConfigManager,
+        service_controller: WindowsServiceController | None = None,
+    ) -> None:
         super().__init__()
         self.app = app
         self.config_manager = config_manager
+        self.service_controller = service_controller or WindowsServiceController()
         self.setup_window: SetupWindow | None = None
         self.summary_window: SummaryWindow | None = None
         self.startup_worker: DatabaseStartupWorker | None = None
-        self.api_thread: ApiServerThread | None = None
-        self.engine: Engine | None = None
-        self.quit_after_stop = False
+        self.service_worker: ServiceActionWorker | None = None
         self.pending_config: AppConfig | None = None
-        self.pending_save_config = False
 
         self.app.aboutToQuit.connect(self.shutdown)
 
@@ -43,15 +50,14 @@ class ApplicationCoordinator(QObject):
             return
 
         try:
+            self.config_manager.migrate_legacy_if_needed()
             config = self.config_manager.load()
         except Exception as exc:
             self.show_setup(f"Could not load saved config: {exc}")
             return
 
-        self.summary_window = SummaryWindow(config)
-        self.summary_window.stop_requested.connect(self.stop_connection)
-        self.summary_window.show()
-        self._start_database_worker(config, should_save_config=False)
+        self.show_summary(config)
+        self.refresh_service_status()
 
     def show_setup(self, error_message: str | None = None) -> None:
         """Show the setup window and connect its submission signal."""
@@ -67,6 +73,14 @@ class ApplicationCoordinator(QObject):
         if old_summary_window is not None:
             old_summary_window.close()
 
+    def show_summary(self, config: AppConfig) -> None:
+        """Show the running/stopped service summary window."""
+
+        self.summary_window = SummaryWindow(config)
+        self.summary_window.start_requested.connect(self.start_connection)
+        self.summary_window.stop_requested.connect(self.stop_connection)
+        self.summary_window.show()
+
     def handle_setup_requested(
         self,
         config: AppConfig,
@@ -75,24 +89,7 @@ class ApplicationCoordinator(QObject):
     ) -> None:
         """Start database bootstrap after the setup form validates."""
 
-        self._start_database_worker(
-            config,
-            should_save_config=True,
-            current_super_admin_password=current_super_admin_password,
-            new_super_admin_password=new_super_admin_password,
-        )
-
-    def _start_database_worker(
-        self,
-        config: AppConfig,
-        should_save_config: bool,
-        current_super_admin_password: str | None = None,
-        new_super_admin_password: str | None = None,
-    ) -> None:
-        """Launch the database preparation thread."""
-
         self.pending_config = config
-        self.pending_save_config = should_save_config
         self.startup_worker = DatabaseStartupWorker(
             config,
             current_super_admin_password=current_super_admin_password,
@@ -100,112 +97,184 @@ class ApplicationCoordinator(QObject):
         )
         self.startup_worker.succeeded.connect(self.handle_database_ready)
         self.startup_worker.failed.connect(self.handle_database_failed)
+        self.startup_worker.finished.connect(self._clear_startup_worker)
         self.startup_worker.start()
 
-    def handle_database_ready(
-        self,
-        engine: Engine,
-        session_factory: sessionmaker[Session],
-    ) -> None:
-        """Save config when needed, then start the API server thread."""
+    def handle_database_ready(self) -> None:
+        """Save config, install/repair the service, then start it."""
 
         config = self.pending_config
         if config is None:
-            engine.dispose()
             return
 
-        if self.pending_save_config:
-            try:
-                self.config_manager.save(config)
-            except Exception as exc:
-                engine.dispose()
-                if self.setup_window is not None:
-                    self.setup_window.show_error(f"Database is ready, but config could not be saved: {exc}")
-                else:
-                    QMessageBox.critical(None, APP_NAME, f"Config could not be saved: {exc}")
-                return
+        try:
+            self.config_manager.save(config)
+        except Exception as exc:
+            if self.setup_window is not None:
+                self.setup_window.show_error(f"Database is ready, but config could not be saved: {exc}")
+            else:
+                QMessageBox.critical(None, APP_NAME, f"Config could not be saved: {exc}")
+            return
 
-        self.engine = engine
-        self._start_api(config, session_factory)
+        if self.setup_window is not None:
+            self.setup_window.status_label.setText("Database is ready. Installing and starting Windows service...")
+
+        self._run_service_action(
+            lambda: self._start_service_for_config(config),
+            success=lambda _result: self.handle_service_started_from_setup(config),
+            failure=self.handle_setup_service_failed,
+        )
 
     def handle_database_failed(self, message: str) -> None:
-        """Show database bootstrap/startup errors to the operator."""
+        """Show database bootstrap errors to the operator."""
 
         if self.setup_window is not None:
             self.setup_window.show_error(message)
             return
 
-        if self.summary_window is not None:
-            self.summary_window.mark_error(message)
-
         QMessageBox.critical(None, APP_NAME, message)
         self.show_setup(f"Saved configuration could not start: {message}")
 
-    def _start_api(self, config: AppConfig, session_factory: sessionmaker[Session]) -> None:
-        """Create the summary window if needed and start uvicorn."""
-
-        if self.summary_window is None:
-            self.summary_window = SummaryWindow(config)
-            self.summary_window.stop_requested.connect(self.stop_connection)
-            self.summary_window.show()
+    def handle_service_started_from_setup(self, config: AppConfig) -> None:
+        """Close setup and show the running service window."""
 
         if self.setup_window is not None:
             self.setup_window.close()
             self.setup_window = None
 
-        self.api_thread = ApiServerThread(config, session_factory)
-        self.api_thread.started_listening.connect(self.handle_api_started)
-        self.api_thread.failed.connect(self.handle_api_failed)
-        self.api_thread.stopped.connect(self.handle_api_stopped)
-        self.api_thread.start()
+        self.show_summary(config)
+        if self.summary_window is not None:
+            self.summary_window.mark_running()
 
-    def handle_api_started(self) -> None:
-        """Mark the server as running in the summary window."""
+    def handle_setup_service_failed(self, message: str) -> None:
+        """Show service startup failure after a successful database bootstrap."""
+
+        if self.setup_window is not None:
+            self.setup_window.show_error(
+                "Database and config were created, but the Windows service could not start. "
+                f"{message}"
+            )
+            return
+
+        QMessageBox.critical(None, APP_NAME, message)
+
+    def refresh_service_status(self) -> None:
+        """Query Windows and update the summary window state."""
+
+        if self.summary_window is None:
+            return
+
+        try:
+            status = self.service_controller.get_status()
+        except Exception as exc:
+            self.summary_window.mark_error(str(exc))
+            return
+
+        self.apply_service_status(status)
+
+    def apply_service_status(self, status: ServiceStatus) -> None:
+        """Apply a queried service state to the summary window."""
+
+        if self.summary_window is None:
+            return
+
+        if status.run_state == ServiceRunState.RUNNING:
+            self.summary_window.mark_running()
+        elif status.run_state == ServiceRunState.START_PENDING:
+            self.summary_window.mark_starting()
+        elif status.run_state == ServiceRunState.STOP_PENDING:
+            self.summary_window.mark_stopping()
+        elif status.run_state in {ServiceRunState.STOPPED, ServiceRunState.NOT_INSTALLED}:
+            self.summary_window.mark_stopped(status)
+        else:
+            self.summary_window.mark_error(f"Windows service state is {status.run_state.value}.")
+
+    def start_connection(self) -> None:
+        """Enable autostart, start the Windows service, and wait for API health."""
+
+        if self.summary_window is None:
+            return
+
+        config = self.summary_window.config
+        self.summary_window.mark_starting()
+        self._run_service_action(
+            lambda: self._start_service_for_config(config),
+            success=lambda _result: self._mark_service_running(),
+            failure=self._mark_service_error,
+        )
+
+    def stop_connection(self) -> None:
+        """Stop and disable the Windows service after the operator clicks Stop Connection."""
+
+        if self.summary_window is None:
+            return
+
+        self.summary_window.mark_stopping()
+        self._run_service_action(
+            self.service_controller.stop_and_disable,
+            success=lambda _result: self._mark_service_stopped(),
+            failure=self._mark_service_error,
+        )
+
+    def _mark_service_running(self) -> None:
+        """Update the summary after a successful service start."""
 
         if self.summary_window is not None:
             self.summary_window.mark_running()
 
-    def handle_api_failed(self, message: str) -> None:
-        """Show uvicorn startup/runtime errors."""
+    def _start_service_for_config(self, config: AppConfig) -> None:
+        """Prepare DB permissions, then start the Windows service."""
+
+        self.service_controller.ensure_installed()
+        grant_windows_service_database_access(config)
+        self.service_controller.start_and_wait_for_health(config)
+
+    def _mark_service_stopped(self) -> None:
+        """Update the summary after a successful service stop."""
+
+        if self.summary_window is not None:
+            self.summary_window.mark_stopped()
+
+    def _mark_service_error(self, message: str) -> None:
+        """Display service-control errors in the summary window."""
 
         if self.summary_window is not None:
             self.summary_window.mark_error(message)
         QMessageBox.critical(None, APP_NAME, message)
 
-    def stop_connection(self) -> None:
-        """Stop the API after the operator clicks Stop Connection."""
+    def _run_service_action(
+        self,
+        action: Callable[[], object],
+        success: Callable[[object], None],
+        failure: Callable[[str], None],
+    ) -> None:
+        """Run one blocking service action at a time."""
 
-        self.quit_after_stop = True
-        if self.summary_window is not None:
-            self.summary_window.mark_stopping()
+        if self.service_worker is not None and self.service_worker.isRunning():
+            return
 
-        if self.api_thread is not None and self.api_thread.isRunning():
-            self.api_thread.stop()
-        else:
-            self._dispose_engine()
-            self.app.quit()
+        self.service_worker = ServiceActionWorker(action)
+        self.service_worker.succeeded.connect(success)
+        self.service_worker.failed.connect(failure)
+        self.service_worker.finished.connect(self._clear_service_worker)
+        self.service_worker.start()
 
-    def handle_api_stopped(self) -> None:
-        """Dispose database resources after uvicorn exits."""
+    def _clear_startup_worker(self) -> None:
+        """Release finished setup worker references."""
 
-        self._dispose_engine()
-        if self.quit_after_stop:
-            self.app.quit()
+        self.startup_worker = None
 
-    def _dispose_engine(self) -> None:
-        """Release SQLAlchemy connection pool resources."""
+    def _clear_service_worker(self) -> None:
+        """Release finished service worker references."""
 
-        if self.engine is not None:
-            self.engine.dispose()
-            self.engine = None
+        self.service_worker = None
 
     def shutdown(self) -> None:
         """Best-effort cleanup when the Qt application exits."""
 
-        if self.api_thread is not None and self.api_thread.isRunning():
-            self.api_thread.stop()
-            self.api_thread.wait(3000)
-        self._dispose_engine()
+        for worker in (self.startup_worker, self.service_worker):
+            if worker is not None and worker.isRunning():
+                worker.wait(1000)
 
 
 def run_desktop_app() -> None:

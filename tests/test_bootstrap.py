@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from alembic.config import Config
 from sqlalchemy import create_engine
@@ -15,17 +17,53 @@ from server_app.core.constants import (
     SUPER_ADMIN_ROLE,
     SUPER_ADMIN_USERNAME,
 )
-from server_app.core.config import DatabaseConfig, build_sqlalchemy_url
+from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig, build_sqlalchemy_url
 from server_app.core.security import hash_password, verify_password
 from server_app.db.base import Base
 from server_app.db.bootstrap import (
     escape_alembic_config_value,
+    grant_windows_service_database_access,
+    run_migrations,
     seed_builtin_roles,
     seed_super_admin_user,
     validate_database_name,
     validate_super_admin_user,
 )
 from server_app.db.models import Role, User
+from server_app.service_control import SERVICE_SQL_LOGIN_NAME
+
+
+class _CapturedSqlConnection:
+    """Tiny SQLAlchemy connection double that records executed SQL text."""
+
+    def __init__(self, statements: list[str]) -> None:
+        self.statements = statements
+
+    def execution_options(self, **_kwargs: object) -> "_CapturedSqlConnection":
+        return self
+
+    def __enter__(self) -> "_CapturedSqlConnection":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def execute(self, statement: object) -> None:
+        self.statements.append(str(statement))
+
+
+class _CapturedSqlEngine:
+    """Tiny SQLAlchemy engine double that records executed SQL text."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+        self.disposed = False
+
+    def connect(self) -> _CapturedSqlConnection:
+        return _CapturedSqlConnection(self.statements)
+
+    def dispose(self) -> None:
+        self.disposed = True
 
 
 class BootstrapTests(unittest.TestCase):
@@ -57,6 +95,84 @@ class BootstrapTests(unittest.TestCase):
         config.set_main_option("sqlalchemy.url", escape_alembic_config_value(url))
 
         self.assertEqual(config.get_main_option("sqlalchemy.url"), url)
+
+    def test_run_migrations_uses_absolute_script_location_for_windows_service(self) -> None:
+        """Service startup should not depend on the current working directory."""
+
+        config = AppConfig(
+            database=DatabaseConfig(server="localhost\\SQLEXPRESS", database="ERP"),
+            api=ApiConfig(),
+            jwt_secret="secret",
+        )
+        captured_config: Config | None = None
+
+        def capture_upgrade(alembic_config: Config, revision: str) -> None:
+            nonlocal captured_config
+            captured_config = alembic_config
+            self.assertEqual(revision, "head")
+
+        with patch("server_app.db.bootstrap.command.upgrade", side_effect=capture_upgrade):
+            run_migrations(config)
+
+        self.assertIsNotNone(captured_config)
+        assert captured_config is not None
+        project_root = Path(__file__).resolve().parents[1]
+        self.assertEqual(
+            captured_config.get_main_option("script_location"),
+            str(project_root / "alembic"),
+        )
+        self.assertEqual(captured_config.get_main_option("prepend_sys_path"), str(project_root))
+
+    def test_grant_windows_service_database_access_skips_sql_login_configs(self) -> None:
+        """SQL Login configs do not need a LocalSystem database user."""
+
+        config = AppConfig(
+            database=DatabaseConfig(
+                server="localhost\\SQLEXPRESS",
+                database="ERP",
+                auth_mode="sql",
+                username="sa",
+                password="secret",
+            ),
+            api=ApiConfig(),
+            jwt_secret="secret",
+        )
+
+        with patch("server_app.db.bootstrap.create_db_engine") as create_engine:
+            grant_windows_service_database_access(config)
+
+        create_engine.assert_not_called()
+
+    def test_grant_windows_service_database_access_maps_service_sid(self) -> None:
+        """Windows Auth configs should grant the per-service SID DB ownership."""
+
+        config = AppConfig(
+            database=DatabaseConfig(server="localhost\\SQLEXPRESS", database="ERP"),
+            api=ApiConfig(),
+            jwt_secret="secret",
+        )
+        master_engine = _CapturedSqlEngine()
+        database_engine = _CapturedSqlEngine()
+
+        with patch(
+            "server_app.db.bootstrap.create_db_engine",
+            side_effect=[master_engine, database_engine],
+        ) as create_engine:
+            grant_windows_service_database_access(config)
+
+        self.assertEqual(create_engine.call_args_list[0].kwargs["database_override"], "master")
+        self.assertEqual(create_engine.call_args_list[1].args[0], config)
+        master_sql = "\n".join(master_engine.statements)
+        database_sql = "\n".join(database_engine.statements)
+        quoted_service_login = f"[{SERVICE_SQL_LOGIN_NAME}]"
+        self.assertIn(f"CREATE LOGIN {quoted_service_login} FROM WINDOWS", master_sql)
+        self.assertIn(
+            f"CREATE USER {quoted_service_login} FOR LOGIN {quoted_service_login}",
+            database_sql,
+        )
+        self.assertIn(f"ALTER ROLE [db_owner] ADD MEMBER {quoted_service_login}", database_sql)
+        self.assertTrue(master_engine.disposed)
+        self.assertTrue(database_engine.disposed)
 
     def test_validate_database_name_rejects_semicolon(self) -> None:
         """Database name validation should reject SQL separator characters."""

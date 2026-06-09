@@ -88,8 +88,15 @@ def drop_mssql_database(config: AppConfig) -> None:
 
 def clear_config_settings(config_manager: ConfigManager) -> None:
     """Delete the application settings file (equivalent of first-run state reset)."""
-    config_path = config_manager.path
-    if config_path.exists():
+    config_paths = [config_manager.path]
+    legacy_path = getattr(config_manager, "legacy_path", None)
+    if legacy_path is not None and legacy_path not in config_paths:
+        config_paths.append(legacy_path)
+
+    removed_any = False
+    for config_path in config_paths:
+        if not config_path.exists():
+            continue
         print(f"[INFO] Removing configuration file at: {config_path}")
         try:
             config_path.unlink()
@@ -97,10 +104,12 @@ def clear_config_settings(config_manager: ConfigManager) -> None:
             if config_path.parent.exists() and not any(config_path.parent.iterdir()):
                 config_path.parent.rmdir()
             print("[OK] Configuration settings cleared. The app will launch in first-run setup mode.")
+            removed_any = True
         except Exception as exc:
             print(f"[ERROR] Failed to delete configuration file: {exc}")
-    else:
-        print(f"[INFO] No saved configuration found at {config_path} (already in initial state).")
+
+    if not removed_any:
+        print(f"[INFO] No saved configuration found at {config_manager.path} (already in initial state).")
 
 
 def main() -> None:

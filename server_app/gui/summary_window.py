@@ -7,11 +7,13 @@ from PyQt6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushBu
 
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
+from server_app.service_control import ServiceStartType, ServiceStatus
 
 
 class SummaryWindow(QWidget):
     """Show active connection details and expose the Stop Connection action."""
 
+    start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
 
     def __init__(self, config: AppConfig) -> None:
@@ -25,10 +27,12 @@ class SummaryWindow(QWidget):
         self.docs_url_label = QLabel(f"{self.base_url}/docs")
         self.database_label = QLabel(f"{config.database.server} / {config.database.database}")
         self.auth_label = QLabel(config.database.auth_mode)
-        self.stop_button = QPushButton("Stop Connection")
+        self.action_button = QPushButton("Stop Connection")
+        self.stop_button = self.action_button
+        self.is_running = False
 
         self._build_ui()
-        self.stop_button.clicked.connect(self.stop_requested.emit)
+        self.action_button.clicked.connect(self._on_action_clicked)
 
     @property
     def base_url(self) -> str:
@@ -57,28 +61,68 @@ class SummaryWindow(QWidget):
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
-        button_row.addWidget(self.stop_button)
+        self.action_button.setEnabled(False)
+        button_row.addWidget(self.action_button)
 
         main_layout.addWidget(group)
         main_layout.addLayout(button_row)
 
-    def mark_running(self) -> None:
-        """Update the UI after uvicorn starts."""
+    def _on_action_clicked(self) -> None:
+        """Emit the correct action for the current service state."""
 
+        if self.is_running:
+            self.stop_requested.emit()
+        else:
+            self.start_requested.emit()
+
+    def mark_running(self) -> None:
+        """Update the UI after the Windows service starts."""
+
+        self.is_running = True
         self.status_label.setText("Running")
         self.status_label.setStyleSheet("font-weight: 600; color: #167a3b;")
-        self.stop_button.setEnabled(True)
+        self.action_button.setText("Stop Connection")
+        self.action_button.setEnabled(True)
+
+    def mark_starting(self) -> None:
+        """Update the UI while service startup is in progress."""
+
+        self.is_running = False
+        self.status_label.setText("Starting...")
+        self.status_label.setStyleSheet("font-weight: 600; color: #555;")
+        self.action_button.setText("Start Connection")
+        self.action_button.setEnabled(False)
 
     def mark_stopping(self) -> None:
         """Update the UI while shutdown is in progress."""
 
+        self.is_running = True
         self.status_label.setText("Stopping...")
         self.status_label.setStyleSheet("font-weight: 600; color: #9a6a00;")
-        self.stop_button.setEnabled(False)
+        self.action_button.setText("Stop Connection")
+        self.action_button.setEnabled(False)
+
+    def mark_stopped(self, status: ServiceStatus | None = None) -> None:
+        """Update the UI after the service is stopped or disabled."""
+
+        self.is_running = False
+        if status is not None and status.start_type == ServiceStartType.DISABLED:
+            text = "Stopped (disabled)"
+        elif status is not None and status.needs_repair:
+            text = "Stopped (service needs repair)"
+        else:
+            text = "Stopped"
+
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet("font-weight: 600; color: #9a6a00;")
+        self.action_button.setText("Start Connection")
+        self.action_button.setEnabled(True)
 
     def mark_error(self, message: str) -> None:
         """Show a startup or runtime error."""
 
+        self.is_running = False
         self.status_label.setText(message)
         self.status_label.setStyleSheet("font-weight: 600; color: #a33;")
-        self.stop_button.setEnabled(False)
+        self.action_button.setText("Start Connection")
+        self.action_button.setEnabled(True)

@@ -1,9 +1,4 @@
-"""Windows DPAPI helpers for protecting local secrets.
-
-The server stores database passwords and JWT signing secrets on the same
-Windows server where the application runs. DPAPI protects those values with the
-current Windows user's profile, so no extra dependency is required.
-"""
+"""Windows DPAPI helpers for protecting local machine secrets."""
 
 from __future__ import annotations
 
@@ -11,6 +6,9 @@ import base64
 import ctypes
 from ctypes import wintypes
 import os
+
+
+CRYPTPROTECT_LOCAL_MACHINE = 0x4
 
 
 class SecretProtectionError(RuntimeError):
@@ -46,7 +44,7 @@ def _blob_to_bytes(blob: DATA_BLOB) -> bytes:
     return ctypes.string_at(blob.pbData, blob.cbData)
 
 
-def protect_secret(plain_text: str) -> str:
+def protect_secret(plain_text: str, machine_scope: bool = True) -> str:
     """Encrypt text with Windows DPAPI and return base64 text for JSON storage."""
 
     _require_windows()
@@ -57,13 +55,14 @@ def protect_secret(plain_text: str) -> str:
     in_blob = _bytes_to_blob(plain_bytes)
     out_blob = DATA_BLOB()
 
+    flags = CRYPTPROTECT_LOCAL_MACHINE if machine_scope else 0
     success = crypt32.CryptProtectData(
         ctypes.byref(in_blob),
         None,
         None,
         None,
         None,
-        0,
+        flags,
         ctypes.byref(out_blob),
     )
     if not success:

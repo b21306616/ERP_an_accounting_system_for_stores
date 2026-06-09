@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PyQt6.QtCore import QThread, pyqtSignal
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, sessionmaker
 
 from server_app.core.config import AppConfig
-from server_app.db.bootstrap import bootstrap_database, prepare_existing_database
+from server_app.db.bootstrap import bootstrap_database
 
 
 class DatabaseStartupWorker(QThread):
-    """Prepare the database in the background and return runtime DB objects."""
+    """Create/migrate/seed the database in the background for first setup."""
 
-    succeeded = pyqtSignal(object, object)
+    succeeded = pyqtSignal()
     failed = pyqtSignal(str)
 
     def __init__(
@@ -28,17 +28,36 @@ class DatabaseStartupWorker(QThread):
         self.new_super_admin_password = new_super_admin_password
 
     def run(self) -> None:
-        """Create/migrate/validate the database without blocking the GUI thread."""
+        """Create/migrate/seed the database without blocking the GUI thread."""
 
         try:
-            if self.new_super_admin_password is not None:
-                bootstrap_database(
-                    self.config,
-                    self.current_super_admin_password,
-                    self.new_super_admin_password,
-                )
+            if self.new_super_admin_password is None:
+                raise ValueError("New Super Admin password is required for first setup.")
 
-            engine, session_factory = prepare_existing_database(self.config)
-            self.succeeded.emit(engine, session_factory)
+            bootstrap_database(
+                self.config,
+                self.current_super_admin_password,
+                self.new_super_admin_password,
+            )
+            self.succeeded.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
+class ServiceActionWorker(QThread):
+    """Run a blocking Windows service action without freezing the GUI."""
+
+    succeeded = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, action: Callable[[], object]) -> None:
+        super().__init__()
+        self.action = action
+
+    def run(self) -> None:
+        """Execute the configured service action."""
+
+        try:
+            self.succeeded.emit(self.action())
         except Exception as exc:
             self.failed.emit(str(exc))

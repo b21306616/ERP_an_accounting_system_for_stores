@@ -13,7 +13,7 @@ from server_app.core.constants import (
     DEFAULT_API_PORT,
     DEFAULT_ODBC_DRIVER,
 )
-from server_app.core.paths import get_config_path
+from server_app.core.paths import get_config_path, get_legacy_config_path
 from server_app.core.secrets import protect_secret, unprotect_secret
 from server_app.core.security import generate_secret_key
 
@@ -146,18 +146,21 @@ def _config_from_storage(data: dict[str, Any]) -> AppConfig:
 class ConfigManager:
     """Read and write the server configuration file."""
 
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, legacy_path: Path | None = None) -> None:
         self.path = path or get_config_path()
+        self.legacy_path = legacy_path if legacy_path is not None else (
+            get_legacy_config_path() if path is None else None
+        )
 
     def exists(self) -> bool:
         """Return whether the configuration file already exists."""
 
-        return self.path.exists()
+        return self.path.exists() or bool(self.legacy_path and self.legacy_path.exists())
 
     def load(self) -> AppConfig:
         """Load and decrypt configuration from JSON storage."""
 
-        with self.path.open("r", encoding="utf-8") as file:
+        with self._read_path().open("r", encoding="utf-8") as file:
             data = json.load(file)
         return _config_from_storage(data)
 
@@ -168,3 +171,23 @@ class ConfigManager:
         data = _config_to_storage(config)
         with self.path.open("w", encoding="utf-8") as file:
             json.dump(data, file, indent=2, sort_keys=True)
+
+    def migrate_legacy_if_needed(self) -> bool:
+        """Copy old per-user config into the machine-wide config path when needed."""
+
+        if self.path.exists() or self.legacy_path is None or not self.legacy_path.exists():
+            return False
+
+        with self.legacy_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        self.save(_config_from_storage(data))
+        return True
+
+    def _read_path(self) -> Path:
+        """Return the primary config path, falling back to legacy storage."""
+
+        if self.path.exists():
+            return self.path
+        if self.legacy_path is not None and self.legacy_path.exists():
+            return self.legacy_path
+        return self.path
