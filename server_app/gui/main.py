@@ -79,6 +79,10 @@ class ApplicationCoordinator(QObject):
         self.summary_window = SummaryWindow(config)
         self.summary_window.start_requested.connect(self.start_connection)
         self.summary_window.stop_requested.connect(self.stop_connection)
+        self.summary_window.config_update_requested.connect(self.handle_summary_config_update)
+        self.summary_window.super_admin_password_update_requested.connect(
+            self.handle_summary_password_update_requested
+        )
         self.summary_window.show()
 
     def handle_setup_requested(
@@ -215,6 +219,111 @@ class ApplicationCoordinator(QObject):
             success=lambda _result: self._mark_service_stopped(),
             failure=self._mark_service_error,
         )
+
+    def handle_summary_config_update(self, config: AppConfig) -> None:
+        """Persist a summary-window config edit and stop the running service if needed."""
+
+        if self.summary_window is None:
+            return
+
+        was_running = self.summary_window.is_running
+        self.summary_window.set_updates_enabled(False)
+
+        try:
+            self.config_manager.save(config)
+        except Exception as exc:
+            self.summary_window.show_update_error(f"Configuration could not be saved: {exc}")
+            return
+
+        self.summary_window.set_config(config)
+        if was_running:
+            self.summary_window.show_update_message(
+                "Configuration updated. Stopping Windows service before restart...",
+                "info",
+            )
+            self.summary_window.mark_stopping()
+            self._run_service_action(
+                self.service_controller.stop_and_disable,
+                success=lambda _result: self._handle_summary_update_stopped(),
+                failure=self._handle_summary_update_stop_failed,
+            )
+            return
+
+        self.summary_window.show_update_message("Configuration updated.", "success")
+        self.summary_window.set_updates_enabled(True)
+
+    def handle_summary_password_update_requested(self, current_password: str, new_password: str) -> None:
+        """Rotate the Super Admin password from the running summary window."""
+
+        if self.summary_window is None:
+            return
+        if self.startup_worker is not None and self.startup_worker.isRunning():
+            self.summary_window.show_update_error("Another database update is already running.")
+            return
+
+        was_running = self.summary_window.is_running
+        self.summary_window.set_updates_enabled(False)
+        self.summary_window.show_update_message("Updating Super Admin password...", "info")
+        self.startup_worker = DatabaseStartupWorker(
+            self.summary_window.config,
+            current_super_admin_password=current_password,
+            new_super_admin_password=new_password,
+        )
+        self.startup_worker.succeeded.connect(
+            lambda was_running=was_running: self._handle_summary_password_updated(was_running)
+        )
+        self.startup_worker.failed.connect(self._handle_summary_password_update_failed)
+        self.startup_worker.finished.connect(self._clear_startup_worker)
+        self.startup_worker.start()
+
+    def _handle_summary_password_updated(self, was_running: bool) -> None:
+        """Handle a successful Super Admin password update."""
+
+        if self.summary_window is None:
+            return
+
+        if was_running:
+            self.summary_window.show_update_message(
+                "Super Admin password updated. Stopping Windows service before restart...",
+                "info",
+            )
+            self.summary_window.mark_stopping()
+            self._run_service_action(
+                self.service_controller.stop_and_disable,
+                success=lambda _result: self._handle_summary_update_stopped(),
+                failure=self._handle_summary_update_stop_failed,
+            )
+            return
+
+        self.summary_window.show_update_message("Super Admin password updated.", "success")
+        self.summary_window.set_updates_enabled(True)
+
+    def _handle_summary_password_update_failed(self, message: str) -> None:
+        """Show a Super Admin password update failure."""
+
+        if self.summary_window is not None:
+            self.summary_window.show_update_error(f"Super Admin password could not be updated: {message}")
+
+    def _handle_summary_update_stopped(self) -> None:
+        """Update the summary after an edit forces the service to stop."""
+
+        if self.summary_window is not None:
+            self.summary_window.mark_stopped()
+            self.summary_window.show_update_message(
+                "Update saved. Use Start Connection to run with the latest settings.",
+                "success",
+            )
+            self.summary_window.set_updates_enabled(True)
+
+    def _handle_summary_update_stop_failed(self, message: str) -> None:
+        """Show a failure to stop the service after a successful edit."""
+
+        if self.summary_window is not None:
+            self.summary_window.mark_error(f"Service stop failed: {message}")
+            self.summary_window.show_update_error(
+                "Update was saved, but the Windows service could not be stopped. "
+                f"{message}"
+            )
 
     def _mark_service_running(self) -> None:
         """Update the summary after a successful service start."""
