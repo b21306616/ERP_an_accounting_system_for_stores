@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QSizePolicy
 
 from server_app.core.constants import DEFAULT_ODBC_DRIVER
 from server_app.gui.setup_window import SetupWindow
@@ -80,7 +80,36 @@ class SetupWindowTests(unittest.TestCase):
         self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.database_group)
         self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.api_group)
         self.assertIs(window.sections_layout.itemAtPosition(2, 0).widget(), window.super_admin_group)
-        self.assertTrue(window.status_label.isVisible())
+        self.assertTrue(window.message_label.isVisible())
+
+    def test_primary_button_stays_content_sized_on_wide_windows(self) -> None:
+        window = self.create_window()
+
+        window.show()
+        window.resize(1200, 800)
+        self.app.processEvents()
+
+        self.assertFalse(window._is_compact_layout)
+        self.assertEqual(
+            window.submit_button.sizePolicy().horizontalPolicy(),
+            QSizePolicy.Policy.Fixed,
+        )
+        self.assertLessEqual(
+            window.submit_button.width(),
+            window.submit_button.sizeHint().width() + 2,
+        )
+
+    def test_validation_rejects_invalid_database_name(self) -> None:
+        window = self.create_window()
+
+        window.server_edit.setText("localhost")
+        window.database_edit.setText("ERP;DROP")
+        window.host_edit.setText("127.0.0.1")
+        window.new_password_edit.setText("secret123")
+        window.confirm_password_edit.setText("secret123")
+
+        with self.assertRaisesRegex(ValueError, "semicolon"):
+            window._build_config_from_form()
 
 
 if __name__ == "__main__":

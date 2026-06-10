@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pyodbc
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QResizeEvent
+from PyQt6.QtGui import QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig, create_default_config
 from server_app.core.constants import DEFAULT_ODBC_DRIVER, SUPER_ADMIN_FULL_NAME, SUPER_ADMIN_USERNAME
+from server_app.db.bootstrap import validate_database_name
 
 
 class SetupWindow(QWidget):
@@ -39,10 +40,12 @@ class SetupWindow(QWidget):
         super().__init__()
         self.setObjectName("SetupWindow")
         self.setWindowTitle("ERP Accounting Server - First Setup")
-        self.setMinimumSize(480, 520)
+        self.setMinimumSize(500, 520)
         self.default_config = create_default_config()
         self._initial_error_message = error_message
         self._is_compact_layout: bool | None = None
+        self._is_busy = False
+        self._setup_status_before_busy = ("Ready to configure", "neutral")
 
         self.server_edit = QLineEdit(self.default_config.database.server)
         self.database_edit = QLineEdit(self.default_config.database.database)
@@ -61,7 +64,8 @@ class SetupWindow(QWidget):
         self.new_password_edit = QLineEdit()
         self.confirm_password_edit = QLineEdit()
 
-        self.status_label = QLabel(error_message or "")
+        self.setup_status_label = QLabel("Ready to configure")
+        self.message_label = QLabel(error_message or "")
         self.submit_button = QPushButton("Create database and start Windows service")
 
         self._build_ui()
@@ -100,24 +104,33 @@ class SetupWindow(QWidget):
         content_layout = QVBoxLayout(self.content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(18)
+        content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         header = QWidget()
         header.setObjectName("SetupHeader")
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 4)
-        header_layout.setSpacing(4)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+        header_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         title_label = QLabel("ERP Accounting Server")
         title_label.setObjectName("SetupTitle")
+        title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         subtitle_label = QLabel("First setup")
         subtitle_label.setObjectName("SetupSubtitle")
+        subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
         content_layout.addWidget(header)
 
+        self.setup_group = self._build_setup_card()
+        content_layout.addWidget(self.setup_group)
+
         self.database_group = QGroupBox("MSSQL connection")
-        database_form = QFormLayout(self.database_group)
-        self._prepare_form(database_form)
+        self.database_group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        database_layout = QGridLayout(self.database_group)
+        self._prepare_form_layout(database_layout)
         self._fill_driver_combo()
         self.auth_combo.addItem("Windows Authentication", "windows")
         self.auth_combo.addItem("SQL Login", "sql")
@@ -127,42 +140,43 @@ class SetupWindow(QWidget):
         self.database_edit.setPlaceholderText("ERPAccounting")
         self.username_edit.setPlaceholderText("SQL login user")
 
-        database_form.addRow("SQL Server host/instance", self.server_edit)
-        database_form.addRow("Database name", self.database_edit)
-        database_form.addRow("ODBC driver", self.driver_combo)
-        database_form.addRow("Authentication", self.auth_combo)
-        database_form.addRow("SQL username", self.username_edit)
-        database_form.addRow("SQL password", self.password_edit)
-        database_form.addRow("", self.trust_cert_check)
+        self._add_form_row(database_layout, 0, "SQL Server host/instance", self.server_edit)
+        self._add_form_row(database_layout, 1, "Database name", self.database_edit)
+        self._add_form_row(database_layout, 2, "ODBC driver", self.driver_combo)
+        self._add_form_row(database_layout, 3, "Authentication", self.auth_combo)
+        self._add_form_row(database_layout, 4, "SQL username", self.username_edit)
+        self._add_form_row(database_layout, 5, "SQL password", self.password_edit)
+        self._add_form_row(database_layout, 6, "", self.trust_cert_check)
 
         self.api_group = QGroupBox("API server")
-        api_form = QFormLayout(self.api_group)
-        self._prepare_form(api_form)
+        api_layout = QGridLayout(self.api_group)
+        self._prepare_form_layout(api_layout)
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(self.default_config.api.port)
         self.host_edit.setPlaceholderText("0.0.0.0")
-        api_form.addRow("Bind host/IP", self.host_edit)
-        api_form.addRow("Port", self.port_spin)
+        self._add_form_row(api_layout, 0, "Bind host/IP", self.host_edit)
+        self._add_form_row(api_layout, 1, "Port", self.port_spin)
 
         self.super_admin_group = QGroupBox("Super Admin account")
-        super_admin_form = QFormLayout(self.super_admin_group)
-        self._prepare_form(super_admin_form)
+        super_admin_layout = QGridLayout(self.super_admin_group)
+        self._prepare_form_layout(super_admin_layout)
         self.super_admin_username_edit.setReadOnly(True)
         self.super_admin_full_name_edit.setReadOnly(True)
         self.current_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.new_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm_password_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        super_admin_form.addRow("Username", self.super_admin_username_edit)
-        super_admin_form.addRow("Full name", self.super_admin_full_name_edit)
-        super_admin_form.addRow("Current password", self.current_password_edit)
-        super_admin_form.addRow("New password", self.new_password_edit)
-        super_admin_form.addRow("Confirm new password", self.confirm_password_edit)
+        self._add_form_row(super_admin_layout, 0, "Username", self.super_admin_username_edit)
+        self._add_form_row(super_admin_layout, 1, "Full name", self.super_admin_full_name_edit)
+        self._add_form_row(super_admin_layout, 2, "Current password", self.current_password_edit)
+        self._add_form_row(super_admin_layout, 3, "New password", self.new_password_edit)
+        self._add_form_row(super_admin_layout, 4, "Confirm new password", self.confirm_password_edit)
 
         self.sections_layout = QGridLayout()
         self.sections_layout.setContentsMargins(0, 0, 0, 0)
         self.sections_layout.setHorizontalSpacing(18)
         self.sections_layout.setVerticalSpacing(18)
         content_layout.addLayout(self.sections_layout)
+        content_layout.addStretch(1)
 
         footer = QWidget()
         footer.setObjectName("SetupFooter")
@@ -171,44 +185,94 @@ class SetupWindow(QWidget):
         self.footer_layout.setHorizontalSpacing(18)
         self.footer_layout.setVerticalSpacing(10)
 
-        self.status_label.setObjectName("StatusBanner")
-        self.status_label.setWordWrap(True)
-        self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.message_label.setObjectName("FooterMessage")
+        self.message_label.setWordWrap(True)
+        self.message_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.submit_button.setObjectName("PrimaryButton")
         self.submit_button.setMinimumHeight(42)
-        self.submit_button.setMinimumWidth(330)
         self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
 
         main_layout.addWidget(scroll_area, 1)
         main_layout.addWidget(footer, 0)
 
         self._sync_auth_fields()
-        self._set_status_message(self._initial_error_message or "", "error")
+        if self._initial_error_message:
+            self.show_message(self._initial_error_message, "error")
+            self._set_setup_status("Setup failed", "error")
+        else:
+            self._set_setup_status("Ready to configure", "neutral")
         self._apply_responsive_layout()
 
-    def _prepare_form(self, form: QFormLayout) -> None:
-        """Apply consistent spacing and growth behavior to section forms."""
+    def _build_setup_card(self) -> QFrame:
+        """Build the setup summary card matching the running window connection card."""
 
-        form.setContentsMargins(0, 8, 0, 0)
-        form.setHorizontalSpacing(18)
-        form.setVerticalSpacing(12)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        card = QFrame()
+        card.setObjectName("ConnectionCard")
+        card.setProperty("serviceState", "neutral")
+        self.connection_card = card
+
+        outer_layout = QHBoxLayout(card)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        accent = QFrame()
+        accent.setObjectName("ConnectionAccent")
+        accent.setFixedWidth(4)
+        self.connection_accent = accent
+        outer_layout.addWidget(accent)
+
+        content = QWidget()
+        content.setObjectName("ConnectionCardContent")
+        outer_layout.addWidget(content, 1)
+
+        card_layout = QHBoxLayout(content)
+        card_layout.setContentsMargins(20, 20, 20, 20)
+        card_layout.setSpacing(0)
+
+        card_title = QLabel("Setup")
+        card_title.setObjectName("CardTitle")
+
+        self.setup_status_label.setObjectName("ServiceStatus")
+        self.setup_status_label.setWordWrap(True)
+        self.setup_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        card_layout.addWidget(card_title)
+        card_layout.addStretch(1)
+        card_layout.addWidget(self.setup_status_label)
+        return card
+
+    def _prepare_form_layout(self, layout: QGridLayout) -> None:
+        """Apply consistent row spacing for setup form sections."""
+
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setHorizontalSpacing(16)
+        layout.setVerticalSpacing(12)
+        layout.setColumnStretch(0, 0)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(2, 0)
+
+    def _add_form_row(self, layout: QGridLayout, row: int, title: str, widget: QWidget) -> None:
+        """Add a labeled form row matching the running summary section style."""
+
+        if title:
+            title_label = QLabel(title)
+            title_label.setObjectName("RowTitle")
+            layout.addWidget(title_label, row, 0, alignment=Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(widget, row, 1, 1, 2)
 
     def _apply_responsive_layout(self) -> None:
         """Reflow sections and footer controls for compact or wide windows."""
 
         compact = self.width() < self.COMPACT_WIDTH
         self._update_content_width(compact)
+        self._apply_footer_button_sizing(compact)
         if compact == self._is_compact_layout:
             return
 
         self._is_compact_layout = compact
         for widget in (self.database_group, self.api_group, self.super_admin_group):
             self.sections_layout.removeWidget(widget)
-        self.footer_layout.removeWidget(self.status_label)
+        self.footer_layout.removeWidget(self.message_label)
         self.footer_layout.removeWidget(self.submit_button)
 
         if compact:
@@ -218,19 +282,26 @@ class SetupWindow(QWidget):
             self.sections_layout.setColumnStretch(0, 1)
             self.sections_layout.setColumnStretch(1, 0)
 
-            self.footer_layout.addWidget(self.status_label, 0, 0)
+            self.footer_layout.addWidget(self.message_label, 0, 0)
             self.footer_layout.addWidget(self.submit_button, 1, 0)
             self.footer_layout.setColumnStretch(0, 1)
             self.footer_layout.setColumnStretch(1, 0)
-            self.submit_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         else:
-            self.sections_layout.addWidget(self.database_group, 0, 0, 2, 1)
-            self.sections_layout.addWidget(self.api_group, 0, 1)
-            self.sections_layout.addWidget(self.super_admin_group, 1, 1)
+            self.sections_layout.addWidget(
+                self.database_group, 0, 0, 2, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.api_group, 0, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.super_admin_group, 1, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
             self.sections_layout.setColumnStretch(0, 1)
             self.sections_layout.setColumnStretch(1, 1)
+            self.sections_layout.setRowStretch(0, 0)
+            self.sections_layout.setRowStretch(1, 0)
 
-            self.footer_layout.addWidget(self.status_label, 0, 0)
+            self.footer_layout.addWidget(self.message_label, 0, 0)
             self.footer_layout.addWidget(
                 self.submit_button,
                 0,
@@ -239,7 +310,23 @@ class SetupWindow(QWidget):
             )
             self.footer_layout.setColumnStretch(0, 1)
             self.footer_layout.setColumnStretch(1, 0)
-            self.submit_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def _apply_footer_button_sizing(self, compact: bool) -> None:
+        """Keep the primary action button full-width only on compact windows."""
+
+        if compact:
+            self.submit_button.setMinimumWidth(0)
+            self.submit_button.setMaximumWidth(16777215)
+            self.submit_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            return
+
+        self.submit_button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.submit_button.setMinimumWidth(0)
+        self.submit_button.setMaximumWidth(16777215)
+        self.submit_button.adjustSize()
+        content_width = self.submit_button.sizeHint().width()
+        self.submit_button.setMinimumWidth(content_width)
+        self.submit_button.setMaximumWidth(content_width)
 
     def _update_content_width(self, compact: bool) -> None:
         """Keep the form centered without letting it stretch too wide."""
@@ -254,15 +341,35 @@ class SetupWindow(QWidget):
         super().resizeEvent(event)
         self._apply_responsive_layout()
 
-    def _set_status_message(self, message: str, state: str) -> None:
-        """Show a styled footer status message."""
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802 - Qt override name
+        """Re-apply layout once the window has its final size."""
 
-        self.status_label.setProperty("statusState", state)
-        self.status_label.setText(message)
-        self.status_label.setVisible(bool(message))
-        self.status_label.style().unpolish(self.status_label)
-        self.status_label.style().polish(self.status_label)
-        self.status_label.update()
+        super().showEvent(event)
+        self._apply_responsive_layout()
+
+    def _set_setup_status(self, text: str, state: str) -> None:
+        """Update the styled setup status badge and card state."""
+
+        self.setup_status_label.setProperty("serviceState", state)
+        self.setup_status_label.setText(text)
+        self.setup_status_label.style().unpolish(self.setup_status_label)
+        self.setup_status_label.style().polish(self.setup_status_label)
+        self.setup_status_label.update()
+
+        self.connection_card.setProperty("serviceState", state)
+        self.connection_card.style().unpolish(self.connection_card)
+        self.connection_card.style().polish(self.connection_card)
+        self.connection_card.update()
+
+    def show_message(self, message: str, state: str = "info") -> None:
+        """Show a styled footer message."""
+
+        self.message_label.setProperty("messageState", state)
+        self.message_label.setText(message)
+        self.message_label.setVisible(bool(message))
+        self.message_label.style().unpolish(self.message_label)
+        self.message_label.style().polish(self.message_label)
+        self.message_label.update()
 
     def _apply_stylesheet(self) -> None:
         """Apply scoped styling for the first-run setup window."""
@@ -290,7 +397,6 @@ class SetupWindow(QWidget):
                 color: #64748b;
                 font-size: 12px;
                 font-weight: 600;
-                text-transform: uppercase;
             }
             QGroupBox {
                 background: #ffffff;
@@ -307,6 +413,94 @@ class SetupWindow(QWidget):
                 left: 14px;
                 padding: 0 7px;
                 color: #334155;
+            }
+            QLabel#RowTitle {
+                color: #64748b;
+                font-weight: 600;
+                min-width: 138px;
+            }
+            QLabel#RowValue {
+                color: #111827;
+                font-weight: 600;
+            }
+            QLabel#ServiceStatus {
+                border-radius: 14px;
+                font-weight: 700;
+                font-size: 15px;
+                padding: 6px 16px;
+                border: 1px solid transparent;
+            }
+            QLabel#ServiceStatus[serviceState="neutral"] {
+                background: #f1f5f9;
+                color: #475569;
+                border-color: #cbd5e1;
+            }
+            QLabel#ServiceStatus[serviceState="running"] {
+                background: #ecfdf3;
+                color: #167a3b;
+                border-color: #d1fae5;
+            }
+            QLabel#ServiceStatus[serviceState="warning"] {
+                background: #fffbeb;
+                color: #9a6a00;
+                border-color: #fef3c7;
+            }
+            QLabel#ServiceStatus[serviceState="error"] {
+                background: #fef2f2;
+                color: #b42318;
+                border-color: #fee2e2;
+            }
+            QFrame#ConnectionCard {
+                background: #ffffff;
+                border: 1px solid #dce4ef;
+                border-radius: 10px;
+                margin-top: 12px;
+                margin-bottom: 0;
+            }
+            QFrame#ConnectionCard[serviceState="neutral"] {
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+            }
+            QFrame#ConnectionCard[serviceState="running"] {
+                background: #ecfdf3;
+                border-color: #d1fae5;
+            }
+            QFrame#ConnectionCard[serviceState="warning"] {
+                background: #fffbeb;
+                border-color: #fef3c7;
+            }
+            QFrame#ConnectionCard[serviceState="error"] {
+                background: #fef2f2;
+                border-color: #fee2e2;
+            }
+            QWidget#ConnectionCardContent {
+                background: transparent;
+            }
+            QFrame#ConnectionAccent {
+                background-color: #2563eb;
+                border: none;
+                border-top-left-radius: 10px;
+                border-bottom-left-radius: 10px;
+            }
+            QFrame#ConnectionCard[serviceState="running"] QFrame#ConnectionAccent {
+                background-color: #16a34a;
+            }
+            QFrame#ConnectionCard[serviceState="warning"] QFrame#ConnectionAccent {
+                background-color: #d97706;
+            }
+            QFrame#ConnectionCard[serviceState="error"] QFrame#ConnectionAccent {
+                background-color: #dc2626;
+            }
+            QFrame#ConnectionCard[serviceState="running"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="warning"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="error"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="neutral"] QLabel#ServiceStatus {
+                background: transparent;
+            }
+            QLabel#CardTitle {
+                color: #334155;
+                font-size: 16px;
+                font-weight: 700;
             }
             QLabel {
                 color: #475569;
@@ -364,21 +558,29 @@ class SetupWindow(QWidget):
                 background: #2563eb;
                 border-color: #2563eb;
             }
+            QCheckBox:disabled {
+                color: #94a3b8;
+            }
             QWidget#SetupFooter {
                 background: #ffffff;
                 border-top: 1px solid #dce4ef;
             }
-            QLabel#StatusBanner {
+            QLabel#FooterMessage {
                 border-radius: 6px;
-                padding: 9px 11px;
                 font-weight: 600;
+                padding: 9px 11px;
             }
-            QLabel#StatusBanner[statusState="info"] {
+            QLabel#FooterMessage[messageState="info"] {
                 background: #eff6ff;
                 border: 1px solid #bfdbfe;
                 color: #1d4ed8;
             }
-            QLabel#StatusBanner[statusState="error"] {
+            QLabel#FooterMessage[messageState="success"] {
+                background: #ecfdf3;
+                border: 1px solid #bbf7d0;
+                color: #167a3b;
+            }
+            QLabel#FooterMessage[messageState="error"] {
                 background: #fef2f2;
                 border: 1px solid #fecaca;
                 color: #b42318;
@@ -417,6 +619,24 @@ class SetupWindow(QWidget):
         if index >= 0:
             self.driver_combo.setCurrentIndex(index)
 
+    def _input_widgets(self) -> list[QWidget]:
+        """Return all editable setup form controls."""
+
+        return [
+            self.server_edit,
+            self.database_edit,
+            self.driver_combo,
+            self.auth_combo,
+            self.username_edit,
+            self.password_edit,
+            self.trust_cert_check,
+            self.host_edit,
+            self.port_spin,
+            self.current_password_edit,
+            self.new_password_edit,
+            self.confirm_password_edit,
+        ]
+
     def _connect_signals(self) -> None:
         """Connect user actions to validation and setup logic."""
 
@@ -427,20 +647,39 @@ class SetupWindow(QWidget):
         """Enable SQL username/password only for SQL Login mode."""
 
         is_sql_login = self.auth_combo.currentData() == "sql"
-        self.username_edit.setEnabled(is_sql_login)
-        self.password_edit.setEnabled(is_sql_login)
+        self.username_edit.setEnabled(is_sql_login and not self._is_busy)
+        self.password_edit.setEnabled(is_sql_login and not self._is_busy)
 
-    def set_busy(self, is_busy: bool) -> None:
+    def set_busy(self, is_busy: bool, *, restore_status: bool = True) -> None:
         """Disable inputs while setup is running."""
 
+        if is_busy and not self._is_busy:
+            self._setup_status_before_busy = (
+                self.setup_status_label.text(),
+                str(self.connection_card.property("serviceState") or "neutral"),
+            )
+            self._set_setup_status("Working...", "neutral")
+        elif not is_busy and self._is_busy and restore_status:
+            previous_text, previous_state = self._setup_status_before_busy
+            self._set_setup_status(previous_text, previous_state)
+
+        self._is_busy = is_busy
         self.submit_button.setDisabled(is_busy)
-        self.submit_button.setText("Working..." if is_busy else "Create database and start Windows service")
+        self.submit_button.setText(
+            "Working..." if is_busy else "Create database and start Windows service"
+        )
+        self._apply_footer_button_sizing(self.width() < self.COMPACT_WIDTH)
+
+        for widget in self._input_widgets():
+            widget.setDisabled(is_busy)
+        self._sync_auth_fields()
 
     def show_error(self, message: str) -> None:
         """Show a recoverable setup error."""
 
-        self._set_status_message(message, "error")
-        self.set_busy(False)
+        self.show_message(message, "error")
+        self.set_busy(False, restore_status=False)
+        self._set_setup_status("Setup failed", "error")
 
     def _on_submit(self) -> None:
         """Validate form values and emit a setup request."""
@@ -451,7 +690,7 @@ class SetupWindow(QWidget):
             QMessageBox.warning(self, "Invalid setup values", str(exc))
             return
 
-        self._set_status_message(
+        self.show_message(
             "Creating database, running migrations, and preparing Windows service...",
             "info",
         )
@@ -473,6 +712,7 @@ class SetupWindow(QWidget):
             raise ValueError("SQL Server host/instance is required.")
         if not database:
             raise ValueError("Database name is required.")
+        validate_database_name(database)
         if not host:
             raise ValueError("API bind host/IP is required.")
         if auth_mode == "sql" and not self.username_edit.text().strip():

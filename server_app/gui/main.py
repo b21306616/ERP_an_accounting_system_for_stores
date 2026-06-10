@@ -137,7 +137,10 @@ class ApplicationCoordinator(QObject):
             return
 
         if self.setup_window is not None:
-            self.setup_window.status_label.setText("Database is ready. Installing and starting Windows service...")
+            self.setup_window.show_message(
+                "Database is ready. Installing and starting Windows service...",
+                "info",
+            )
 
         self._run_service_action(
             lambda: self._start_service_for_config(config),
