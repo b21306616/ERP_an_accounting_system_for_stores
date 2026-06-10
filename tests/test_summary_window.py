@@ -71,8 +71,8 @@ class SummaryWindowTests(unittest.TestCase):
     def test_displays_saved_setup_values(self) -> None:
         window = self.create_window()
 
-        self.assertEqual(window.base_url_label.text(), "http://127.0.0.1:8123")
-        self.assertEqual(window.docs_url_label.text(), "http://127.0.0.1:8123/docs")
+        self.assertIn("http://127.0.0.1:8123", window.base_url_label.text())
+        self.assertIn("http://127.0.0.1:8123/docs", window.docs_url_label.text())
         self.assertEqual(window.value_labels["database.server"].text(), "SERVER\\SQLEXPRESS")
         self.assertEqual(window.value_labels["database.database"].text(), "ERPAccounting")
         self.assertEqual(window.value_labels["database.auth_mode"].text(), "SQL Login")
@@ -112,17 +112,16 @@ class SummaryWindowTests(unittest.TestCase):
         window.resize(900, 700)
         self.app.processEvents()
         self.assertFalse(window._is_compact_layout)
-        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.service_group)
+        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.database_group)
         self.assertIs(window.sections_layout.itemAtPosition(0, 1).widget(), window.api_group)
-        self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.database_group)
+        self.assertIs(window.sections_layout.itemAtPosition(1, 1).widget(), window.admin_group)
 
         window.resize(520, 560)
         self.app.processEvents()
         self.assertTrue(window._is_compact_layout)
-        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.service_group)
-        self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.database_group)
-        self.assertIs(window.sections_layout.itemAtPosition(2, 0).widget(), window.api_group)
-        self.assertIs(window.sections_layout.itemAtPosition(3, 0).widget(), window.admin_group)
+        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.database_group)
+        self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.api_group)
+        self.assertIs(window.sections_layout.itemAtPosition(2, 0).widget(), window.admin_group)
 
 
 class SummaryUpdateCoordinatorTests(unittest.TestCase):

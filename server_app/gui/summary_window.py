@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pyodbc
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QResizeEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -117,30 +118,28 @@ class SummaryWindow(QWidget):
         content_layout = QVBoxLayout(self.content_widget)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(18)
+        content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         header = QWidget()
+        header.setObjectName("SummaryHeader")
+        header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 4)
-        header_layout.setSpacing(4)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(2)
+        header_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         title_label = QLabel("ERP Accounting Server")
         title_label.setObjectName("SummaryTitle")
         subtitle_label = QLabel("Running")
         subtitle_label.setObjectName("SummarySubtitle")
+        title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
         content_layout.addWidget(header)
 
-        self.service_group = QGroupBox("Connection")
-        service_layout = QGridLayout(self.service_group)
-        self._prepare_summary_layout(service_layout)
-        self.status_label.setObjectName("ServiceStatus")
-        self.status_label.setWordWrap(True)
-        self.base_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.docs_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self._add_static_row(service_layout, 0, "Status", self.status_label)
-        self._add_static_row(service_layout, 1, "API base URL", self.base_url_label)
-        self._add_static_row(service_layout, 2, "Swagger docs", self.docs_url_label)
+        self.service_group = self._build_connection_card()
+        content_layout.addWidget(self.service_group)
 
         self.database_group = QGroupBox("MSSQL connection")
         database_layout = QGridLayout(self.database_group)
@@ -173,6 +172,7 @@ class SummaryWindow(QWidget):
         self.sections_layout.setHorizontalSpacing(18)
         self.sections_layout.setVerticalSpacing(18)
         content_layout.addLayout(self.sections_layout)
+        content_layout.addStretch(1)
 
         footer = QWidget()
         footer.setObjectName("SummaryFooter")
@@ -194,6 +194,119 @@ class SummaryWindow(QWidget):
         main_layout.addWidget(scroll_area, 1)
         main_layout.addWidget(footer, 0)
         self._apply_responsive_layout()
+
+    def _build_connection_card(self) -> QFrame:
+        """Build the redesigned connection summary card."""
+
+        card = QFrame()
+        card.setObjectName("ConnectionCard")
+        card.setProperty("serviceState", "neutral")
+        self.connection_card = card
+
+        outer_layout = QHBoxLayout(card)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        accent = QFrame()
+        accent.setObjectName("ConnectionAccent")
+        accent.setFixedWidth(4)
+        self.connection_accent = accent
+        outer_layout.addWidget(accent)
+
+        content = QWidget()
+        content.setObjectName("ConnectionCardContent")
+        outer_layout.addWidget(content, 1)
+
+        card_layout = QVBoxLayout(content)
+        card_layout.setContentsMargins(20, 20, 20, 20)
+        card_layout.setSpacing(14)
+
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+
+        card_title = QLabel("Connection")
+        card_title.setObjectName("CardTitle")
+
+        self.status_label.setObjectName("ServiceStatus")
+        self.status_label.setWordWrap(True)
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        header_layout.addWidget(card_title)
+        header_layout.addStretch(1)
+        header_layout.addWidget(self.status_label)
+
+        card_layout.addLayout(header_layout)
+
+        divider = QFrame()
+        divider.setObjectName("CardDivider")
+        divider.setFrameShape(QFrame.Shape.HLine)
+        card_layout.addWidget(divider)
+
+        details_layout = QGridLayout()
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setHorizontalSpacing(16)
+        details_layout.setVerticalSpacing(10)
+        details_layout.setColumnStretch(0, 0)
+        details_layout.setColumnStretch(1, 1)
+        details_layout.setColumnStretch(2, 0)
+
+        api_title = QLabel("API base URL")
+        api_title.setObjectName("CardRowTitle")
+        self.base_url_label.setObjectName("CardRowValue")
+        self.base_url_label.setWordWrap(True)
+        self.base_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.base_url_label.setOpenExternalLinks(True)
+
+        copy_api_btn = QPushButton("Copy")
+        copy_api_btn.setObjectName("CardCopyButton")
+        copy_api_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_api_btn.clicked.connect(lambda: self._copy_to_clipboard(self.base_url, copy_api_btn))
+
+        details_layout.addWidget(api_title, 0, 0)
+        details_layout.addWidget(self.base_url_label, 0, 1)
+        details_layout.addWidget(copy_api_btn, 0, 2)
+
+        docs_title = QLabel("Swagger docs")
+        docs_title.setObjectName("CardRowTitle")
+        self.docs_url_label.setObjectName("CardRowValue")
+        self.docs_url_label.setWordWrap(True)
+        self.docs_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        self.docs_url_label.setOpenExternalLinks(True)
+
+        copy_docs_btn = QPushButton("Copy")
+        copy_docs_btn.setObjectName("CardCopyButton")
+        copy_docs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_docs_btn.clicked.connect(lambda: self._copy_to_clipboard(f"{self.base_url}/docs", copy_docs_btn))
+
+        details_layout.addWidget(docs_title, 1, 0)
+        details_layout.addWidget(self.docs_url_label, 1, 1)
+        details_layout.addWidget(copy_docs_btn, 1, 2)
+
+        card_layout.addLayout(details_layout)
+        return card
+
+    def _copy_to_clipboard(self, text: str, button: QPushButton) -> None:
+        """Copy text to clipboard and show feedback."""
+
+        from PyQt6.QtWidgets import QApplication
+        QApplication.clipboard().setText(text)
+
+        button.setText("Copied!")
+        button.setProperty("copiedState", True)
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
+
+        QTimer.singleShot(2000, lambda: self._reset_copy_button(button))
+
+    def _reset_copy_button(self, button: QPushButton) -> None:
+        """Reset copy button text and state."""
+
+        button.setText("Copy")
+        button.setProperty("copiedState", False)
+        button.style().unpolish(button)
+        button.style().polish(button)
+        button.update()
 
     def _prepare_summary_layout(self, layout: QGridLayout) -> None:
         """Apply consistent row spacing for summary sections."""
@@ -252,8 +365,10 @@ class SummaryWindow(QWidget):
         """Replace the displayed config after a successful save."""
 
         self.config = config
-        self.base_url_label.setText(self.base_url)
-        self.docs_url_label.setText(f"{self.base_url}/docs")
+        url = self.base_url
+        link_style = "color: #1d4ed8; text-decoration: none; font-weight: 600;"
+        self.base_url_label.setText(f'<a href="{url}" style="{link_style}">{url}</a>')
+        self.docs_url_label.setText(f'<a href="{url}/docs" style="{link_style}">{url}/docs</a>')
         self.value_labels["database.server"].setText(config.database.server)
         self.value_labels["database.database"].setText(config.database.database)
         self.value_labels["database.driver"].setText(config.database.driver)
@@ -578,6 +693,11 @@ class SummaryWindow(QWidget):
         self.status_label.style().polish(self.status_label)
         self.status_label.update()
 
+        self.connection_card.setProperty("serviceState", state)
+        self.connection_card.style().unpolish(self.connection_card)
+        self.connection_card.style().polish(self.connection_card)
+        self.connection_card.update()
+
     def mark_running(self) -> None:
         """Update the UI after the Windows service starts."""
 
@@ -634,16 +754,21 @@ class SummaryWindow(QWidget):
             return
 
         self._is_compact_layout = compact
-        for widget in (self.service_group, self.database_group, self.api_group, self.admin_group):
+        for widget in (self.database_group, self.api_group, self.admin_group):
             self.sections_layout.removeWidget(widget)
         self.footer_layout.removeWidget(self.message_label)
         self.footer_layout.removeWidget(self.action_button)
 
         if compact:
-            self.sections_layout.addWidget(self.service_group, 0, 0)
-            self.sections_layout.addWidget(self.database_group, 1, 0)
-            self.sections_layout.addWidget(self.api_group, 2, 0)
-            self.sections_layout.addWidget(self.admin_group, 3, 0)
+            self.sections_layout.addWidget(
+                self.database_group, 0, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.api_group, 1, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.admin_group, 2, 0, alignment=Qt.AlignmentFlag.AlignTop
+            )
             self.sections_layout.setColumnStretch(0, 1)
             self.sections_layout.setColumnStretch(1, 0)
 
@@ -653,10 +778,15 @@ class SummaryWindow(QWidget):
             self.footer_layout.setColumnStretch(1, 0)
             self.action_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         else:
-            self.sections_layout.addWidget(self.service_group, 0, 0)
-            self.sections_layout.addWidget(self.api_group, 0, 1)
-            self.sections_layout.addWidget(self.database_group, 1, 0)
-            self.sections_layout.addWidget(self.admin_group, 1, 1)
+            self.sections_layout.addWidget(
+                self.database_group, 0, 0, 2, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.api_group, 0, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
+            self.sections_layout.addWidget(
+                self.admin_group, 1, 1, alignment=Qt.AlignmentFlag.AlignTop
+            )
             self.sections_layout.setColumnStretch(0, 1)
             self.sections_layout.setColumnStretch(1, 1)
 
@@ -737,25 +867,133 @@ class SummaryWindow(QWidget):
                 font-weight: 600;
             }
             QLabel#ServiceStatus {
-                border-radius: 6px;
+                border-radius: 14px;
                 font-weight: 700;
-                padding: 6px 9px;
+                font-size: 15px;
+                padding: 6px 16px;
+                border: 1px solid transparent;
             }
             QLabel#ServiceStatus[serviceState="neutral"] {
                 background: #f1f5f9;
                 color: #475569;
+                border-color: #cbd5e1;
             }
             QLabel#ServiceStatus[serviceState="running"] {
                 background: #ecfdf3;
                 color: #167a3b;
+                border-color: #d1fae5;
             }
             QLabel#ServiceStatus[serviceState="warning"] {
                 background: #fffbeb;
                 color: #9a6a00;
+                border-color: #fef3c7;
             }
             QLabel#ServiceStatus[serviceState="error"] {
                 background: #fef2f2;
                 color: #b42318;
+                border-color: #fee2e2;
+            }
+            QFrame#ConnectionCard {
+                background: #ffffff;
+                border: 1px solid #dce4ef;
+                border-radius: 10px;
+                margin-top: 12px;
+                margin-bottom: 0;
+            }
+            QFrame#ConnectionCard[serviceState="neutral"] {
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+            }
+            QFrame#ConnectionCard[serviceState="running"] {
+                background: #ecfdf3;
+                border-color: #d1fae5;
+            }
+            QFrame#ConnectionCard[serviceState="warning"] {
+                background: #fffbeb;
+                border-color: #fef3c7;
+            }
+            QFrame#ConnectionCard[serviceState="error"] {
+                background: #fef2f2;
+                border-color: #fee2e2;
+            }
+            QWidget#ConnectionCardContent {
+                background: transparent;
+            }
+            QFrame#ConnectionAccent {
+                background-color: #2563eb;
+                border: none;
+                border-top-left-radius: 10px;
+                border-bottom-left-radius: 10px;
+            }
+            QFrame#ConnectionCard[serviceState="running"] QFrame#ConnectionAccent {
+                background-color: #16a34a;
+            }
+            QFrame#ConnectionCard[serviceState="warning"] QFrame#ConnectionAccent {
+                background-color: #d97706;
+            }
+            QFrame#ConnectionCard[serviceState="error"] QFrame#ConnectionAccent {
+                background-color: #dc2626;
+            }
+            QFrame#ConnectionCard[serviceState="running"] QFrame#CardDivider {
+                background-color: #d1fae5;
+            }
+            QFrame#ConnectionCard[serviceState="warning"] QFrame#CardDivider {
+                background-color: #fef3c7;
+            }
+            QFrame#ConnectionCard[serviceState="error"] QFrame#CardDivider {
+                background-color: #fee2e2;
+            }
+            QFrame#ConnectionCard[serviceState="neutral"] QFrame#CardDivider {
+                background-color: #cbd5e1;
+            }
+            QFrame#ConnectionCard[serviceState="running"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="warning"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="error"] QLabel#ServiceStatus,
+            QFrame#ConnectionCard[serviceState="neutral"] QLabel#ServiceStatus {
+                background: transparent;
+            }
+            QLabel#CardTitle {
+                color: #334155;
+                font-size: 16px;
+                font-weight: 700;
+            }
+            QFrame#CardDivider {
+                background-color: #e8edf5;
+                max-height: 1px;
+                border: none;
+            }
+            QLabel#CardRowTitle {
+                color: #64748b;
+                font-weight: 600;
+                font-size: 12px;
+                min-width: 120px;
+            }
+            QLabel#CardRowValue {
+                color: #111827;
+                font-weight: 600;
+                font-size: 12px;
+            }
+            QPushButton#CardCopyButton {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 6px;
+                color: #1d4ed8;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 4px 10px;
+                min-width: 60px;
+            }
+            QPushButton#CardCopyButton:hover {
+                background: #eff6ff;
+                border-color: #93c5fd;
+            }
+            QPushButton#CardCopyButton:pressed {
+                background: #dbeafe;
+            }
+            QPushButton#CardCopyButton[copiedState="true"] {
+                background: #10b981;
+                border-color: #34d399;
+                color: #ffffff;
             }
             QLineEdit,
             QComboBox,
