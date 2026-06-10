@@ -55,7 +55,7 @@ class SummaryWindow(QWidget):
         super().__init__()
         self.config = config
         self.setObjectName("SummaryWindow")
-        self.setWindowTitle(f"{APP_NAME} - Running")
+        self.setWindowTitle(f"{APP_NAME} - Starting")
         self.setMinimumSize(500, 520)
         self._is_compact_layout: bool | None = None
         self._updates_enabled = True
@@ -64,6 +64,7 @@ class SummaryWindow(QWidget):
         self.update_buttons: dict[str, QPushButton] = {}
 
         self.status_label = QLabel("Starting...")
+        self.subtitle_label = QLabel("Starting")
         self.base_url_label = QLabel()
         self.docs_url_label = QLabel()
         self.database_label = QLabel()
@@ -130,12 +131,11 @@ class SummaryWindow(QWidget):
 
         title_label = QLabel("ERP Accounting Server")
         title_label.setObjectName("SummaryTitle")
-        subtitle_label = QLabel("Running")
-        subtitle_label.setObjectName("SummarySubtitle")
+        self.subtitle_label.setObjectName("SummarySubtitle")
         title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         header_layout.addWidget(title_label)
-        header_layout.addWidget(subtitle_label)
+        header_layout.addWidget(self.subtitle_label)
         content_layout.addWidget(header)
 
         self.service_group = self._build_connection_card()
@@ -684,9 +684,16 @@ class SummaryWindow(QWidget):
         self.show_update_message(message, "error")
         self.set_updates_enabled(True)
 
-    def _set_service_status(self, text: str, state: str) -> None:
+    def _set_window_state(self, label: str) -> None:
+        """Update the summary header and OS window title."""
+
+        self.subtitle_label.setText(label)
+        self.setWindowTitle(f"{APP_NAME} - {label}")
+
+    def _set_service_status(self, text: str, state: str, window_state: str) -> None:
         """Update the styled service status value."""
 
+        self._set_window_state(window_state)
         self.status_label.setProperty("serviceState", state)
         self.status_label.setText(text)
         self.status_label.style().unpolish(self.status_label)
@@ -702,7 +709,7 @@ class SummaryWindow(QWidget):
         """Update the UI after the Windows service starts."""
 
         self.is_running = True
-        self._set_service_status("Running", "running")
+        self._set_service_status("Running", "running", "Running")
         self.action_button.setText("Stop Connection")
         self.action_button.setEnabled(self._updates_enabled)
 
@@ -710,16 +717,16 @@ class SummaryWindow(QWidget):
         """Update the UI while service startup is in progress."""
 
         self.is_running = False
-        self._set_service_status("Starting...", "neutral")
-        self.action_button.setText("Start Connection")
+        self._set_service_status("Starting...", "neutral", "Starting")
+        self.action_button.setText("Starting...")
         self.action_button.setEnabled(False)
 
     def mark_stopping(self) -> None:
         """Update the UI while shutdown is in progress."""
 
         self.is_running = True
-        self._set_service_status("Stopping...", "warning")
-        self.action_button.setText("Stop Connection")
+        self._set_service_status("Stopping...", "warning", "Stopping")
+        self.action_button.setText("Stopping...")
         self.action_button.setEnabled(False)
 
     def mark_stopped(self, status: ServiceStatus | None = None) -> None:
@@ -733,7 +740,15 @@ class SummaryWindow(QWidget):
         else:
             text = "Stopped"
 
-        self._set_service_status(text, "warning")
+        self._set_service_status(text, "warning", "Stopped")
+        self.action_button.setText("Start Connection")
+        self.action_button.setEnabled(self._updates_enabled)
+
+    def mark_not_installed(self, status: ServiceStatus | None = None) -> None:
+        """Update the UI when the Windows service is not registered."""
+
+        self.is_running = False
+        self._set_service_status("Not installed", "warning", "Not installed")
         self.action_button.setText("Start Connection")
         self.action_button.setEnabled(self._updates_enabled)
 
@@ -741,7 +756,7 @@ class SummaryWindow(QWidget):
         """Show a startup or runtime error."""
 
         self.is_running = False
-        self._set_service_status(message, "error")
+        self._set_service_status(message, "error", "Error")
         self.action_button.setText("Start Connection")
         self.action_button.setEnabled(self._updates_enabled)
 

@@ -62,7 +62,7 @@ class SetupWindow(QWidget):
         self.confirm_password_edit = QLineEdit()
 
         self.status_label = QLabel(error_message or "")
-        self.submit_button = QPushButton("Create database and start server")
+        self.submit_button = QPushButton("Create database and start Windows service")
 
         self._build_ui()
         self._connect_signals()
@@ -176,7 +176,7 @@ class SetupWindow(QWidget):
         self.status_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.submit_button.setObjectName("PrimaryButton")
         self.submit_button.setMinimumHeight(42)
-        self.submit_button.setMinimumWidth(280)
+        self.submit_button.setMinimumWidth(330)
         self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
 
         main_layout.addWidget(scroll_area, 1)
@@ -434,7 +434,7 @@ class SetupWindow(QWidget):
         """Disable inputs while setup is running."""
 
         self.submit_button.setDisabled(is_busy)
-        self.submit_button.setText("Working..." if is_busy else "Create database and start server")
+        self.submit_button.setText("Working..." if is_busy else "Create database and start Windows service")
 
     def show_error(self, message: str) -> None:
         """Show a recoverable setup error."""

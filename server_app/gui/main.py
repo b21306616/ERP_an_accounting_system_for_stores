@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import sys
 
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, QTimer
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from server_app.core.config import AppConfig, ConfigManager
@@ -24,6 +24,8 @@ from server_app.service_control import (
 class ApplicationCoordinator(QObject):
     """Own the GUI windows and coordinate Windows service actions."""
 
+    SERVICE_STATUS_POLL_INTERVAL_MS = 2000
+
     def __init__(
         self,
         app: QApplication,
@@ -39,6 +41,9 @@ class ApplicationCoordinator(QObject):
         self.startup_worker: DatabaseStartupWorker | None = None
         self.service_worker: ServiceActionWorker | None = None
         self.pending_config: AppConfig | None = None
+        self.service_status_timer = QTimer(self)
+        self.service_status_timer.setInterval(self.SERVICE_STATUS_POLL_INTERVAL_MS)
+        self.service_status_timer.timeout.connect(self.refresh_service_status)
 
         self.app.aboutToQuit.connect(self.shutdown)
 
@@ -62,6 +67,7 @@ class ApplicationCoordinator(QObject):
     def show_setup(self, error_message: str | None = None) -> None:
         """Show the setup window and connect its submission signal."""
 
+        self._stop_service_status_polling()
         old_summary_window = self.summary_window
         if self.summary_window is not None:
             self.summary_window = None
@@ -84,6 +90,7 @@ class ApplicationCoordinator(QObject):
             self.handle_summary_password_update_requested
         )
         self.summary_window.show()
+        self._start_service_status_polling()
 
     def handle_setup_requested(
         self,
@@ -92,6 +99,15 @@ class ApplicationCoordinator(QObject):
         new_super_admin_password: str,
     ) -> None:
         """Start database bootstrap after the setup form validates."""
+
+        try:
+            self.service_controller.require_admin()
+        except Exception as exc:
+            if self.setup_window is not None:
+                self.setup_window.show_error(str(exc))
+            else:
+                QMessageBox.critical(None, APP_NAME, str(exc))
+            return
 
         self.pending_config = config
         self.startup_worker = DatabaseStartupWorker(
@@ -167,6 +183,8 @@ class ApplicationCoordinator(QObject):
 
         if self.summary_window is None:
             return
+        if self.service_worker is not None and self.service_worker.isRunning():
+            return
 
         try:
             status = self.service_controller.get_status()
@@ -188,8 +206,10 @@ class ApplicationCoordinator(QObject):
             self.summary_window.mark_starting()
         elif status.run_state == ServiceRunState.STOP_PENDING:
             self.summary_window.mark_stopping()
-        elif status.run_state in {ServiceRunState.STOPPED, ServiceRunState.NOT_INSTALLED}:
+        elif status.run_state == ServiceRunState.STOPPED:
             self.summary_window.mark_stopped(status)
+        elif status.run_state == ServiceRunState.NOT_INSTALLED:
+            self.summary_window.mark_not_installed(status)
         else:
             self.summary_window.mark_error(f"Windows service state is {status.run_state.value}.")
 
@@ -378,9 +398,22 @@ class ApplicationCoordinator(QObject):
 
         self.service_worker = None
 
+    def _start_service_status_polling(self) -> None:
+        """Start live Windows service status refresh while summary is visible."""
+
+        if not self.service_status_timer.isActive():
+            self.service_status_timer.start()
+
+    def _stop_service_status_polling(self) -> None:
+        """Stop live Windows service status refresh."""
+
+        if self.service_status_timer.isActive():
+            self.service_status_timer.stop()
+
     def shutdown(self) -> None:
         """Best-effort cleanup when the Qt application exits."""
 
+        self._stop_service_status_polling()
         for worker in (self.startup_worker, self.service_worker):
             if worker is not None and worker.isRunning():
                 worker.wait(1000)

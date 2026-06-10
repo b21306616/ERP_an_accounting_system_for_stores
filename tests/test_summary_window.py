@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
-from server_app.core.constants import DEFAULT_ODBC_DRIVER
+from server_app.core.constants import APP_NAME, DEFAULT_ODBC_DRIVER
 from server_app.gui.main import ApplicationCoordinator
 from server_app.gui.summary_window import SummaryWindow
+from server_app.service_control import ServiceRunState, ServiceStartType, ServiceStatus
 
 
 def make_config(auth_mode: str = "sql") -> AppConfig:
@@ -51,6 +53,19 @@ class FakeServiceController:
 
     def stop_and_disable(self) -> None:
         self.stop_calls += 1
+
+
+class FakeStatusServiceController:
+    """Return a scripted sequence of service statuses."""
+
+    def __init__(self, statuses: list[ServiceStatus]) -> None:
+        self.statuses = statuses
+        self.calls = 0
+
+    def get_status(self) -> ServiceStatus:
+        index = min(self.calls, len(self.statuses) - 1)
+        self.calls += 1
+        return self.statuses[index]
 
 
 class SummaryWindowTests(unittest.TestCase):
@@ -123,6 +138,44 @@ class SummaryWindowTests(unittest.TestCase):
         self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.api_group)
         self.assertIs(window.sections_layout.itemAtPosition(2, 0).widget(), window.admin_group)
 
+    def test_service_state_methods_update_title_subtitle_and_pending_buttons(self) -> None:
+        window = self.create_window()
+
+        window.mark_running()
+        self.assertEqual(window.windowTitle(), f"{APP_NAME} - Running")
+        self.assertEqual(window.subtitle_label.text(), "Running")
+        self.assertEqual(window.action_button.text(), "Stop Connection")
+
+        window.mark_starting()
+        self.assertEqual(window.windowTitle(), f"{APP_NAME} - Starting")
+        self.assertEqual(window.subtitle_label.text(), "Starting")
+        self.assertEqual(window.action_button.text(), "Starting...")
+
+        window.mark_stopping()
+        self.assertEqual(window.windowTitle(), f"{APP_NAME} - Stopping")
+        self.assertEqual(window.subtitle_label.text(), "Stopping")
+        self.assertEqual(window.action_button.text(), "Stopping...")
+
+        window.mark_error("Service failed")
+        self.assertEqual(window.windowTitle(), f"{APP_NAME} - Error")
+        self.assertEqual(window.subtitle_label.text(), "Error")
+
+    def test_not_installed_status_is_distinct(self) -> None:
+        window = self.create_window()
+
+        window.mark_not_installed(
+            ServiceStatus(
+                installed=False,
+                run_state=ServiceRunState.NOT_INSTALLED,
+                start_type=ServiceStartType.UNKNOWN,
+            )
+        )
+
+        self.assertFalse(window.is_running)
+        self.assertEqual(window.status_label.text(), "Not installed")
+        self.assertEqual(window.windowTitle(), f"{APP_NAME} - Not installed")
+        self.assertEqual(window.action_button.text(), "Start Connection")
+
 
 class SummaryUpdateCoordinatorTests(unittest.TestCase):
     """Validate save-and-stop behavior for running-window edits."""
@@ -193,6 +246,60 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
         self.assertEqual(controller.stop_calls, 1)
         self.assertFalse(coordinator.summary_window.is_running)
         self.assertEqual(coordinator.summary_window.action_button.text(), "Start Connection")
+
+
+class SummaryServicePollingCoordinatorTests(unittest.TestCase):
+    """Validate live synchronization with externally changed Windows service state."""
+
+    app: QApplication
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def create_coordinator(
+        self,
+        statuses: list[ServiceStatus],
+    ) -> tuple[ApplicationCoordinator, FakeStatusServiceController]:
+        controller = FakeStatusServiceController(statuses)
+        coordinator = ApplicationCoordinator(self.app, FakeConfigManager(), controller)  # type: ignore[arg-type]
+        self.addCleanup(coordinator.shutdown)
+        return coordinator, controller
+
+    def test_refresh_service_status_tracks_external_start_stop(self) -> None:
+        running = ServiceStatus(True, ServiceRunState.RUNNING, ServiceStartType.AUTO)
+        stopped = ServiceStatus(True, ServiceRunState.STOPPED, ServiceStartType.DISABLED)
+        coordinator, controller = self.create_coordinator([running, stopped])
+
+        coordinator.show_summary(make_config())
+        assert coordinator.summary_window is not None
+        self.addCleanup(coordinator.summary_window.close)
+
+        coordinator.refresh_service_status()
+        self.assertTrue(coordinator.summary_window.is_running)
+        self.assertEqual(coordinator.summary_window.status_label.text(), "Running")
+
+        coordinator.refresh_service_status()
+        self.assertFalse(coordinator.summary_window.is_running)
+        self.assertEqual(coordinator.summary_window.status_label.text(), "Stopped (disabled)")
+        self.assertEqual(coordinator.summary_window.action_button.text(), "Start Connection")
+        self.assertEqual(controller.calls, 2)
+
+    def test_status_timer_runs_only_while_summary_is_visible(self) -> None:
+        coordinator, _controller = self.create_coordinator(
+            [ServiceStatus(True, ServiceRunState.STOPPED, ServiceStartType.MANUAL)]
+        )
+
+        coordinator.show_summary(make_config())
+        self.assertTrue(coordinator.service_status_timer.isActive())
+
+        with patch("server_app.gui.setup_window.pyodbc.drivers", return_value=[DEFAULT_ODBC_DRIVER]):
+            coordinator.show_setup()
+
+        self.assertFalse(coordinator.service_status_timer.isActive())
+        self.assertIsNotNone(coordinator.setup_window)
+        assert coordinator.setup_window is not None
+        self.addCleanup(coordinator.setup_window.close)
 
 
 if __name__ == "__main__":

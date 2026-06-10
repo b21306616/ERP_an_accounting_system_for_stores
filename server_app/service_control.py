@@ -7,6 +7,7 @@ from enum import Enum
 import ctypes
 import os
 from pathlib import Path
+import sys
 import time
 from types import ModuleType, SimpleNamespace
 from urllib.error import URLError
@@ -178,6 +179,55 @@ def _read_registered_service_class() -> str | None:
         return None
 
 
+def _python_path_registry_key() -> str:
+    """Return the machine-wide PythonPath key used by pythonservice.exe."""
+
+    return rf"Software\Python\PythonCore\{sys.winver}\PythonPath\{PYTHONPATH_REGISTRY_NAME}"
+
+
+def _read_registered_project_python_path() -> str | None:
+    """Read the machine-wide PythonPath entry for this service."""
+
+    if winreg is None:
+        return None
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _python_path_registry_key()) as key:
+            return winreg.QueryValue(key, None)
+    except OSError:
+        return None
+
+
+def _write_registered_project_python_path(path: str) -> None:
+    """Write the service import path to the machine-wide PythonPath registry."""
+
+    if winreg is None:
+        raise ServiceControlError("Windows registry access is required to register the service Python path.")
+
+    with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, _python_path_registry_key(), 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValue(key, None, winreg.REG_SZ, path)
+
+
+def _normalize_registry_path(path: str | Path) -> str:
+    """Normalize a path for stable service registry comparisons."""
+
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _registered_python_path_matches_project(value: str | None) -> bool:
+    """Return whether a registered PythonPath value includes this project root."""
+
+    if not value:
+        return False
+
+    expected = _normalize_registry_path(_project_root())
+    return any(
+        _normalize_registry_path(path_part) == expected
+        for path_part in value.split(os.pathsep)
+        if path_part.strip()
+    )
+
+
 def service_health_url(config: AppConfig) -> str:
     """Return a local health URL that can be polled after service startup."""
 
@@ -250,7 +300,7 @@ class WindowsServiceController:
                     installed=False,
                     run_state=ServiceRunState.NOT_INSTALLED,
                     start_type=ServiceStartType.UNKNOWN,
-                    needs_repair=True,
+                    needs_repair=False,
                 )
             raise ServiceControlError(_status_error_message("query", exc)) from exc
 
@@ -292,16 +342,33 @@ class WindowsServiceController:
         self._change_service_config(self.win32service.SERVICE_DISABLED)
 
     def start_service(self) -> None:
-        """Start the Windows service if it is not already running."""
+        """Start the Windows service if needed and ensure autostart is enabled."""
 
         self.require_admin()
         status = self.get_status()
-        if status.run_state == ServiceRunState.RUNNING:
-            return
         if not status.installed or status.needs_repair:
             self.ensure_installed()
-        self.enable_autostart()
+            status = self.get_status()
+        else:
+            self.enable_autostart()
+            status = self.get_status()
+
         clear_service_error_log()
+
+        if status.run_state == ServiceRunState.RUNNING:
+            return
+        if status.run_state == ServiceRunState.START_PENDING:
+            self.wait_for_run_state(ServiceRunState.RUNNING, timeout_seconds=30)
+            return
+        if status.run_state == ServiceRunState.STOP_PENDING:
+            self.wait_for_run_state(ServiceRunState.STOPPED, timeout_seconds=30)
+            status = self.get_status()
+
+        if status.run_state != ServiceRunState.STOPPED:
+            raise ServiceControlError(
+                f"Windows service '{SERVICE_DISPLAY_NAME}' cannot be started from state "
+                f"{status.run_state.value}."
+            )
 
         try:
             self.win32serviceutil.StartService(SERVICE_NAME)
@@ -316,6 +383,9 @@ class WindowsServiceController:
         self.require_admin()
         status = self.get_status()
         if status.run_state in {ServiceRunState.STOPPED, ServiceRunState.NOT_INSTALLED}:
+            return
+        if status.run_state == ServiceRunState.STOP_PENDING:
+            self.wait_for_run_state(ServiceRunState.STOPPED, timeout_seconds=30)
             return
 
         try:
@@ -340,9 +410,12 @@ class WindowsServiceController:
         wait_for_service_health(config)
 
     def service_needs_repair(self) -> bool:
-        """Return whether the service is missing the expected pywin32 class registration."""
+        """Return whether the service registration is missing critical pywin32 details."""
 
-        return _read_registered_service_class() != SERVICE_CLASS
+        return (
+            _read_registered_service_class() != SERVICE_CLASS
+            or not _registered_python_path_matches_project(_read_registered_project_python_path())
+        )
 
     def wait_for_run_state(
         self,
@@ -431,7 +504,11 @@ class WindowsServiceController:
         """Register this checkout so pythonservice.exe can import server_app."""
 
         try:
-            self.regutil.RegisterNamedPath(PYTHONPATH_REGISTRY_NAME, str(_project_root()))
+            project_root = str(_project_root())
+            if isinstance(self.modules, _PyWin32Modules):
+                _write_registered_project_python_path(project_root)
+            else:
+                self.regutil.RegisterNamedPath(PYTHONPATH_REGISTRY_NAME, project_root)
         except Exception as exc:
             raise ServiceControlError(_status_error_message("register Python path for", exc)) from exc
 

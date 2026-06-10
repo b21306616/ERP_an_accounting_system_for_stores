@@ -28,14 +28,21 @@ class ERPAccountingWindowsService(win32serviceutil.ServiceFramework):
     def __init__(self, args: list[str]) -> None:
         super().__init__(args)
         self.stop_event = win32event.CreateEvent(None, 0, 0, None)
+        self.stop_requested = False
         self.runtime = ApiServiceRuntime()
 
     def SvcStop(self) -> None:
         """Handle Stop from Services, Task Manager, or the GUI controller."""
 
+        self.stop_requested = True
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
         self.runtime.stop()
         win32event.SetEvent(self.stop_event)
+
+    def _stop_was_requested(self) -> bool:
+        """Return whether Windows requested stop before startup finished."""
+
+        return self.stop_requested or win32event.WaitForSingleObject(self.stop_event, 0) == win32event.WAIT_OBJECT_0
 
     def SvcDoRun(self) -> None:
         """Prepare and run the API until Windows stops the service."""
@@ -45,6 +52,11 @@ class ERPAccountingWindowsService(win32serviceutil.ServiceFramework):
             self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=60000)
             self.runtime.prepare()
             clear_service_error_log()
+            if self._stop_was_requested():
+                servicemanager.LogInfoMsg(
+                    f"{SERVICE_DISPLAY_NAME} service stop was requested before startup completed."
+                )
+                return
             self.ReportServiceStatus(win32service.SERVICE_RUNNING)
             self.runtime.run()
             servicemanager.LogInfoMsg(f"{SERVICE_DISPLAY_NAME} service stopped.")

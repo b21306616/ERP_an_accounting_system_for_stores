@@ -12,6 +12,7 @@ from server_app.service_control import (
     ServiceRunState,
     ServiceStartType,
     WindowsServiceController,
+    _project_root,
 )
 
 
@@ -106,13 +107,21 @@ def _fake_modules(installed: bool = True, run_state: int = 1, start_type: int = 
 class ServiceControlTests(unittest.TestCase):
     """Validate service controller decisions without touching Windows SCM."""
 
+    def repair_checks_current(self) -> tuple[object, object]:
+        """Patch registry repair probes to represent a healthy registration."""
+
+        return (
+            patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
+            patch("server_app.service_control._read_registered_project_python_path", return_value=str(_project_root())),
+        )
+
     def test_status_maps_running_automatic_service(self) -> None:
         """Running Automatic services should map to GUI status enums."""
 
         modules = _fake_modules(run_state=4, start_type=2)
         controller = WindowsServiceController(modules)
 
-        with patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS):
+        with self.repair_checks_current()[0], self.repair_checks_current()[1]:
             status = controller.get_status()
 
         self.assertTrue(status.installed)
@@ -159,7 +168,8 @@ class ServiceControlTests(unittest.TestCase):
 
         with (
             patch("server_app.service_control.is_user_admin", return_value=True),
-            patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
+            self.repair_checks_current()[0],
+            self.repair_checks_current()[1],
         ):
             controller.start_service()
 
@@ -175,13 +185,78 @@ class ServiceControlTests(unittest.TestCase):
 
         with (
             patch("server_app.service_control.is_user_admin", return_value=True),
-            patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
+            self.repair_checks_current()[0],
+            self.repair_checks_current()[1],
         ):
             controller.stop_and_disable()
 
         self.assertTrue(modules.state["stopped"])
         self.assertEqual(modules.state["run_state"], modules.win32service.SERVICE_STOPPED)
         self.assertEqual(modules.state["start_type"], modules.win32service.SERVICE_DISABLED)
+
+    def test_status_flags_repair_when_python_path_is_missing(self) -> None:
+        """A missing service PythonPath should be treated as a repair condition."""
+
+        modules = _fake_modules(run_state=1, start_type=2)
+        controller = WindowsServiceController(modules)
+
+        with (
+            patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
+            patch("server_app.service_control._read_registered_project_python_path", return_value=None),
+        ):
+            status = controller.get_status()
+
+        self.assertTrue(status.needs_repair)
+
+    def test_start_running_disabled_service_only_enables_autostart(self) -> None:
+        """Start should repair startup mode even when the service is already running."""
+
+        modules = _fake_modules(run_state=4, start_type=4)
+        controller = WindowsServiceController(modules)
+
+        with (
+            patch("server_app.service_control.is_user_admin", return_value=True),
+            self.repair_checks_current()[0],
+            self.repair_checks_current()[1],
+        ):
+            controller.start_service()
+
+        self.assertFalse(modules.state["started"])
+        self.assertEqual(modules.state["start_type"], modules.win32service.SERVICE_AUTO_START)
+
+    def test_start_pending_service_waits_without_duplicate_start(self) -> None:
+        """Start should wait for a pending service instead of issuing StartService again."""
+
+        modules = _fake_modules(run_state=2, start_type=2)
+        controller = WindowsServiceController(modules)
+
+        with (
+            patch("server_app.service_control.is_user_admin", return_value=True),
+            self.repair_checks_current()[0],
+            self.repair_checks_current()[1],
+            patch.object(controller, "wait_for_run_state") as wait_for_run_state,
+        ):
+            controller.start_service()
+
+        self.assertFalse(modules.state["started"])
+        wait_for_run_state.assert_called_once_with(ServiceRunState.RUNNING, timeout_seconds=30)
+
+    def test_stop_pending_service_waits_without_duplicate_stop(self) -> None:
+        """Stop should wait for a pending stop instead of sending another stop control."""
+
+        modules = _fake_modules(run_state=3, start_type=2)
+        controller = WindowsServiceController(modules)
+
+        with (
+            patch("server_app.service_control.is_user_admin", return_value=True),
+            self.repair_checks_current()[0],
+            self.repair_checks_current()[1],
+            patch.object(controller, "wait_for_run_state") as wait_for_run_state,
+        ):
+            controller.stop_service()
+
+        self.assertFalse(modules.state["stopped"])
+        wait_for_run_state.assert_called_once_with(ServiceRunState.STOPPED, timeout_seconds=30)
 
 
 if __name__ == "__main__":
