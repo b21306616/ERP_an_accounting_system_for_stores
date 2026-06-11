@@ -10,11 +10,12 @@ from pathlib import Path
 import sys
 import time
 from types import ModuleType, SimpleNamespace
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
+from server_app.core.network import check_tcp_port, is_port_bind_error_message
 from server_app.core.paths import get_config_dir
 
 try:
@@ -231,8 +232,37 @@ def _registered_python_path_matches_project(value: str | None) -> bool:
 def service_health_url(config: AppConfig) -> str:
     """Return a local health URL that can be polled after service startup."""
 
-    host = "127.0.0.1" if config.api.host == "0.0.0.0" else config.api.host
+    if config.api.host == "0.0.0.0":
+        host = "127.0.0.1"
+    elif config.api.host == "::":
+        host = "[::1]"
+    elif ":" in config.api.host and not config.api.host.startswith("["):
+        host = f"[{config.api.host}]"
+    else:
+        host = config.api.host
     return f"http://{host}:{config.api.port}/health"
+
+
+def _connection_failure_hint(
+    config: AppConfig,
+    last_error: Exception | None,
+    service_error: str | None,
+) -> str:
+    """Return an actionable hint when the health endpoint cannot be reached."""
+
+    port_result = check_tcp_port(config.api.host, config.api.port)
+    if not port_result.available:
+        return f"Port check failed: {port_result.full_message}"
+
+    if service_error and is_port_bind_error_message(service_error):
+        return (
+            "The service reported an API host/port bind failure. "
+            "Choose a different local host/IP or port and try again."
+        )
+
+    if last_error is not None:
+        return "The port check passed, so this does not look like a port conflict."
+    return ""
 
 
 def wait_for_service_health(config: AppConfig, timeout_seconds: float = 60.0) -> None:
@@ -247,12 +277,22 @@ def wait_for_service_health(config: AppConfig, timeout_seconds: float = 60.0) ->
             with urlopen(url, timeout=1.0) as response:
                 if response.status == 200:
                     return
+        except HTTPError as exc:
+            last_error = ServiceControlError(f"Health endpoint returned HTTP {exc.code}.")
         except (OSError, URLError) as exc:
             last_error = exc
         time.sleep(0.5)
 
-    detail = f" Last error: {last_error}" if last_error is not None else ""
-    raise ServiceControlError(f"Windows service started, but the API did not answer {url}.{detail}")
+    parts = [f"Windows service started, but the API did not answer {url}."]
+    if last_error is not None:
+        parts.append(f"Last error: {last_error}.")
+
+    service_error = read_service_error_log()
+    if service_error:
+        parts.append(f"Service startup error: {service_error}")
+    parts.append(_connection_failure_hint(config, last_error, service_error).strip())
+
+    raise ServiceControlError(" ".join(part for part in parts if part))
 
 
 class WindowsServiceController:

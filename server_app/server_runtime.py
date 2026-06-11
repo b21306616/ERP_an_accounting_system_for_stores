@@ -8,6 +8,7 @@ import uvicorn
 
 from server_app.api.app import create_app
 from server_app.core.config import AppConfig, ConfigManager
+from server_app.core.network import check_tcp_port
 from server_app.db.bootstrap import prepare_existing_database
 
 
@@ -25,6 +26,10 @@ class ApiServiceRuntime:
         """Load config, validate/migrate the database, and create the uvicorn server."""
 
         self.config = self.config_manager.load()
+        port_result = check_tcp_port(self.config.api.host, self.config.api.port)
+        if not port_result.available:
+            raise RuntimeError(port_result.full_message)
+
         self.engine, self.session_factory = prepare_existing_database(self.config)
         app = create_app(self.config, self.session_factory)
         uvicorn_config = uvicorn.Config(
@@ -45,6 +50,15 @@ class ApiServiceRuntime:
         assert self.server is not None
         try:
             self.server.run()
+        except SystemExit as exc:
+            detail = ""
+            if self.config is not None:
+                port_result = check_tcp_port(self.config.api.host, self.config.api.port)
+                if not port_result.available:
+                    detail = f" {port_result.full_message}"
+            if not detail:
+                detail = f" Exit code: {exc.code}."
+            raise RuntimeError(f"API server exited during startup.{detail}") from exc
         finally:
             self.close()
 

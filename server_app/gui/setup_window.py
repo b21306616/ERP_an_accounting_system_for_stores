@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pyodbc
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig, create_default_config
 from server_app.core.constants import DEFAULT_ODBC_DRIVER, SUPER_ADMIN_FULL_NAME, SUPER_ADMIN_USERNAME
+from server_app.core.network import PortCheckResult, check_tcp_port
 from server_app.db.bootstrap import validate_database_name
 
 
@@ -57,6 +58,13 @@ class SetupWindow(QWidget):
 
         self.host_edit = QLineEdit(self.default_config.api.host)
         self.port_spin = QSpinBox()
+        self.port_hint_label = QLabel(
+            "If setup fails on this port, another program may already be using it. Try 5000 or 8080."
+        )
+        self.port_status_label = QLabel()
+        self._port_check_timer = QTimer(self)
+        self._port_check_timer.setSingleShot(True)
+        self._port_check_timer.setInterval(300)
 
         self.super_admin_username_edit = QLineEdit(SUPER_ADMIN_USERNAME)
         self.super_admin_full_name_edit = QLineEdit(SUPER_ADMIN_FULL_NAME)
@@ -154,8 +162,15 @@ class SetupWindow(QWidget):
         self.port_spin.setRange(1, 65535)
         self.port_spin.setValue(self.default_config.api.port)
         self.host_edit.setPlaceholderText("0.0.0.0")
+        self.port_hint_label.setObjectName("PortHint")
+        self.port_hint_label.setWordWrap(True)
+        self.port_status_label.setObjectName("PortStatus")
+        self.port_status_label.setWordWrap(True)
+        self.port_status_label.setVisible(False)
         self._add_form_row(api_layout, 0, "Bind host/IP", self.host_edit)
         self._add_form_row(api_layout, 1, "Port", self.port_spin)
+        self._add_form_row(api_layout, 2, "", self.port_hint_label)
+        self._add_form_row(api_layout, 3, "", self.port_status_label)
 
         self.super_admin_group = QGroupBox("Super Admin account")
         super_admin_layout = QGridLayout(self.super_admin_group)
@@ -346,6 +361,7 @@ class SetupWindow(QWidget):
 
         super().showEvent(event)
         self._apply_responsive_layout()
+        self._update_port_status()
 
     def _set_setup_status(self, text: str, state: str) -> None:
         """Update the styled setup status badge and card state."""
@@ -418,6 +434,27 @@ class SetupWindow(QWidget):
                 color: #64748b;
                 font-weight: 600;
                 min-width: 138px;
+            }
+            QLabel#PortHint {
+                color: #94a3b8;
+                font-size: 9pt;
+                font-weight: 500;
+            }
+            QLabel#PortStatus {
+                border-radius: 6px;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 6px 9px;
+            }
+            QLabel#PortStatus[messageState="success"] {
+                background: #ecfdf3;
+                border: 1px solid #bbf7d0;
+                color: #167a3b;
+            }
+            QLabel#PortStatus[messageState="error"] {
+                background: #fef2f2;
+                border: 1px solid #fecaca;
+                color: #b42318;
             }
             QLabel#RowValue {
                 color: #111827;
@@ -642,6 +679,39 @@ class SetupWindow(QWidget):
 
         self.auth_combo.currentIndexChanged.connect(self._sync_auth_fields)
         self.submit_button.clicked.connect(self._on_submit)
+        self.port_spin.valueChanged.connect(self._schedule_port_check)
+        self.host_edit.textChanged.connect(self._schedule_port_check)
+        self._port_check_timer.timeout.connect(self._update_port_status)
+
+    def _schedule_port_check(self) -> None:
+        """Debounce live port availability checks while the user edits API settings."""
+
+        if self._is_busy:
+            return
+        self._port_check_timer.start()
+
+    def _update_port_status(self) -> None:
+        """Show whether the selected API port can be bound on this machine."""
+
+        host = self.host_edit.text().strip() or "0.0.0.0"
+        port = self.port_spin.value()
+        self._apply_port_check_result(check_tcp_port(host, port))
+
+    def _apply_port_check_result(self, result: PortCheckResult) -> None:
+        """Show the current port check result using the right visual state."""
+
+        state = "success" if result.available else "error"
+        self._set_port_status(result.message, state)
+
+    def _set_port_status(self, message: str, state: str) -> None:
+        """Apply styled text to the live port status label."""
+
+        self.port_status_label.setProperty("messageState", state)
+        self.port_status_label.setText(message)
+        self.port_status_label.setVisible(True)
+        self.port_status_label.style().unpolish(self.port_status_label)
+        self.port_status_label.style().polish(self.port_status_label)
+        self.port_status_label.update()
 
     def _sync_auth_fields(self) -> None:
         """Enable SQL username/password only for SQL Login mode."""
@@ -681,6 +751,12 @@ class SetupWindow(QWidget):
         self.set_busy(False, restore_status=False)
         self._set_setup_status("Setup failed", "error")
 
+    def show_port_error(self, message: str) -> None:
+        """Show a setup error caused by API bind settings."""
+
+        self._set_port_status(message, "error")
+        self.show_error(message)
+
     def _on_submit(self) -> None:
         """Validate form values and emit a setup request."""
 
@@ -688,6 +764,12 @@ class SetupWindow(QWidget):
             config, current_password, new_password = self._build_config_from_form()
         except ValueError as exc:
             QMessageBox.warning(self, "Invalid setup values", str(exc))
+            return
+
+        port_result = check_tcp_port(config.api.host, config.api.port)
+        self._apply_port_check_result(port_result)
+        if not port_result.available:
+            QMessageBox.warning(self, "API port unavailable", port_result.full_message)
             return
 
         self.show_message(

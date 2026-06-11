@@ -5,14 +5,20 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
+from urllib.error import URLError
 
+from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
+from server_app.core.network import PortCheckResult, PortCheckStatus
 from server_app.service_control import (
     SERVICE_CLASS,
     SERVICE_NAME,
+    ServiceControlError,
     ServiceRunState,
     ServiceStartType,
     WindowsServiceController,
     _project_root,
+    service_health_url,
+    wait_for_service_health,
 )
 
 
@@ -102,6 +108,28 @@ def _fake_modules(installed: bool = True, run_state: int = 1, start_type: int = 
         state=state,
     )
     return modules
+
+
+def _make_config() -> AppConfig:
+    """Return a minimal service config for health polling tests."""
+
+    return AppConfig(
+        database=DatabaseConfig(server="localhost", database="ERPAccounting"),
+        api=ApiConfig(host="127.0.0.1", port=8123),
+        jwt_secret="jwt-secret",
+    )
+
+
+def _make_port_result(status: PortCheckStatus, message: str) -> PortCheckResult:
+    """Return a representative port check result."""
+
+    return PortCheckResult(
+        host="127.0.0.1",
+        port=8123,
+        bind_host="127.0.0.1",
+        status=status,
+        message=message,
+    )
 
 
 class ServiceControlTests(unittest.TestCase):
@@ -257,6 +285,64 @@ class ServiceControlTests(unittest.TestCase):
 
         self.assertFalse(modules.state["stopped"])
         wait_for_run_state.assert_called_once_with(ServiceRunState.STOPPED, timeout_seconds=30)
+
+    def test_service_health_url_formats_wildcard_and_ipv6_hosts(self) -> None:
+        """Health polling should use reachable local URLs for wildcard and IPv6 binds."""
+
+        config = _make_config()
+        config.api.host = "0.0.0.0"
+        self.assertEqual(service_health_url(config), "http://127.0.0.1:8123/health")
+
+        config.api.host = "::"
+        self.assertEqual(service_health_url(config), "http://[::1]:8123/health")
+
+        config.api.host = "2001:db8::1"
+        self.assertEqual(service_health_url(config), "http://[2001:db8::1]:8123/health")
+
+    def test_health_timeout_does_not_guess_port_conflict_when_port_check_passes(self) -> None:
+        """Plain health timeouts should not claim another program is using the port."""
+
+        available = _make_port_result(
+            PortCheckStatus.AVAILABLE,
+            "Port 8123 is available on 127.0.0.1.",
+        )
+
+        with (
+            patch("server_app.service_control.urlopen", side_effect=URLError("timed out")),
+            patch("server_app.service_control.time.monotonic", side_effect=[0.0, 0.0, 2.0]),
+            patch("server_app.service_control.time.sleep"),
+            patch("server_app.service_control.read_service_error_log", return_value=None),
+            patch("server_app.service_control.check_tcp_port", return_value=available),
+        ):
+            with self.assertRaises(ServiceControlError) as context:
+                wait_for_service_health(_make_config(), timeout_seconds=1.0)
+
+        message = str(context.exception)
+        self.assertIn("does not look like a port conflict", message)
+        self.assertNotIn("Another program may be using", message)
+
+    def test_health_timeout_reports_service_bind_failure_from_error_log(self) -> None:
+        """A service bind error log should produce a host/port bind hint."""
+
+        available = _make_port_result(
+            PortCheckStatus.AVAILABLE,
+            "Port 8123 is available on 127.0.0.1.",
+        )
+        service_error = "error while attempting to bind on address ('127.0.0.1', 8123): [WinError 10048]"
+
+        with (
+            patch("server_app.service_control.urlopen", side_effect=URLError("refused")),
+            patch("server_app.service_control.time.monotonic", side_effect=[0.0, 0.0, 2.0]),
+            patch("server_app.service_control.time.sleep"),
+            patch("server_app.service_control.read_service_error_log", return_value=service_error),
+            patch("server_app.service_control.check_tcp_port", return_value=available),
+        ):
+            with self.assertRaises(ServiceControlError) as context:
+                wait_for_service_health(_make_config(), timeout_seconds=1.0)
+
+        message = str(context.exception)
+        self.assertIn("Service startup error", message)
+        self.assertIn("reported an API host/port bind failure", message)
 
 
 if __name__ == "__main__":

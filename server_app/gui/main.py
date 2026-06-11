@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from server_app.core.config import AppConfig, ConfigManager
 from server_app.core.constants import APP_NAME
+from server_app.core.network import check_tcp_port, is_port_bind_error_message
 from server_app.gui.setup_window import SetupWindow
 from server_app.gui.summary_window import SummaryWindow
 from server_app.gui.workers import DatabaseStartupWorker, ServiceActionWorker
@@ -109,6 +110,11 @@ class ApplicationCoordinator(QObject):
                 QMessageBox.critical(None, APP_NAME, str(exc))
             return
 
+        port_result = check_tcp_port(config.api.host, config.api.port)
+        if not port_result.available:
+            self._show_setup_port_error(port_result.full_message)
+            return
+
         self.pending_config = config
         self.startup_worker = DatabaseStartupWorker(
             config,
@@ -125,6 +131,14 @@ class ApplicationCoordinator(QObject):
 
         config = self.pending_config
         if config is None:
+            return
+
+        port_result = check_tcp_port(config.api.host, config.api.port)
+        if not port_result.available:
+            self._show_setup_port_error(
+                "Database is ready, but the API port is no longer available. "
+                f"{port_result.full_message}"
+            )
             return
 
         try:
@@ -172,14 +186,50 @@ class ApplicationCoordinator(QObject):
     def handle_setup_service_failed(self, message: str) -> None:
         """Show service startup failure after a successful database bootstrap."""
 
-        if self.setup_window is not None:
-            self.setup_window.show_error(
-                "Database and config were created, but the Windows service could not start. "
+        self._stop_service_after_setup_failure()
+
+        config = self.pending_config
+        port_result = check_tcp_port(config.api.host, config.api.port) if config is not None else None
+        is_bind_failure = port_result is not None and (
+            port_result.is_bind_problem or is_port_bind_error_message(message)
+        )
+        if is_bind_failure and port_result is not None:
+            detail = (
+                "Database and config were saved, but the API bind settings are not usable. "
+                f"{port_result.full_message if port_result.is_bind_problem else message} "
+                "Choose a different local host/IP or port and run setup again."
+            )
+        else:
+            detail = (
+                "Database and config were saved, but the API did not start. "
                 f"{message}"
             )
+
+        if self.setup_window is not None:
+            if is_bind_failure:
+                self.setup_window.show_port_error(detail)
+            else:
+                self.setup_window.show_error(detail)
+            return
+
+        QMessageBox.critical(None, APP_NAME, detail)
+
+    def _show_setup_port_error(self, message: str) -> None:
+        """Show a setup port error in both the footer and the API port row."""
+
+        if self.setup_window is not None:
+            self.setup_window.show_port_error(message)
             return
 
         QMessageBox.critical(None, APP_NAME, message)
+
+    def _stop_service_after_setup_failure(self) -> None:
+        """Best-effort service stop so a retry can use a different API port."""
+
+        try:
+            self.service_controller.stop_service()
+        except Exception:
+            pass
 
     def refresh_service_status(self) -> None:
         """Query Windows and update the summary window state."""
@@ -223,6 +273,11 @@ class ApplicationCoordinator(QObject):
             return
 
         config = self.summary_window.config
+        port_result = check_tcp_port(config.api.host, config.api.port)
+        if not port_result.available:
+            self.summary_window.show_update_error(port_result.full_message)
+            return
+
         self.summary_window.mark_starting()
         self._run_service_action(
             lambda: self._start_service_for_config(config),
@@ -250,6 +305,13 @@ class ApplicationCoordinator(QObject):
             return
 
         was_running = self.summary_window.is_running
+        api_changed = config.api != self.summary_window.config.api
+        if api_changed and not was_running:
+            port_result = check_tcp_port(config.api.host, config.api.port)
+            if not port_result.available:
+                self.summary_window.show_update_error(port_result.full_message)
+                return
+
         self.summary_window.set_updates_enabled(False)
 
         try:
@@ -356,6 +418,10 @@ class ApplicationCoordinator(QObject):
 
     def _start_service_for_config(self, config: AppConfig) -> None:
         """Prepare DB permissions, then start the Windows service."""
+
+        port_result = check_tcp_port(config.api.host, config.api.port)
+        if not port_result.available:
+            raise RuntimeError(port_result.full_message)
 
         self.service_controller.ensure_installed()
         grant_windows_service_database_access(config)

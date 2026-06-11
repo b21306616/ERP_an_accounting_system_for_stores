@@ -4,14 +4,27 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QSizePolicy
+from PyQt6.QtWidgets import QApplication, QMessageBox, QSizePolicy
 
 from server_app.core.constants import DEFAULT_ODBC_DRIVER
+from server_app.core.network import PortCheckResult, PortCheckStatus
 from server_app.gui.setup_window import SetupWindow
+
+
+def make_port_result(status: PortCheckStatus, message: str) -> PortCheckResult:
+    """Return a representative port check result for UI tests."""
+
+    return PortCheckResult(
+        host="0.0.0.0",
+        port=8000,
+        bind_host="",
+        status=status,
+        message=message,
+    )
 
 
 class SetupWindowTests(unittest.TestCase):
@@ -110,6 +123,60 @@ class SetupWindowTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "semicolon"):
             window._build_config_from_form()
+
+    def test_port_status_updates_when_port_changes(self) -> None:
+        window = self.create_window()
+        window.show()
+        self.app.processEvents()
+
+        unavailable = make_port_result(
+            PortCheckStatus.IN_USE,
+            "Port 8000 is already in use on 0.0.0.0.",
+        )
+        with patch("server_app.gui.setup_window.check_tcp_port", return_value=unavailable):
+            window._update_port_status()
+            self.app.processEvents()
+
+        self.assertEqual(window.port_status_label.text(), unavailable.message)
+        self.assertEqual(window.port_status_label.property("messageState"), "error")
+
+        available = make_port_result(
+            PortCheckStatus.AVAILABLE,
+            "Port 5000 is available on 0.0.0.0.",
+        )
+        with patch("server_app.gui.setup_window.check_tcp_port", return_value=available):
+            window.port_spin.setValue(5000)
+            window._port_check_timer.timeout.emit()
+            self.app.processEvents()
+
+        self.assertEqual(window.port_status_label.text(), available.message)
+        self.assertEqual(window.port_status_label.property("messageState"), "success")
+
+    def test_submit_blocks_when_port_is_unavailable(self) -> None:
+        window = self.create_window()
+        window.server_edit.setText("localhost")
+        window.database_edit.setText("ERPAccounting")
+        window.host_edit.setText("0.0.0.0")
+        window.new_password_edit.setText("secret123")
+        window.confirm_password_edit.setText("secret123")
+
+        emitted = MagicMock()
+        window.setup_requested.connect(emitted)
+
+        unavailable = make_port_result(
+            PortCheckStatus.ACCESS_DENIED_OR_RESERVED,
+            "Windows denied access to port 8000 on 0.0.0.0.",
+        )
+        with patch("server_app.gui.setup_window.check_tcp_port", return_value=unavailable), patch.object(
+            QMessageBox,
+            "warning",
+        ) as warning_dialog:
+            window._on_submit()
+            self.app.processEvents()
+
+        emitted.assert_not_called()
+        warning_dialog.assert_called_once()
+        self.assertEqual(window.port_status_label.text(), unavailable.message)
 
 
 if __name__ == "__main__":

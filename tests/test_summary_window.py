@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
 from server_app.core.constants import APP_NAME, DEFAULT_ODBC_DRIVER
+from server_app.core.network import PortCheckResult, PortCheckStatus
 from server_app.gui.main import ApplicationCoordinator
 from server_app.gui.summary_window import SummaryWindow
 from server_app.service_control import ServiceRunState, ServiceStartType, ServiceStatus
@@ -35,6 +36,18 @@ def make_config(auth_mode: str = "sql") -> AppConfig:
     )
 
 
+def make_port_result(status: PortCheckStatus, message: str) -> PortCheckResult:
+    """Return a representative port check result for coordinator tests."""
+
+    return PortCheckResult(
+        host="127.0.0.1",
+        port=8123,
+        bind_host="127.0.0.1",
+        status=status,
+        message=message,
+    )
+
+
 class FakeConfigManager:
     """Record config saves without touching real machine-wide config."""
 
@@ -50,8 +63,15 @@ class FakeServiceController:
 
     def __init__(self) -> None:
         self.stop_calls = 0
+        self.admin_checks = 0
+
+    def require_admin(self) -> None:
+        self.admin_checks += 1
 
     def stop_and_disable(self) -> None:
+        self.stop_calls += 1
+
+    def stop_service(self) -> None:
         self.stop_calls += 1
 
 
@@ -232,6 +252,94 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
         self.assertEqual(controller.stop_calls, 0)
         self.assertFalse(coordinator.summary_window.is_running)
         self.assertEqual(coordinator.summary_window.config.api.host, "0.0.0.0")
+
+    def test_setup_request_blocks_unavailable_port_before_database_bootstrap(self) -> None:
+        coordinator, manager, _controller = self.create_coordinator()
+        coordinator.setup_window = MagicMock()
+        blocked = make_port_result(
+            PortCheckStatus.IN_USE,
+            "Port 8123 is already in use on 127.0.0.1.",
+        )
+
+        with patch("server_app.gui.main.check_tcp_port", return_value=blocked):
+            coordinator.handle_setup_requested(make_config(), None, "secret123")
+
+        self.assertIsNone(coordinator.startup_worker)
+        self.assertEqual(manager.saved_configs, [])
+        coordinator.setup_window.show_port_error.assert_called_once_with(blocked.full_message)
+
+    def test_database_ready_rechecks_port_before_saving_config(self) -> None:
+        coordinator, manager, _controller = self.create_coordinator()
+        coordinator.pending_config = make_config()
+        coordinator.setup_window = MagicMock()
+        blocked = make_port_result(
+            PortCheckStatus.ACCESS_DENIED_OR_RESERVED,
+            "Windows denied access to port 8123 on 127.0.0.1.",
+        )
+
+        with patch("server_app.gui.main.check_tcp_port", return_value=blocked):
+            coordinator.handle_database_ready()
+
+        self.assertEqual(manager.saved_configs, [])
+        coordinator.setup_window.show_port_error.assert_called_once()
+        self.assertIn("no longer available", coordinator.setup_window.show_port_error.call_args.args[0])
+
+    def test_setup_service_failure_does_not_guess_port_conflict_on_plain_health_timeout(self) -> None:
+        coordinator, _manager, _controller = self.create_coordinator()
+        coordinator.pending_config = make_config()
+        coordinator.setup_window = MagicMock()
+        available = make_port_result(
+            PortCheckStatus.AVAILABLE,
+            "Port 8123 is available on 127.0.0.1.",
+        )
+
+        with patch("server_app.gui.main.check_tcp_port", return_value=available):
+            coordinator.handle_setup_service_failed(
+                "Windows service started, but the API did not answer http://127.0.0.1:8123/health. "
+                "Last error: timed out. The port check passed, so this does not look like a port conflict."
+            )
+
+        coordinator.setup_window.show_error.assert_called_once()
+        coordinator.setup_window.show_port_error.assert_not_called()
+        message = coordinator.setup_window.show_error.call_args.args[0]
+        self.assertNotIn("Try a different port", message)
+        self.assertNotIn("Choose a different", message)
+
+    def test_start_connection_blocks_unavailable_port(self) -> None:
+        coordinator, _manager, _controller = self.create_coordinator()
+        coordinator.show_summary(make_config())
+        assert coordinator.summary_window is not None
+        self.addCleanup(coordinator.summary_window.close)
+        coordinator.summary_window.mark_stopped()
+        blocked = make_port_result(
+            PortCheckStatus.IN_USE,
+            "Port 8123 is already in use on 127.0.0.1.",
+        )
+
+        with patch("server_app.gui.main.check_tcp_port", return_value=blocked):
+            coordinator.start_connection()
+
+        self.assertIsNone(coordinator.service_worker)
+        self.assertEqual(coordinator.summary_window.message_label.text(), blocked.full_message)
+        self.assertEqual(coordinator.summary_window.action_button.text(), "Start Connection")
+
+    def test_stopped_summary_api_update_blocks_unavailable_port(self) -> None:
+        coordinator, manager, _controller = self.create_coordinator()
+        coordinator.show_summary(make_config())
+        assert coordinator.summary_window is not None
+        self.addCleanup(coordinator.summary_window.close)
+        coordinator.summary_window.mark_stopped()
+        updated = coordinator.summary_window._updated_config("api.port", 9001)
+        blocked = make_port_result(
+            PortCheckStatus.HOST_NOT_LOCAL,
+            "Windows cannot bind the API to 127.0.0.1:9001 because that address is not assigned to this PC.",
+        )
+
+        with patch("server_app.gui.main.check_tcp_port", return_value=blocked):
+            coordinator.handle_summary_config_update(updated)
+
+        self.assertEqual(manager.saved_configs, [])
+        self.assertEqual(coordinator.summary_window.message_label.text(), blocked.full_message)
 
     def test_password_update_success_stops_running_service(self) -> None:
         coordinator, _manager, controller = self.create_coordinator()
