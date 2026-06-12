@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import json
 import os
+import secrets
 from typing import Any
 
 from server_app.core.constants import ACCESS_TOKEN_EXPIRE_MINUTES, TOKEN_ALGORITHM
@@ -34,6 +35,18 @@ def generate_secret_key() -> str:
     """Create a random signing secret suitable for HS256 tokens."""
 
     return base64.urlsafe_b64encode(os.urandom(48)).decode("ascii")
+
+
+def generate_session_token() -> str:
+    """Create an opaque client session token for the strict /api/v1 contract."""
+
+    return secrets.token_urlsafe(48)
+
+
+def hash_session_token(token: str) -> str:
+    """Return a stable one-way hash for storing opaque session tokens."""
+
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def hash_password(password: str) -> str:

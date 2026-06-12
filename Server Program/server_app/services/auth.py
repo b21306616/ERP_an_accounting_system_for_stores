@@ -29,3 +29,17 @@ def user_has_role(user: User, allowed_roles: set[str]) -> bool:
     """Return whether a user has one of the allowed role names."""
 
     return role_name_for_user(user) in allowed_roles
+
+
+def permission_codes_for_user(user: User) -> list[str]:
+    """Return sorted permission codes assigned through the user's role."""
+
+    if user.role is None:
+        return []
+
+    codes = [
+        role_permission.permission.code
+        for role_permission in user.role.role_permissions
+        if role_permission.permission is not None
+    ]
+    return sorted(set(codes))

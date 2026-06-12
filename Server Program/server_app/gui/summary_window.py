@@ -80,7 +80,12 @@ class SummaryWindow(QWidget):
 
     @property
     def base_url(self) -> str:
-        """Return the HTTP URL clients can use to reach this server."""
+        """Return the API v1 URL clients can use to reach this server."""
+
+        return f"{self._service_root_url()}/api/v1"
+
+    def _service_root_url(self) -> str:
+        """Return the root HTTP URL for service-local links such as Swagger."""
 
         host = self.config.api.host
         display_host = "localhost" if host == "0.0.0.0" else host
@@ -276,7 +281,7 @@ class SummaryWindow(QWidget):
         copy_docs_btn = QPushButton("Copy")
         copy_docs_btn.setObjectName("CardCopyButton")
         copy_docs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        copy_docs_btn.clicked.connect(lambda: self._copy_to_clipboard(f"{self.base_url}/docs", copy_docs_btn))
+        copy_docs_btn.clicked.connect(lambda: self._copy_to_clipboard(f"{self._service_root_url()}/docs", copy_docs_btn))
 
         details_layout.addWidget(docs_title, 1, 0)
         details_layout.addWidget(self.docs_url_label, 1, 1)
@@ -366,9 +371,10 @@ class SummaryWindow(QWidget):
 
         self.config = config
         url = self.base_url
+        docs_url = f"{self._service_root_url()}/docs"
         link_style = "color: #1d4ed8; text-decoration: none; font-weight: 600;"
         self.base_url_label.setText(f'<a href="{url}" style="{link_style}">{url}</a>')
-        self.docs_url_label.setText(f'<a href="{url}/docs" style="{link_style}">{url}/docs</a>')
+        self.docs_url_label.setText(f'<a href="{docs_url}" style="{link_style}">{docs_url}</a>')
         self.value_labels["database.server"].setText(config.database.server)
         self.value_labels["database.database"].setText(config.database.database)
         self.value_labels["database.driver"].setText(config.database.driver)

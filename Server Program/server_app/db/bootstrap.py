@@ -13,12 +13,14 @@ from sqlalchemy.orm import Session, sessionmaker
 from server_app.core.config import AppConfig, build_sqlalchemy_url
 from server_app.core.constants import (
     BUILTIN_ROLES,
+    BUILTIN_PERMISSIONS,
+    DEFAULT_ROLE_PERMISSIONS,
     SUPER_ADMIN_FULL_NAME,
     SUPER_ADMIN_ROLE,
     SUPER_ADMIN_USERNAME,
 )
 from server_app.core.security import hash_password, verify_password
-from server_app.db.models import Role, User
+from server_app.db.models import Permission, Role, RolePermission, Setting, User
 from server_app.db.session import create_db_engine, create_session_factory
 from server_app.service_control import SERVICE_SQL_LOGIN_NAME
 
@@ -156,6 +158,84 @@ def seed_builtin_roles(session: Session) -> dict[str, Role]:
     return existing_roles
 
 
+def seed_builtin_permissions(session: Session) -> dict[str, Permission]:
+    """Ensure built-in permissions exist and return them by code."""
+
+    existing_permissions = {
+        permission.code: permission
+        for permission in session.query(Permission).filter(Permission.code.in_(BUILTIN_PERMISSIONS)).all()
+    }
+
+    for permission_code in BUILTIN_PERMISSIONS:
+        if permission_code not in existing_permissions:
+            module_name = permission_code.split(".", 1)[0]
+            permission = Permission(
+                code=permission_code,
+                module=module_name,
+                description=f"Built-in permission {permission_code}",
+            )
+            session.add(permission)
+            existing_permissions[permission_code] = permission
+
+    session.flush()
+    return existing_permissions
+
+
+def seed_role_permissions(
+    session: Session,
+    roles: dict[str, Role],
+    permissions: dict[str, Permission],
+) -> None:
+    """Ensure each built-in role has its default permission assignments."""
+
+    existing_pairs = {
+        (role_permission.role_id, role_permission.permission_id)
+        for role_permission in session.query(RolePermission).all()
+    }
+
+    for role_name, permission_codes in DEFAULT_ROLE_PERMISSIONS.items():
+        role = roles.get(role_name)
+        if role is None:
+            continue
+        for permission_code in permission_codes:
+            permission = permissions.get(permission_code)
+            if permission is None:
+                continue
+            pair = (role.id, permission.id)
+            if pair not in existing_pairs:
+                session.add(RolePermission(role=role, permission=permission))
+                existing_pairs.add(pair)
+
+    session.flush()
+
+
+def seed_default_settings(session: Session) -> None:
+    """Ensure the first client-visible settings row exists."""
+
+    if session.query(Setting).filter(Setting.key == "organization").one_or_none() is None:
+        session.add(
+            Setting(
+                key="organization",
+                value_json=(
+                    '{"name_ru":"Новая организация","name_tk":"Täze gurama",'
+                    '"base_currency":"TMT","second_currency":null}'
+                ),
+                description="Organization profile and default currencies.",
+            )
+        )
+        session.flush()
+
+
+def seed_foundation_data(session: Session) -> dict[str, Role]:
+    """Seed roles, permissions, and settings needed by API v1 clients."""
+
+    roles = seed_builtin_roles(session)
+    permissions = seed_builtin_permissions(session)
+    seed_role_permissions(session, roles, permissions)
+    seed_default_settings(session)
+    return roles
+
+
 def _find_other_super_admin(session: Session) -> User | None:
     """Return any non-fixed user incorrectly assigned the Super Admin role."""
 
@@ -170,7 +250,7 @@ def _find_other_super_admin(session: Session) -> User | None:
 def validate_super_admin_user(session: Session) -> User:
     """Enforce the fixed Super Admin account invariant for runtime startup."""
 
-    roles = seed_builtin_roles(session)
+    roles = seed_foundation_data(session)
     super_admin_role = roles[SUPER_ADMIN_ROLE]
     user_count = session.query(User).count()
     user = session.query(User).filter(User.username == SUPER_ADMIN_USERNAME).one_or_none()
@@ -196,7 +276,7 @@ def seed_super_admin_user(
 ) -> User:
     """Create or securely rotate the fixed Super Admin account."""
 
-    roles = seed_builtin_roles(session)
+    roles = seed_foundation_data(session)
     super_admin_role = roles[SUPER_ADMIN_ROLE]
     user_count = session.query(User).count()
     user = session.query(User).filter(User.username == SUPER_ADMIN_USERNAME).one_or_none()
@@ -261,7 +341,7 @@ def prepare_existing_database(config: AppConfig) -> tuple[Engine, sessionmaker[S
 
     try:
         with session_factory() as session:
-            seed_builtin_roles(session)
+            seed_foundation_data(session)
             validate_super_admin_user(session)
             session.execute(text("SELECT 1"))
             session.commit()

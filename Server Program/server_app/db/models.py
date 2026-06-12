@@ -32,6 +32,54 @@ class Role(Base, ReprMixin, TimestampMixin):
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     users: Mapped[list["User"]] = relationship(back_populates="role")
+    role_permissions: Mapped[list["RolePermission"]] = relationship(
+        back_populates="role",
+        cascade="all, delete-orphan",
+    )
+
+
+class Permission(Base, ReprMixin, TimestampMixin):
+    """Action permission such as ``sale.create`` or ``reports.export``."""
+
+    __tablename__ = "permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    module: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    role_permissions: Mapped[list["RolePermission"]] = relationship(
+        back_populates="permission",
+        cascade="all, delete-orphan",
+    )
+
+
+class RolePermission(Base, ReprMixin):
+    """Permission assigned to one role."""
+
+    __tablename__ = "role_permissions"
+    __table_args__ = (UniqueConstraint("role_id", "permission_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("permissions.id"), nullable=False)
+
+    role: Mapped[Role] = relationship(back_populates="role_permissions")
+    permission: Mapped[Permission] = relationship(back_populates="role_permissions")
+
+
+class Workplace(Base, ReprMixin, TimestampMixin):
+    """Client workplace assigned to users and cashier devices."""
+
+    __tablename__ = "workplaces"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    workplace_type: Mapped[str] = mapped_column(String(40), default="office", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    users: Mapped[list["User"]] = relationship(back_populates="workplace")
 
 
 class User(Base, ReprMixin, TimestampMixin):
@@ -44,10 +92,30 @@ class User(Base, ReprMixin, TimestampMixin):
     full_name: Mapped[str] = mapped_column(String(160), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
+    workplace_id: Mapped[int | None] = mapped_column(ForeignKey("workplaces.id"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     role: Mapped[Role] = relationship(back_populates="users")
+    workplace: Mapped[Workplace | None] = relationship(back_populates="users")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")
+
+
+class UserSession(Base, ReprMixin, TimestampMixin):
+    """Opaque API v1 session token issued to an endpoint client."""
+
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    client_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    client_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class AuditLog(Base, ReprMixin):
@@ -58,9 +126,13 @@ class AuditLog(Base, ReprMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     action: Mapped[str] = mapped_column(String(120), nullable=False)
+    module: Mapped[str | None] = mapped_column(String(80), nullable=True)
     entity_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    old_values: Mapped[str | None] = mapped_column(Text, nullable=True)
+    new_values: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -68,6 +140,17 @@ class AuditLog(Base, ReprMixin):
     )
 
     user: Mapped[User | None] = relationship(back_populates="audit_logs")
+
+
+class Setting(Base, ReprMixin, TimestampMixin):
+    """System setting stored as JSON text for organization and feature config."""
+
+    __tablename__ = "settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
+    value_json: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
 
 class Currency(Base, ReprMixin, TimestampMixin):

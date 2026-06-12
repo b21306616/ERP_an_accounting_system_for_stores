@@ -1,0 +1,2 @@
+"""Endpoint client application package."""
+

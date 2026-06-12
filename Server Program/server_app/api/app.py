@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
-from server_app.api import routers_auth, routers_foundation, routers_system, routers_users
+from server_app.api import routers_auth, routers_foundation, routers_system, routers_users, routers_v1
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
 
@@ -24,9 +26,50 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
     app.state.session_factory = session_factory
     app.state.started_at = datetime.now(timezone.utc)
 
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONResponse:
+        """Return API v1-compatible error envelopes for HTTP errors."""
+
+        detail = exc.detail
+        if isinstance(detail, dict) and {"code", "message", "details"}.issubset(detail):
+            error = detail
+        else:
+            error = {
+                "code": "HTTP_ERROR",
+                "message": str(detail),
+                "details": {},
+            }
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "data": None, "error": error, "meta": None},
+            headers=getattr(exc, "headers", None),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(
+        _request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        """Return validation errors in the documented envelope."""
+
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": "Request validation failed.",
+                    "details": {"errors": exc.errors()},
+                },
+                "meta": None,
+            },
+        )
+
     app.include_router(routers_system.router)
     app.include_router(routers_auth.router)
     app.include_router(routers_users.router)
     app.include_router(routers_foundation.router)
+    app.include_router(routers_v1.router)
 
     return app
