@@ -52,6 +52,37 @@ class CounterpartyUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class ContractCreate(BaseModel):
+    """Create payload for a counterparty contract."""
+
+    counterparty_id: int
+    currency_id: int | None = None
+    number: str = Field(min_length=1, max_length=80)
+    title: str | None = Field(default=None, max_length=180)
+    start_date: date | None = None
+    end_date: date | None = None
+    is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_dates(self) -> "ContractCreate":
+        """End date cannot be before start date."""
+
+        if self.start_date is not None and self.end_date is not None and self.end_date < self.start_date:
+            raise ValueError("end_date cannot be before start_date.")
+        return self
+
+
+class ContractUpdate(BaseModel):
+    """Patch payload for a counterparty contract."""
+
+    currency_id: int | None = None
+    number: str | None = Field(default=None, min_length=1, max_length=80)
+    title: str | None = Field(default=None, max_length=180)
+    start_date: date | None = None
+    end_date: date | None = None
+    is_active: bool | None = None
+
+
 class PriceListCreate(BaseModel):
     """Create payload for a price list."""
 
@@ -223,6 +254,7 @@ class PurchaseOrderCreate(BaseModel):
     doc_number: str | None = Field(default=None, max_length=50)
     doc_date: date | None = None
     counterparty_id: int
+    contract_id: int | None = None
     warehouse_id: int
     currency_id: int
     currency_rate: Decimal = Field(default=Decimal("1"), gt=0)
@@ -235,6 +267,7 @@ class PurchaseOrderUpdate(BaseModel):
 
     doc_date: date | None = None
     counterparty_id: int | None = None
+    contract_id: int | None = None
     warehouse_id: int | None = None
     currency_id: int | None = None
     currency_rate: Decimal | None = Field(default=None, gt=0)
@@ -271,6 +304,7 @@ class PurchaseInvoiceCreate(BaseModel):
     doc_number: str | None = Field(default=None, max_length=50)
     doc_date: date | None = None
     counterparty_id: int
+    contract_id: int | None = None
     warehouse_id: int
     currency_id: int
     currency_rate: Decimal = Field(default=Decimal("1"), gt=0)
@@ -296,6 +330,7 @@ class PaymentCreate(BaseModel):
     doc_number: str | None = Field(default=None, max_length=50)
     doc_date: datetime | None = None
     counterparty_id: int
+    contract_id: int | None = None
     direction: str = Field(pattern="^(incoming|outgoing)$")
     payment_method: str = Field(default="cash", max_length=20)
     amount_tmt: Decimal = Field(gt=0)

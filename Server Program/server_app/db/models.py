@@ -446,6 +446,11 @@ class Contract(Base, ReprMixin, TimestampMixin):
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="contracts")
     currency: Mapped[Currency | None] = relationship(back_populates="contracts")
+    purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="contract")
+    purchase_invoices: Mapped[list["PurchaseInvoice"]] = relationship(back_populates="contract")
+    sales: Mapped[list["Sale"]] = relationship(back_populates="contract")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="contract")
+    debt_entries: Mapped[list["DebtLedger"]] = relationship(back_populates="contract")
 
 
 class MoneyAccount(Base, ReprMixin, TimestampMixin):
@@ -819,6 +824,7 @@ class PurchaseOrder(Base, ReprMixin, TimestampMixin):
     doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     doc_date: Mapped[date] = mapped_column(Date, nullable=False)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
     currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
     currency_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
@@ -833,6 +839,7 @@ class PurchaseOrder(Base, ReprMixin, TimestampMixin):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="purchase_orders")
+    contract: Mapped[Contract | None] = relationship(back_populates="purchase_orders")
     warehouse: Mapped[Warehouse] = relationship()
     currency: Mapped[Currency] = relationship()
     created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
@@ -883,6 +890,7 @@ class PurchaseInvoice(Base, ReprMixin, TimestampMixin):
     doc_date: Mapped[date] = mapped_column(Date, nullable=False)
     purchase_order_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_orders.id"), nullable=True)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
     currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
     currency_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
@@ -899,6 +907,7 @@ class PurchaseInvoice(Base, ReprMixin, TimestampMixin):
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="purchase_invoices")
+    contract: Mapped[Contract | None] = relationship(back_populates="purchase_invoices")
     purchase_order: Mapped[PurchaseOrder | None] = relationship(back_populates="invoices")
     warehouse: Mapped[Warehouse] = relationship()
     currency: Mapped[Currency] = relationship()
@@ -951,6 +960,7 @@ class Sale(Base, ReprMixin, TimestampMixin):
     cash_register_id: Mapped[int | None] = mapped_column(ForeignKey("cash_registers.id"), nullable=True)
     cash_shift_id: Mapped[int | None] = mapped_column(ForeignKey("cash_shifts.id"), nullable=True)
     counterparty_id: Mapped[int | None] = mapped_column(ForeignKey("counterparties.id"), nullable=True)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
     price_list_id: Mapped[int | None] = mapped_column(ForeignKey("price_lists.id"), nullable=True)
     currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
@@ -975,6 +985,7 @@ class Sale(Base, ReprMixin, TimestampMixin):
     cash_register: Mapped[CashRegister | None] = relationship(back_populates="sales")
     cash_shift: Mapped[CashShift | None] = relationship(back_populates="sales")
     counterparty: Mapped[Counterparty | None] = relationship(back_populates="sales")
+    contract: Mapped[Contract | None] = relationship(back_populates="sales")
     warehouse: Mapped[Warehouse] = relationship()
     price_list: Mapped[PriceList | None] = relationship(back_populates="sales")
     currency: Mapped[Currency] = relationship()
@@ -1099,6 +1110,7 @@ class DebtLedger(Base, ReprMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
     debt_type: Mapped[str] = mapped_column(String(15), nullable=False, index=True)
     doc_type: Mapped[str] = mapped_column(String(30), nullable=False)
     doc_id: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1113,6 +1125,7 @@ class DebtLedger(Base, ReprMixin):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="debt_entries")
+    contract: Mapped[Contract | None] = relationship(back_populates="debt_entries")
     currency: Mapped[Currency | None] = relationship()
     created_by_user: Mapped[User | None] = relationship()
 
@@ -1126,6 +1139,7 @@ class Payment(Base, ReprMixin, TimestampMixin):
     doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     doc_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
+    contract_id: Mapped[int | None] = mapped_column(ForeignKey("contracts.id"), nullable=True)
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
     payment_method: Mapped[str] = mapped_column(String(20), default="cash", nullable=False)
     amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
@@ -1140,6 +1154,7 @@ class Payment(Base, ReprMixin, TimestampMixin):
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="payments")
+    contract: Mapped[Contract | None] = relationship(back_populates="payments")
     currency: Mapped[Currency | None] = relationship()
     cash_shift: Mapped[CashShift | None] = relationship()
     allocations: Mapped[list["PaymentAllocation"]] = relationship(

@@ -207,6 +207,62 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/purchase-invoices/7/cancel", requested_paths[6])
         self.assertIn("/payments", requested_paths[7])
 
+    def test_api_client_counterparty_finance_helpers_use_envelopes(self) -> None:
+        """Stage 4 counterparty finance helpers should target API v1 paths."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": {"counterparty_id": 7, "receivable_tmt": "10.00"},
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        client.get_counterparty_debt(7)
+        client.get_counterparty_account_card(7, date_from="2026-01-01T00:00:00+00:00", contract_id=3)
+        client.get_counterparty_reconciliation(7, date_to="2026-12-31T23:59:59+00:00", contract_id=3)
+
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 3, "number": "C-1"}],
+            "error": None,
+            "meta": None,
+        }
+        client.get_contracts(counterparty_id=7, active_only=True)
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 3, "number": "C-1"},
+            "error": None,
+            "meta": None,
+        }
+        client.create_contract({"counterparty_id": 7, "number": "C-1"})
+        client.update_contract(3, {"title": "Updated"})
+
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 10, "amount_tmt": "5.00"}],
+            "error": None,
+            "meta": None,
+        }
+        ledger = client.get_debt_ledger(counterparty_id=7, debt_type="receivable", contract_id=3)
+
+        self.assertEqual(ledger[0]["amount_tmt"], "5.00")
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-7:]]
+        self.assertIn("/counterparties/7/debt", requested_paths[0])
+        self.assertIn("/counterparties/7/account-card?date_from=2026-01-01", requested_paths[1])
+        self.assertIn("contract_id=3", requested_paths[1])
+        self.assertIn("/counterparties/7/reconciliation?date_to=2026-12-31", requested_paths[2])
+        self.assertIn("/contracts?counterparty_id=7&active_only=true", requested_paths[3])
+        self.assertIn("/contracts", requested_paths[4])
+        self.assertIn("/contracts/3", requested_paths[5])
+        self.assertIn("/debt-ledger?counterparty_id=7&debt_type=receivable&contract_id=3", requested_paths[6])
+
     def test_api_client_sales_cashier_report_helpers_use_envelopes(self) -> None:
         """Sales, cashier, and report helpers should return envelope data."""
 

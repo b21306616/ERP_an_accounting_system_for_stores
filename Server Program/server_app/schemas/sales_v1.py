@@ -83,6 +83,7 @@ class SaleCreate(BaseModel):
     cash_register_id: int | None = None
     cash_shift_id: int | None = None
     counterparty_id: int | None = None
+    contract_id: int | None = None
     warehouse_id: int
     price_list_id: int | None = None
     currency_id: int

@@ -9,7 +9,7 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from server_app.db.models import DebtLedger, Payment, PaymentAllocation, PurchaseInvoice
+from server_app.db.models import DebtLedger, Payment, PaymentAllocation, PurchaseInvoice, Sale
 
 
 MONEY_QUANT = Decimal("0.01")
@@ -73,6 +73,7 @@ def post_debt_entry(
     amount_cur: Decimal | None,
     note: str | None,
     user_id: int | None,
+    contract_id: int | None = None,
 ) -> DebtLedger:
     """Append one debt ledger entry and snapshot the resulting balance."""
 
@@ -80,6 +81,7 @@ def post_debt_entry(
     balance_after = money(current_debt_balance(session, counterparty_id, debt_type) + amount)
     entry = DebtLedger(
         counterparty_id=counterparty_id,
+        contract_id=contract_id,
         debt_type=debt_type,
         doc_type=doc_type,
         doc_id=doc_id,
@@ -111,11 +113,46 @@ def update_purchase_invoice_payment_status(session: Session, invoice: PurchaseIn
         .scalar()
         or 0
     )
-    paid_amount = money(paid)
-    total = abs(money(invoice.total_amount_tmt))
+    invoice.payment_status = document_payment_status(invoice.total_amount_tmt, money(paid))
+
+
+def allocated_amount_for_document(
+    session: Session,
+    *,
+    doc_type: str,
+    doc_id: int,
+    exclude_payment_id: int | None = None,
+) -> Decimal:
+    """Return posted allocations already applied to one source document."""
+
+    query = (
+        session.query(func.coalesce(func.sum(PaymentAllocation.allocated_amount), 0))
+        .join(Payment, Payment.id == PaymentAllocation.payment_id)
+        .filter(
+            Payment.status == "posted",
+            PaymentAllocation.doc_type == doc_type,
+            PaymentAllocation.doc_id == doc_id,
+        )
+    )
+    if exclude_payment_id is not None:
+        query = query.filter(Payment.id != exclude_payment_id)
+    return money(query.scalar() or 0)
+
+
+def document_payment_status(total_amount_tmt: Decimal, paid_amount_tmt: Decimal) -> str:
+    """Return unpaid/partial/paid for a document total and allocated amount."""
+
+    paid_amount = money(paid_amount_tmt)
+    total = abs(money(total_amount_tmt))
     if paid_amount <= Decimal("0.00"):
-        invoice.payment_status = "unpaid"
-    elif paid_amount >= total:
-        invoice.payment_status = "paid"
-    else:
-        invoice.payment_status = "partial"
+        return "unpaid"
+    if paid_amount >= total:
+        return "paid"
+    return "partial"
+
+
+def sale_payment_status(session: Session, sale: Sale) -> str:
+    """Return unpaid/partial/paid for the sale debt amount."""
+
+    paid = allocated_amount_for_document(session, doc_type="sale", doc_id=sale.id)
+    return document_payment_status(sale.debt_amount_tmt, paid)

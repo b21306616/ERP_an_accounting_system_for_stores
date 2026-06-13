@@ -291,13 +291,88 @@ class ApiClient:
 
         return dict(self._request("GET", f"/counterparties/{counterparty_id}/debt-summary"))
 
-    def get_debt_ledger(self, counterparty_id: int | None = None, debt_type: str | None = None) -> list[dict[str, Any]]:
+    def get_counterparty_debt(self, counterparty_id: int) -> dict[str, Any]:
+        """Return documented counterparty debt balances and credit-limit state."""
+
+        return dict(self._request("GET", f"/counterparties/{counterparty_id}/debt"))
+
+    def get_debt_ledger(
+        self,
+        counterparty_id: int | None = None,
+        debt_type: str | None = None,
+        contract_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return debt ledger rows."""
 
         return list(
             self._request(
                 "GET",
-                self._path_with_params("/debt-ledger", {"counterparty_id": counterparty_id, "debt_type": debt_type}),
+                self._path_with_params(
+                    "/debt-ledger",
+                    {
+                        "counterparty_id": counterparty_id,
+                        "debt_type": debt_type,
+                        "contract_id": contract_id,
+                        "date_from": date_from,
+                        "date_to": date_to,
+                    },
+                ),
+            )
+        )
+
+    def get_contracts(self, counterparty_id: int | None = None, active_only: bool = False) -> list[dict[str, Any]]:
+        """Return counterparty contracts."""
+
+        return list(self._request("GET", self._path_with_params("/contracts", {"counterparty_id": counterparty_id, "active_only": str(active_only).lower()})))
+
+    def create_contract(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a counterparty contract."""
+
+        return dict(self._request("POST", "/contracts", json=payload))
+
+    def update_contract(self, contract_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a counterparty contract."""
+
+        return dict(self._request("PATCH", f"/contracts/{contract_id}", json=payload))
+
+    def get_counterparty_account_card(
+        self,
+        counterparty_id: int,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        debt_type: str | None = None,
+        contract_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Return account-card movements for one counterparty."""
+
+        return dict(
+            self._request(
+                "GET",
+                self._path_with_params(
+                    f"/counterparties/{counterparty_id}/account-card",
+                    {"date_from": date_from, "date_to": date_to, "debt_type": debt_type, "contract_id": contract_id},
+                ),
+            )
+        )
+
+    def get_counterparty_reconciliation(
+        self,
+        counterparty_id: int,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        contract_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Return reconciliation statement data for one counterparty."""
+
+        return dict(
+            self._request(
+                "GET",
+                self._path_with_params(
+                    f"/counterparties/{counterparty_id}/reconciliation",
+                    {"date_from": date_from, "date_to": date_to, "contract_id": contract_id},
+                ),
             )
         )
 

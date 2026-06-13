@@ -16,6 +16,7 @@ from server_app.db.models import (
     CashOperation,
     CashRegister,
     CashShift,
+    Contract,
     Counterparty,
     Currency,
     DebtLedger,
@@ -105,6 +106,52 @@ def _ensure_customer(counterparty: Counterparty | None, required: bool = True) -
         return
     if not counterparty.is_active or counterparty.role_flags not in (2, 3):
         raise HTTPException(status_code=400, detail=error_detail("INVALID_COUNTERPARTY_ROLE", "Counterparty must be an active customer."))
+
+
+def _ensure_sale_contract_matches(
+    session: Session,
+    contract_id: int | None,
+    *,
+    counterparty_id: int | None,
+    currency_id: int,
+) -> Contract | None:
+    """Validate an optional sale contract against the customer and currency."""
+
+    if contract_id is None:
+        return None
+    if counterparty_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Counterparty is required when a contract is selected."))
+    contract = _get_or_404(session, Contract, contract_id, "Contract")
+    if not contract.is_active:
+        raise HTTPException(status_code=400, detail=error_detail("INACTIVE_CONTRACT", "Contract is inactive."))
+    if contract.counterparty_id != counterparty_id:
+        raise HTTPException(status_code=400, detail=error_detail("CONTRACT_COUNTERPARTY_MISMATCH", "Contract belongs to another counterparty."))
+    if contract.currency_id is not None and contract.currency_id != currency_id:
+        raise HTTPException(status_code=400, detail=error_detail("CONTRACT_CURRENCY_MISMATCH", "Contract currency differs from sale currency."))
+    return contract
+
+
+def _credit_limit_warning(session: Session, counterparty: Counterparty | None, added_debt: Decimal) -> dict[str, Any] | None:
+    """Return a non-blocking credit-limit warning for sale creation."""
+
+    if counterparty is None or added_debt <= Decimal("0.00"):
+        return None
+    credit_limit = money(counterparty.credit_limit_tmt)
+    if credit_limit <= Decimal("0.00"):
+        return None
+    current = current_debt_balance(session, counterparty.id, "receivable")
+    projected = money(current + added_debt)
+    if projected <= credit_limit:
+        return None
+    return {
+        "code": "CREDIT_LIMIT_EXCEEDED",
+        "message": "Customer credit limit is exceeded.",
+        "current_receivable_tmt": _decimal(current, "0.01"),
+        "added_debt_tmt": _decimal(added_debt, "0.01"),
+        "projected_receivable_tmt": _decimal(projected, "0.01"),
+        "credit_limit_tmt": _decimal(credit_limit, "0.01"),
+        "excess_tmt": _decimal(projected - credit_limit, "0.01"),
+    }
 
 
 def _cash_register_payload(row: CashRegister) -> dict[str, Any]:
@@ -200,6 +247,8 @@ def _sale_payload(row: Sale) -> dict[str, Any]:
         "cash_shift_id": row.cash_shift_id,
         "counterparty_id": row.counterparty_id,
         "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "contract_id": row.contract_id,
+        "contract_number": row.contract.number if row.contract else None,
         "warehouse_id": row.warehouse_id,
         "warehouse_name": row.warehouse.name if row.warehouse else None,
         "price_list_id": row.price_list_id,
@@ -257,6 +306,8 @@ def _sale_return_payload(row: SaleReturn) -> dict[str, Any]:
         "cash_shift_id": row.cash_shift_id,
         "counterparty_id": row.counterparty_id,
         "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "contract_id": row.sale.contract_id if row.sale else None,
+        "contract_number": row.sale.contract.number if row.sale and row.sale.contract else None,
         "warehouse_id": row.warehouse_id,
         "warehouse_name": row.warehouse.name if row.warehouse else None,
         "currency_id": row.currency_id,
@@ -282,6 +333,7 @@ def _sale_query(session: Session):
         selectinload(Sale.cash_register),
         selectinload(Sale.cash_shift),
         selectinload(Sale.counterparty),
+        selectinload(Sale.contract),
         selectinload(Sale.warehouse),
         selectinload(Sale.currency),
         selectinload(Sale.loyalty_card),
@@ -305,7 +357,7 @@ def _sale_return_query(session: Session):
     """Return a sale-return query with relationships used by payloads."""
 
     return session.query(SaleReturn).options(
-        selectinload(SaleReturn.sale),
+        selectinload(SaleReturn.sale).selectinload(Sale.contract),
         selectinload(SaleReturn.cash_register),
         selectinload(SaleReturn.cash_shift),
         selectinload(SaleReturn.counterparty),
@@ -871,8 +923,9 @@ def create_sale(
         raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Counterparty not found."))
     _ensure_customer(
         counterparty,
-        required=payload.sale_type == "wholesale" or payload.payment_type == "debt" or money(payload.debt_amount_tmt) > Decimal("0.00"),
+        required=payload.sale_type == "wholesale" or payload.payment_type == "debt" or money(payload.debt_amount_tmt) > Decimal("0.00") or payload.contract_id is not None,
     )
+    _ensure_sale_contract_matches(session, payload.contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
 
     doc_number = payload.doc_number or generate_doc_number(session, Sale, "SAL")
     if session.query(Sale).filter(Sale.doc_number == doc_number).one_or_none() is not None:
@@ -890,6 +943,7 @@ def create_sale(
     if debt > Decimal("0.00") and counterparty is None:
         raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Counterparty is required for debt amount."))
     loyalty_card = _validate_loyalty_payment(session, payload, counterparty, total, paid_bonus)
+    credit_warning = _credit_limit_warning(session, counterparty, debt)
 
     sale = Sale(
         doc_number=doc_number,
@@ -898,6 +952,7 @@ def create_sale(
         cash_register_id=payload.cash_register_id,
         cash_shift_id=payload.cash_shift_id,
         counterparty_id=payload.counterparty_id,
+        contract_id=payload.contract_id,
         warehouse_id=payload.warehouse_id,
         price_list_id=payload.price_list_id,
         currency_id=payload.currency_id,
@@ -917,7 +972,8 @@ def create_sale(
     sale.lines.extend(lines)
     session.add(sale)
     session.commit()
-    return success_response(_sale_payload(_refresh_sale(session, sale.id)))
+    meta = {"warnings": [credit_warning]} if credit_warning is not None else None
+    return success_response(_sale_payload(_refresh_sale(session, sale.id)), meta=meta)
 
 
 @router.post("/sales/{sale_id}/post")
@@ -970,6 +1026,7 @@ def post_sale(
             amount_cur=money(sale.debt_amount_tmt),
             note="Sale posted",
             user_id=current_user.id,
+            contract_id=sale.contract_id,
         )
     try:
         _post_sale_loyalty(session, sale, current_user.id)
@@ -1031,6 +1088,7 @@ def cancel_sale(
                 amount_cur=-money(sale.debt_amount_tmt),
                 note="Sale cancelled",
                 user_id=current_user.id,
+                contract_id=sale.contract_id,
             )
         if sale.loyalty_card_id is not None:
             card = sale.loyalty_card or session.get(LoyaltyCard, sale.loyalty_card_id)
@@ -1215,6 +1273,7 @@ def post_sale_return(
             amount_cur=-money(sale_return.receivable_correction_tmt),
             note="Sale return posted",
             user_id=current_user.id,
+            contract_id=sale_return.sale.contract_id if sale_return.sale else None,
         )
     try:
         _post_sale_return_loyalty(session, sale_return, current_user.id)
@@ -1274,6 +1333,7 @@ def cancel_sale_return(
                 amount_cur=money(sale_return.receivable_correction_tmt),
                 note="Sale return cancelled",
                 user_id=current_user.id,
+                contract_id=sale_return.sale.contract_id if sale_return.sale else None,
             )
         sale = sale_return.sale
         if sale is not None and sale.loyalty_card_id is not None:

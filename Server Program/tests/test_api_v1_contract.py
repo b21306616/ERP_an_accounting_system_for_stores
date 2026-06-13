@@ -493,6 +493,264 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(refreshed_invoice.status_code, 200)
         self.assertEqual(refreshed_invoice.json()["data"]["payment_status"], "partial")
 
+    def test_counterparty_finance_contracts_allocations_reconciliation_and_credit_limits(self) -> None:
+        """Contracts, payment allocations, account cards, and credit warnings should work together."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        currencies = requests.get(f"{self.base_url}/currencies", headers=headers, timeout=2)
+        self.assertEqual(currencies.status_code, 200)
+        currency_id = next(row for row in currencies.json()["data"] if row["code"] == "TMT")["id"]
+
+        warehouse = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-FIN", "name": "Finance warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(warehouse.status_code, 201)
+        warehouse_id = warehouse.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-FIN-001", "name": "Finance Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        supplier = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "SUP-FIN", "name": "Finance Supplier", "role_flags": 1, "counterparty_type": "supplier"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier.status_code, 201)
+        supplier_id = supplier.json()["data"]["id"]
+
+        supplier_contract = requests.post(
+            f"{self.base_url}/contracts",
+            json={"counterparty_id": supplier_id, "currency_id": currency_id, "number": "SUP-FIN-1", "title": "Supply contract"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier_contract.status_code, 201)
+        supplier_contract_id = supplier_contract.json()["data"]["id"]
+
+        invoice = requests.post(
+            f"{self.base_url}/purchase-invoices",
+            json={
+                "counterparty_id": supplier_id,
+                "contract_id": supplier_contract_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [{"product_id": product_id, "quantity": "3.0000", "price_cur": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(invoice.status_code, 201)
+        invoice_id = invoice.json()["data"]["id"]
+        self.assertEqual(invoice.json()["data"]["contract_id"], supplier_contract_id)
+
+        posted_invoice = requests.post(f"{self.base_url}/purchase-invoices/{invoice_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_invoice.status_code, 200)
+        self.assertEqual(posted_invoice.json()["data"]["status"], "posted")
+
+        first_supplier_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": supplier_id,
+                "contract_id": supplier_contract_id,
+                "direction": "outgoing",
+                "payment_method": "cash",
+                "amount_tmt": "10.00",
+                "allocations": [{"doc_type": "purchase_invoice", "doc_id": invoice_id, "allocated_amount": "10.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(first_supplier_payment.status_code, 201)
+        self.assertEqual(first_supplier_payment.json()["data"]["contract_id"], supplier_contract_id)
+
+        partial_invoice = requests.get(f"{self.base_url}/purchase-invoices/{invoice_id}", headers=headers, timeout=2)
+        self.assertEqual(partial_invoice.status_code, 200)
+        self.assertEqual(partial_invoice.json()["data"]["payment_status"], "partial")
+
+        excessive_supplier_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": supplier_id,
+                "contract_id": supplier_contract_id,
+                "direction": "outgoing",
+                "payment_method": "cash",
+                "amount_tmt": "25.00",
+                "allocations": [{"doc_type": "purchase_invoice", "doc_id": invoice_id, "allocated_amount": "25.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(excessive_supplier_payment.status_code, 400)
+        self.assertEqual(excessive_supplier_payment.json()["error"]["code"], "ALLOCATION_EXCEEDS_DOCUMENT_BALANCE")
+        self.assertEqual(excessive_supplier_payment.json()["error"]["details"]["remaining_tmt"], "20.00")
+
+        final_supplier_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": supplier_id,
+                "contract_id": supplier_contract_id,
+                "direction": "outgoing",
+                "payment_method": "cash",
+                "amount_tmt": "20.00",
+                "allocations": [{"doc_type": "purchase_invoice", "doc_id": invoice_id, "allocated_amount": "20.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(final_supplier_payment.status_code, 201)
+
+        paid_invoice = requests.get(f"{self.base_url}/purchase-invoices/{invoice_id}", headers=headers, timeout=2)
+        self.assertEqual(paid_invoice.status_code, 200)
+        self.assertEqual(paid_invoice.json()["data"]["payment_status"], "paid")
+
+        supplier_debt = requests.get(f"{self.base_url}/counterparties/{supplier_id}/debt", headers=headers, timeout=2)
+        self.assertEqual(supplier_debt.status_code, 200)
+        self.assertEqual(supplier_debt.json()["data"]["payable_tmt"], "0.00")
+
+        supplier_card = requests.get(
+            f"{self.base_url}/counterparties/{supplier_id}/account-card",
+            params={"contract_id": supplier_contract_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier_card.status_code, 200)
+        supplier_card_data = supplier_card.json()["data"]
+        self.assertEqual(supplier_card_data["debit_total_tmt"], "30.00")
+        self.assertEqual(supplier_card_data["credit_total_tmt"], "30.00")
+        self.assertEqual(supplier_card_data["closing_balance_tmt"], "0.00")
+        self.assertTrue(all(row["contract_id"] == supplier_contract_id for row in supplier_card_data["rows"]))
+
+        supplier_reconciliation = requests.get(
+            f"{self.base_url}/counterparties/{supplier_id}/reconciliation",
+            params={"contract_id": supplier_contract_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier_reconciliation.status_code, 200)
+        self.assertEqual(supplier_reconciliation.json()["data"]["closing_balance_tmt"], "0.00")
+
+        supplier_ledger = requests.get(
+            f"{self.base_url}/debt-ledger",
+            params={"counterparty_id": supplier_id, "contract_id": supplier_contract_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier_ledger.status_code, 200)
+        self.assertTrue(all(row["contract_id"] == supplier_contract_id for row in supplier_ledger.json()["data"]))
+
+        customer = requests.post(
+            f"{self.base_url}/counterparties",
+            json={
+                "code": "CUS-FIN",
+                "name": "Finance Customer",
+                "role_flags": 2,
+                "counterparty_type": "customer",
+                "credit_limit_tmt": "5.00",
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer.status_code, 201)
+        customer_id = customer.json()["data"]["id"]
+
+        customer_contract = requests.post(
+            f"{self.base_url}/contracts",
+            json={"counterparty_id": customer_id, "currency_id": currency_id, "number": "CUS-FIN-1", "title": "Customer contract"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer_contract.status_code, 201)
+        customer_contract_id = customer_contract.json()["data"]["id"]
+
+        sale = requests.post(
+            f"{self.base_url}/sales",
+            json={
+                "sale_type": "wholesale",
+                "counterparty_id": customer_id,
+                "contract_id": customer_contract_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "payment_type": "debt",
+                "debt_amount_tmt": "10.00",
+                "lines": [{"product_id": product_id, "quantity": "1.0000", "price_final": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale.status_code, 201)
+        sale_payload = sale.json()
+        self.assertEqual(sale_payload["data"]["contract_id"], customer_contract_id)
+        self.assertEqual(sale_payload["meta"]["warnings"][0]["code"], "CREDIT_LIMIT_EXCEEDED")
+        sale_id = sale_payload["data"]["id"]
+
+        posted_sale = requests.post(f"{self.base_url}/sales/{sale_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_sale.status_code, 200)
+        self.assertEqual(posted_sale.json()["data"]["status"], "posted")
+
+        customer_debt = requests.get(f"{self.base_url}/counterparties/{customer_id}/debt", headers=headers, timeout=2)
+        self.assertEqual(customer_debt.status_code, 200)
+        self.assertEqual(customer_debt.json()["data"]["receivable_tmt"], "10.00")
+        self.assertTrue(customer_debt.json()["data"]["credit_limit_exceeded"])
+        self.assertEqual(customer_debt.json()["data"]["credit_limit_excess_tmt"], "5.00")
+
+        customer_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": customer_id,
+                "contract_id": customer_contract_id,
+                "direction": "incoming",
+                "payment_method": "cash",
+                "amount_tmt": "5.00",
+                "allocations": [{"doc_type": "sale", "doc_id": sale_id, "allocated_amount": "5.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer_payment.status_code, 201)
+
+        excessive_customer_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": customer_id,
+                "contract_id": customer_contract_id,
+                "direction": "incoming",
+                "payment_method": "cash",
+                "amount_tmt": "6.00",
+                "allocations": [{"doc_type": "sale", "doc_id": sale_id, "allocated_amount": "6.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(excessive_customer_payment.status_code, 400)
+        self.assertEqual(excessive_customer_payment.json()["error"]["code"], "ALLOCATION_EXCEEDS_DOCUMENT_BALANCE")
+        self.assertEqual(excessive_customer_payment.json()["error"]["details"]["remaining_tmt"], "5.00")
+
+        customer_card = requests.get(
+            f"{self.base_url}/counterparties/{customer_id}/account-card",
+            params={"contract_id": customer_contract_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer_card.status_code, 200)
+        customer_card_data = customer_card.json()["data"]
+        self.assertEqual(customer_card_data["debit_total_tmt"], "10.00")
+        self.assertEqual(customer_card_data["credit_total_tmt"], "5.00")
+        self.assertEqual(customer_card_data["closing_balance_tmt"], "5.00")
+        self.assertTrue(all(row["contract_id"] == customer_contract_id for row in customer_card_data["rows"]))
+
     def test_sales_cashier_and_reports_workflow(self) -> None:
         """Sales posting should update stock, receivables, cashier shifts, and reports."""
 

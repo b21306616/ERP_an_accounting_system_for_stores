@@ -18,6 +18,7 @@ from server_app.api.dependencies import get_db
 from server_app.api.routers_v1 import error_detail, require_v1_permission, success_response
 from server_app.db.models import (
     CashShift,
+    Contract,
     Counterparty,
     CounterpartyCategory,
     Currency,
@@ -45,6 +46,8 @@ from server_app.db.models import (
     Warehouse,
 )
 from server_app.schemas.business_v1 import (
+    ContractCreate,
+    ContractUpdate,
     CounterpartyCategoryCreate,
     CounterpartyCreate,
     CounterpartyUpdate,
@@ -64,12 +67,15 @@ from server_app.schemas.business_v1 import (
     PurchaseOrderUpdate,
 )
 from server_app.services.settlements import (
+    allocated_amount_for_document,
     current_debt_balance,
+    document_payment_status,
     generate_doc_number,
     money,
     now_utc,
     post_debt_entry,
     price,
+    sale_payment_status,
     qty4,
     update_purchase_invoice_payment_status,
 )
@@ -180,6 +186,45 @@ def _counterparty_payload(session: Session, row: Counterparty, include_debt: boo
     return data
 
 
+def _contract_payload(row: Contract) -> dict[str, Any]:
+    """Return a counterparty contract payload."""
+
+    return {
+        "id": row.id,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "currency_id": row.currency_id,
+        "currency_code": row.currency.code if row.currency else None,
+        "number": row.number,
+        "title": row.title,
+        "start_date": row.start_date.isoformat() if row.start_date else None,
+        "end_date": row.end_date.isoformat() if row.end_date else None,
+        "is_active": row.is_active,
+    }
+
+
+def _ensure_contract_matches(
+    session: Session,
+    contract_id: int | None,
+    *,
+    counterparty_id: int,
+    currency_id: int | None = None,
+    require_active: bool = True,
+) -> Contract | None:
+    """Validate an optional contract against the document header."""
+
+    if contract_id is None:
+        return None
+    contract = _get_or_404(session, Contract, contract_id, "Contract")
+    if require_active and not contract.is_active:
+        raise HTTPException(status_code=400, detail=error_detail("INACTIVE_CONTRACT", "Contract is inactive."))
+    if contract.counterparty_id != counterparty_id:
+        raise HTTPException(status_code=400, detail=error_detail("CONTRACT_COUNTERPARTY_MISMATCH", "Contract belongs to another counterparty."))
+    if currency_id is not None and contract.currency_id is not None and contract.currency_id != currency_id:
+        raise HTTPException(status_code=400, detail=error_detail("CONTRACT_CURRENCY_MISMATCH", "Contract currency differs from document currency."))
+    return contract
+
+
 def _price_list_payload(row: PriceList) -> dict[str, Any]:
     """Return a price-list payload."""
 
@@ -249,6 +294,8 @@ def _order_payload(order: PurchaseOrder) -> dict[str, Any]:
         "doc_date": order.doc_date.isoformat() if order.doc_date else None,
         "counterparty_id": order.counterparty_id,
         "counterparty_name": order.counterparty.name if order.counterparty else None,
+        "contract_id": order.contract_id,
+        "contract_number": order.contract.number if order.contract else None,
         "warehouse_id": order.warehouse_id,
         "warehouse_name": order.warehouse.name if order.warehouse else None,
         "currency_id": order.currency_id,
@@ -500,6 +547,8 @@ def _invoice_payload(invoice: PurchaseInvoice) -> dict[str, Any]:
         "doc_date": invoice.doc_date.isoformat() if invoice.doc_date else None,
         "counterparty_id": invoice.counterparty_id,
         "counterparty_name": invoice.counterparty.name if invoice.counterparty else None,
+        "contract_id": invoice.contract_id,
+        "contract_number": invoice.contract.number if invoice.contract else None,
         "purchase_order_id": invoice.purchase_order_id,
         "warehouse_id": invoice.warehouse_id,
         "warehouse_name": invoice.warehouse.name if invoice.warehouse else None,
@@ -527,6 +576,8 @@ def _debt_payload(row: DebtLedger) -> dict[str, Any]:
         "id": row.id,
         "counterparty_id": row.counterparty_id,
         "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "contract_id": row.contract_id,
+        "contract_number": row.contract.number if row.contract else None,
         "debt_type": row.debt_type,
         "doc_type": row.doc_type,
         "doc_id": row.doc_id,
@@ -549,6 +600,8 @@ def _payment_payload(payment: Payment) -> dict[str, Any]:
         "doc_date": payment.doc_date.isoformat() if payment.doc_date else None,
         "counterparty_id": payment.counterparty_id,
         "counterparty_name": payment.counterparty.name if payment.counterparty else None,
+        "contract_id": payment.contract_id,
+        "contract_number": payment.contract.number if payment.contract else None,
         "direction": payment.direction,
         "payment_method": payment.payment_method,
         "amount_tmt": _decimal(payment.amount_tmt, "0.01"),
@@ -575,6 +628,7 @@ def _order_query(session: Session):
 
     return session.query(PurchaseOrder).options(
         selectinload(PurchaseOrder.counterparty),
+        selectinload(PurchaseOrder.contract),
         selectinload(PurchaseOrder.warehouse),
         selectinload(PurchaseOrder.currency),
         selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.product),
@@ -597,6 +651,7 @@ def _invoice_query(session: Session):
 
     return session.query(PurchaseInvoice).options(
         selectinload(PurchaseInvoice.counterparty),
+        selectinload(PurchaseInvoice.contract),
         selectinload(PurchaseInvoice.purchase_order),
         selectinload(PurchaseInvoice.warehouse),
         selectinload(PurchaseInvoice.currency),
@@ -638,6 +693,76 @@ def _ensure_supplier(counterparty: Counterparty) -> None:
 
     if counterparty.role_flags not in {1, 3} and counterparty.counterparty_type not in {"supplier", "both"}:
         raise HTTPException(status_code=400, detail=error_detail("NOT_SUPPLIER", "Counterparty is not marked as a supplier."))
+
+
+def _contract_id_for_order(order: PurchaseOrder | None, requested_contract_id: int | None) -> int | None:
+    """Resolve invoice contract inheritance from a purchase order."""
+
+    if order is None:
+        return requested_contract_id
+    if requested_contract_id is not None and order.contract_id is not None and requested_contract_id != order.contract_id:
+        raise HTTPException(status_code=400, detail=error_detail("ORDER_CONTRACT_MISMATCH", "Invoice contract differs from the linked purchase order."))
+    return requested_contract_id if requested_contract_id is not None else order.contract_id
+
+
+def _allocated_remaining(total_amount: Decimal, allocated_amount: Decimal) -> Decimal:
+    """Return unpaid amount remaining for a document."""
+
+    remaining = abs(money(total_amount)) - money(allocated_amount)
+    return money(max(Decimal("0.00"), remaining))
+
+
+def _reconciliation_entry(row: DebtLedger, running_balance: Decimal) -> dict[str, Any]:
+    """Return one normalized reconciliation/account-card row."""
+
+    amount = money(row.amount_tmt)
+    if row.debt_type == "receivable":
+        debit = amount if amount > Decimal("0.00") else Decimal("0.00")
+        credit = -amount if amount < Decimal("0.00") else Decimal("0.00")
+        net_amount = amount
+    else:
+        debit = -amount if amount < Decimal("0.00") else Decimal("0.00")
+        credit = amount if amount > Decimal("0.00") else Decimal("0.00")
+        net_amount = -amount
+    return {
+        "id": row.id,
+        "doc_date": row.doc_date.isoformat() if row.doc_date else None,
+        "doc_type": row.doc_type,
+        "doc_id": row.doc_id,
+        "doc_number": row.doc_number,
+        "debt_type": row.debt_type,
+        "contract_id": row.contract_id,
+        "contract_number": row.contract.number if row.contract else None,
+        "amount_tmt": _decimal(row.amount_tmt, "0.01"),
+        "debit_tmt": _decimal(debit, "0.01"),
+        "credit_tmt": _decimal(credit, "0.01"),
+        "net_amount_tmt": _decimal(net_amount, "0.01"),
+        "running_balance_tmt": _decimal(running_balance, "0.01"),
+        "note": row.note,
+    }
+
+
+def _debt_query_for_period(
+    session: Session,
+    *,
+    counterparty_id: int,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    debt_type: str | None = None,
+    contract_id: int | None = None,
+):
+    """Build a debt-ledger query for account-card style views."""
+
+    query = session.query(DebtLedger).options(selectinload(DebtLedger.counterparty), selectinload(DebtLedger.contract)).filter(DebtLedger.counterparty_id == counterparty_id)
+    if debt_type is not None:
+        query = query.filter(DebtLedger.debt_type == debt_type)
+    if contract_id is not None:
+        query = query.filter(DebtLedger.contract_id == contract_id)
+    if date_from is not None:
+        query = query.filter(DebtLedger.doc_date >= date_from)
+    if date_to is not None:
+        query = query.filter(DebtLedger.doc_date <= date_to)
+    return query
 
 
 def _ensure_active_warehouse(session: Session, warehouse_id: int) -> Warehouse:
@@ -901,6 +1026,177 @@ def get_counterparty_debt_summary(
 
     row = _get_or_404(session, Counterparty, counterparty_id, "Counterparty")
     return success_response(_counterparty_payload(session, row, include_debt=True)["debt"])
+
+
+@router.get("/counterparties/{counterparty_id}/debt")
+def get_counterparty_debt(
+    counterparty_id: int,
+    _: User = Depends(require_debt_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return documented debt balances for one counterparty."""
+
+    row = _get_or_404(session, Counterparty, counterparty_id, "Counterparty")
+    receivable = current_debt_balance(session, row.id, "receivable")
+    payable = current_debt_balance(session, row.id, "payable")
+    credit_limit = money(row.credit_limit_tmt)
+    return success_response(
+        {
+            "counterparty_id": row.id,
+            "counterparty_name": row.name,
+            "receivable_tmt": _decimal(receivable, "0.01"),
+            "payable_tmt": _decimal(payable, "0.01"),
+            "credit_limit_tmt": _decimal(credit_limit, "0.01"),
+            "credit_limit_exceeded": credit_limit > Decimal("0.00") and receivable > credit_limit,
+            "credit_limit_excess_tmt": _decimal(max(Decimal("0.00"), receivable - credit_limit), "0.01"),
+        }
+    )
+
+
+@router.get("/contracts")
+def list_contracts(
+    counterparty_id: int | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    _: User = Depends(require_counterparty_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List counterparty contracts."""
+
+    query = session.query(Contract).options(selectinload(Contract.counterparty), selectinload(Contract.currency))
+    if counterparty_id is not None:
+        query = query.filter(Contract.counterparty_id == counterparty_id)
+    if active_only:
+        query = query.filter(Contract.is_active.is_(True))
+    rows = query.order_by(Contract.counterparty_id, Contract.number).limit(500).all()
+    return success_response([_contract_payload(row) for row in rows])
+
+
+@router.post("/contracts", status_code=status.HTTP_201_CREATED)
+def create_contract(
+    payload: ContractCreate,
+    _: User = Depends(require_counterparty_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a counterparty contract."""
+
+    _ensure_active_counterparty(session, payload.counterparty_id)
+    if payload.currency_id is not None:
+        _ensure_active_currency(session, payload.currency_id)
+    duplicate = session.query(Contract).filter(Contract.counterparty_id == payload.counterparty_id, Contract.number == payload.number).one_or_none()
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_CONTRACT", "Contract number already exists for this counterparty."))
+    row = Contract(**payload.model_dump())
+    session.add(row)
+    session.commit()
+    return success_response(_contract_payload(row))
+
+
+@router.patch("/contracts/{contract_id}")
+def update_contract(
+    contract_id: int,
+    payload: ContractUpdate,
+    _: User = Depends(require_counterparty_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch a counterparty contract."""
+
+    row = _get_or_404(session, Contract, contract_id, "Contract")
+    updates = _updates(payload)
+    if updates.get("currency_id") is not None:
+        _ensure_active_currency(session, int(updates["currency_id"]))
+    if updates.get("number") is not None:
+        duplicate = (
+            session.query(Contract)
+            .filter(Contract.counterparty_id == row.counterparty_id, Contract.number == updates["number"], Contract.id != row.id)
+            .one_or_none()
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_CONTRACT", "Contract number already exists for this counterparty."))
+    for key, value in updates.items():
+        setattr(row, key, value)
+    if row.start_date is not None and row.end_date is not None and row.end_date < row.start_date:
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_DATES", "Contract end date cannot be before start date."))
+    session.commit()
+    return success_response(_contract_payload(row))
+
+
+@router.get("/counterparties/{counterparty_id}/account-card")
+def get_counterparty_account_card(
+    counterparty_id: int,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    debt_type: str | None = Query(default=None),
+    contract_id: int | None = Query(default=None),
+    _: User = Depends(require_debt_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return the counterparty account card from debt-ledger movements."""
+
+    row = _get_or_404(session, Counterparty, counterparty_id, "Counterparty")
+    if debt_type is not None and debt_type not in {"receivable", "payable"}:
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_DEBT_TYPE", "Debt type must be receivable or payable."))
+    _ensure_contract_matches(session, contract_id, counterparty_id=row.id, require_active=False)
+    opening_query = session.query(DebtLedger).filter(DebtLedger.counterparty_id == row.id)
+    if debt_type is not None:
+        opening_query = opening_query.filter(DebtLedger.debt_type == debt_type)
+    if contract_id is not None:
+        opening_query = opening_query.filter(DebtLedger.contract_id == contract_id)
+    if date_from is not None:
+        opening_query = opening_query.filter(DebtLedger.doc_date < date_from)
+    else:
+        opening_query = opening_query.filter(DebtLedger.id < 0)
+    opening_receivable = money(sum((entry.amount_tmt for entry in opening_query.filter(DebtLedger.debt_type == "receivable").all()), Decimal("0.00")))
+    opening_payable = money(sum((entry.amount_tmt for entry in opening_query.filter(DebtLedger.debt_type == "payable").all()), Decimal("0.00")))
+    running = money(opening_receivable - opening_payable)
+    entries = _debt_query_for_period(
+        session,
+        counterparty_id=row.id,
+        date_from=date_from,
+        date_to=date_to,
+        debt_type=debt_type,
+        contract_id=contract_id,
+    ).order_by(DebtLedger.doc_date, DebtLedger.id).all()
+    rows = []
+    debit_total = Decimal("0.00")
+    credit_total = Decimal("0.00")
+    for entry in entries:
+        amount = money(entry.amount_tmt)
+        net = amount if entry.debt_type == "receivable" else -amount
+        running = money(running + net)
+        payload = _reconciliation_entry(entry, running)
+        debit_total += money(payload["debit_tmt"])
+        credit_total += money(payload["credit_tmt"])
+        rows.append(payload)
+    return success_response(
+        {
+            "counterparty_id": row.id,
+            "counterparty_name": row.name,
+            "date_from": date_from.isoformat() if date_from else None,
+            "date_to": date_to.isoformat() if date_to else None,
+            "contract_id": contract_id,
+            "opening_receivable_tmt": _decimal(opening_receivable, "0.01"),
+            "opening_payable_tmt": _decimal(opening_payable, "0.01"),
+            "opening_balance_tmt": _decimal(opening_receivable - opening_payable, "0.01"),
+            "debit_total_tmt": _decimal(debit_total, "0.01"),
+            "credit_total_tmt": _decimal(credit_total, "0.01"),
+            "closing_balance_tmt": _decimal(running, "0.01"),
+            "rows": rows,
+        }
+    )
+
+
+@router.get("/counterparties/{counterparty_id}/reconciliation")
+def get_counterparty_reconciliation(
+    counterparty_id: int,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    contract_id: int | None = Query(default=None),
+    _: User = Depends(require_v1_permission("counterparty.reconciliation")),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return reconciliation statement data for print/export."""
+
+    return get_counterparty_account_card(counterparty_id, date_from, date_to, None, contract_id, _, session)
 
 
 @router.get("/price-lists")
@@ -1326,6 +1622,7 @@ def create_purchase_order(
     _ensure_supplier(counterparty)
     _ensure_active_warehouse(session, payload.warehouse_id)
     _ensure_active_currency(session, payload.currency_id)
+    _ensure_contract_matches(session, payload.contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
     doc_number = payload.doc_number or generate_doc_number(session, PurchaseOrder, "PO")
     if session.query(PurchaseOrder).filter(PurchaseOrder.doc_number == doc_number).one_or_none() is not None:
         raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Purchase order number already exists."))
@@ -1333,6 +1630,7 @@ def create_purchase_order(
         doc_number=doc_number,
         doc_date=payload.doc_date or date.today(),
         counterparty_id=payload.counterparty_id,
+        contract_id=payload.contract_id,
         warehouse_id=payload.warehouse_id,
         currency_id=payload.currency_id,
         currency_rate=payload.currency_rate,
@@ -1381,7 +1679,12 @@ def update_purchase_order(
         _ensure_active_warehouse(session, int(updates["warehouse_id"]))
     if updates.get("currency_id") is not None:
         _ensure_active_currency(session, int(updates["currency_id"]))
-    for key in ("doc_date", "counterparty_id", "warehouse_id", "currency_id", "currency_rate", "note"):
+    target_counterparty_id = int(updates.get("counterparty_id", order.counterparty_id))
+    target_currency_id = int(updates.get("currency_id", order.currency_id))
+    target_contract_id = updates.get("contract_id", order.contract_id)
+    if target_contract_id is not None:
+        _ensure_contract_matches(session, int(target_contract_id), counterparty_id=target_counterparty_id, currency_id=target_currency_id)
+    for key in ("doc_date", "counterparty_id", "contract_id", "warehouse_id", "currency_id", "currency_rate", "note"):
         if key in updates:
             setattr(order, key, updates[key])
     if payload.lines is not None:
@@ -1455,6 +1758,8 @@ def create_purchase_invoice(
     _ensure_supplier(counterparty)
     _ensure_active_warehouse(session, payload.warehouse_id)
     _ensure_active_currency(session, payload.currency_id)
+    order: PurchaseOrder | None = None
+    source_invoice: PurchaseInvoice | None = None
     if payload.purchase_order_id is not None:
         order = _refresh_order(session, payload.purchase_order_id)
         if order.status == "cancelled":
@@ -1467,6 +1772,10 @@ def create_purchase_invoice(
         source_invoice = _get_or_404(session, PurchaseInvoice, payload.return_invoice_id, "Return source invoice")
         if source_invoice.status != "posted" or source_invoice.is_return:
             raise HTTPException(status_code=400, detail=error_detail("INVALID_RETURN_SOURCE", "Supplier returns must reference a posted purchase invoice."))
+    contract_id = _contract_id_for_order(order, payload.contract_id)
+    if contract_id is None and source_invoice is not None:
+        contract_id = source_invoice.contract_id
+    _ensure_contract_matches(session, contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
     doc_number = payload.doc_number or generate_doc_number(session, PurchaseInvoice, "PIN")
     if session.query(PurchaseInvoice).filter(PurchaseInvoice.doc_number == doc_number).one_or_none() is not None:
         raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Purchase invoice number already exists."))
@@ -1475,6 +1784,7 @@ def create_purchase_invoice(
         doc_date=payload.doc_date or date.today(),
         purchase_order_id=payload.purchase_order_id,
         counterparty_id=payload.counterparty_id,
+        contract_id=contract_id,
         warehouse_id=payload.warehouse_id,
         currency_id=payload.currency_id,
         currency_rate=payload.currency_rate,
@@ -1570,6 +1880,7 @@ def post_purchase_invoice(
         amount_cur=invoice.total_amount_cur,
         note="Purchase invoice posted",
         user_id=current_user.id,
+        contract_id=invoice.contract_id,
     )
     _apply_invoice_to_order(session, invoice, direction=1)
     session.commit()
@@ -1627,6 +1938,7 @@ def cancel_purchase_invoice(
         amount_cur=-invoice.total_amount_cur,
         note="Purchase invoice cancelled",
         user_id=current_user.id,
+        contract_id=invoice.contract_id,
     )
     _apply_invoice_to_order(session, invoice, direction=-1)
     session.commit()
@@ -1637,16 +1949,25 @@ def cancel_purchase_invoice(
 def list_debt_ledger(
     counterparty_id: int | None = Query(default=None),
     debt_type: str | None = Query(default=None),
+    contract_id: int | None = Query(default=None),
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
     _: User = Depends(require_debt_view),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
     """List recent debt ledger entries."""
 
-    query = session.query(DebtLedger).options(selectinload(DebtLedger.counterparty))
+    query = session.query(DebtLedger).options(selectinload(DebtLedger.counterparty), selectinload(DebtLedger.contract))
     if counterparty_id is not None:
         query = query.filter(DebtLedger.counterparty_id == counterparty_id)
     if debt_type is not None:
         query = query.filter(DebtLedger.debt_type == debt_type)
+    if contract_id is not None:
+        query = query.filter(DebtLedger.contract_id == contract_id)
+    if date_from is not None:
+        query = query.filter(DebtLedger.doc_date >= date_from)
+    if date_to is not None:
+        query = query.filter(DebtLedger.doc_date <= date_to)
     rows = query.order_by(DebtLedger.id.desc()).limit(500).all()
     return success_response([_debt_payload(row) for row in rows])
 
@@ -1662,6 +1983,7 @@ def create_payment(
     _ensure_active_counterparty(session, payload.counterparty_id)
     if payload.currency_id is not None:
         _ensure_active_currency(session, payload.currency_id)
+    _ensure_contract_matches(session, payload.contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
     if payload.cash_shift_id is not None:
         shift = _get_or_404(session, CashShift, payload.cash_shift_id, "Cash shift")
         if shift.status != "open":
@@ -1676,6 +1998,7 @@ def create_payment(
         doc_number=doc_number,
         doc_date=payload.doc_date or now_utc(),
         counterparty_id=payload.counterparty_id,
+        contract_id=payload.contract_id,
         direction=payload.direction,
         payment_method=payload.payment_method,
         amount_tmt=money(payload.amount_tmt),
@@ -1688,25 +2011,62 @@ def create_payment(
     )
     session.add(payment)
     session.flush()
+    remaining_by_doc: dict[tuple[str, int], Decimal] = {}
+    invoices_to_refresh: set[int] = set()
     for allocation in payload.allocations:
+        key = (allocation.doc_type, allocation.doc_id)
+        amount = money(allocation.allocated_amount)
+        if key in remaining_by_doc:
+            raise HTTPException(status_code=400, detail=error_detail("DUPLICATE_ALLOCATION", "A payment can allocate to the same document only once."))
         if allocation.doc_type == "purchase_invoice":
+            if payment.direction != "outgoing":
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_DIRECTION_MISMATCH", "Purchase invoice allocations require an outgoing payment."))
             invoice = _get_or_404(session, PurchaseInvoice, allocation.doc_id, "Purchase invoice")
+            if invoice.status != "posted":
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_DOCUMENT_NOT_POSTED", "Purchase invoice must be posted before payment allocation."))
             if invoice.counterparty_id != payment.counterparty_id:
                 raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_COUNTERPARTY_MISMATCH", "Allocation document belongs to another counterparty."))
+            if payment.contract_id is not None and invoice.contract_id not in (None, payment.contract_id):
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_CONTRACT_MISMATCH", "Allocation document belongs to another contract."))
+            already_paid = allocated_amount_for_document(session, doc_type="purchase_invoice", doc_id=invoice.id)
+            remaining = _allocated_remaining(invoice.total_amount_tmt, already_paid)
+            invoices_to_refresh.add(invoice.id)
         elif allocation.doc_type == "sale":
+            if payment.direction != "incoming":
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_DIRECTION_MISMATCH", "Sale allocations require an incoming payment."))
             sale = _get_or_404(session, Sale, allocation.doc_id, "Sale")
+            if sale.status != "posted":
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_DOCUMENT_NOT_POSTED", "Sale must be posted before payment allocation."))
             if sale.counterparty_id != payment.counterparty_id:
                 raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_COUNTERPARTY_MISMATCH", "Allocation document belongs to another counterparty."))
+            if payment.contract_id is not None and sale.contract_id not in (None, payment.contract_id):
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_CONTRACT_MISMATCH", "Allocation document belongs to another contract."))
+            already_paid = allocated_amount_for_document(session, doc_type="sale", doc_id=sale.id)
+            remaining = _allocated_remaining(sale.debt_amount_tmt, already_paid)
         else:
             raise HTTPException(status_code=400, detail=error_detail("UNSUPPORTED_ALLOCATION", "Only purchase_invoice and sale allocations are supported."))
+        if amount > remaining:
+            raise HTTPException(
+                status_code=400,
+                detail=error_detail(
+                    "ALLOCATION_EXCEEDS_DOCUMENT_BALANCE",
+                    "Allocation exceeds the unpaid document balance.",
+                    {"remaining_tmt": _decimal(remaining, "0.01")},
+                ),
+            )
+        remaining_by_doc[key] = money(remaining - amount)
         payment.allocations.append(
             PaymentAllocation(
                 doc_type=allocation.doc_type,
                 doc_id=allocation.doc_id,
-                allocated_amount=money(allocation.allocated_amount),
+                allocated_amount=amount,
             )
         )
-        if allocation.doc_type == "purchase_invoice":
+
+    session.flush()
+    for invoice_id in invoices_to_refresh:
+        invoice = session.get(PurchaseInvoice, invoice_id)
+        if invoice is not None:
             update_purchase_invoice_payment_status(session, invoice)
 
     debt_type = "payable" if payment.direction == "outgoing" else "receivable"
@@ -1723,6 +2083,7 @@ def create_payment(
         amount_cur=payment.amount_cur,
         note="Payment posted",
         user_id=current_user.id,
+        contract_id=payment.contract_id,
     )
     session.commit()
     for allocation in payment.allocations:
@@ -1733,7 +2094,7 @@ def create_payment(
     session.commit()
     refreshed = (
         session.query(Payment)
-        .options(selectinload(Payment.counterparty), selectinload(Payment.allocations))
+        .options(selectinload(Payment.counterparty), selectinload(Payment.contract), selectinload(Payment.allocations))
         .filter(Payment.id == payment.id)
         .one()
     )
@@ -1750,7 +2111,7 @@ def cancel_payment(
 
     payment = (
         session.query(Payment)
-        .options(selectinload(Payment.counterparty), selectinload(Payment.allocations))
+        .options(selectinload(Payment.counterparty), selectinload(Payment.contract), selectinload(Payment.allocations))
         .filter(Payment.id == payment_id)
         .one_or_none()
     )
@@ -1775,7 +2136,9 @@ def cancel_payment(
         amount_cur=payment.amount_cur,
         note="Payment cancelled",
         user_id=current_user.id,
+        contract_id=payment.contract_id,
     )
+    session.flush()
     for allocation in payment.allocations:
         if allocation.doc_type == "purchase_invoice":
             invoice = session.get(PurchaseInvoice, allocation.doc_id)
