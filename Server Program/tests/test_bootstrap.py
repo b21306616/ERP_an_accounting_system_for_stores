@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 from unittest.mock import patch
 
@@ -95,6 +96,25 @@ class BootstrapTests(unittest.TestCase):
         config.set_main_option("sqlalchemy.url", escape_alembic_config_value(url))
 
         self.assertEqual(config.get_main_option("sqlalchemy.url"), url)
+
+    def test_alembic_revision_ids_fit_version_num_column(self) -> None:
+        """Alembic stores revision IDs in alembic_version.version_num VARCHAR(32)."""
+
+        versions_dir = Path(__file__).resolve().parents[1] / "alembic" / "versions"
+        revision_pattern = re.compile(r'^revision\s*=\s*["\']([^"\']+)["\']', re.MULTILINE)
+        max_length = 32
+
+        for migration_path in sorted(versions_dir.glob("*.py")):
+            content = migration_path.read_text(encoding="utf-8")
+            match = revision_pattern.search(content)
+            self.assertIsNotNone(match, f"Missing revision in {migration_path.name}")
+            assert match is not None
+            revision_id = match.group(1)
+            self.assertLessEqual(
+                len(revision_id),
+                max_length,
+                f"{migration_path.name} revision '{revision_id}' exceeds {max_length} characters",
+            )
 
     def test_run_migrations_uses_absolute_script_location_for_windows_service(self) -> None:
         """Service startup should not depend on the current working directory."""

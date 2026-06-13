@@ -1,7 +1,7 @@
 """Add sales and cashier foundation tables.
 
 Revision ID: 0006_sales_cashier_reports
-Revises: 0005_pricing_purchase_counterparty
+Revises: 0005_pricing_purchase
 Create Date: 2026-06-13
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 revision = "0006_sales_cashier_reports"
-down_revision = "0005_pricing_purchase_counterparty"
+down_revision = "0005_pricing_purchase"
 branch_labels = None
 depends_on = None
 

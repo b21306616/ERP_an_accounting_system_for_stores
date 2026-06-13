@@ -1,6 +1,6 @@
 """Add pricing, purchase, and counterparty settlement layer.
 
-Revision ID: 0005_pricing_purchase_counterparty
+Revision ID: 0005_pricing_purchase
 Revises: 0004_warehouse_layer
 Create Date: 2026-06-13
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0005_pricing_purchase_counterparty"
+revision = "0005_pricing_purchase"
 down_revision = "0004_warehouse_layer"
 branch_labels = None
 depends_on = None
