@@ -242,6 +242,20 @@ def require_v1_super_admin(current_user: User = Depends(get_current_v1_user)) ->
     return current_user
 
 
+def require_v1_permission(permission_code: str):
+    """Return a dependency that requires one permission code."""
+
+    def dependency(current_user: User = Depends(get_current_v1_user)) -> User:
+        if permission_code not in permission_codes_for_user(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=error_detail("FORBIDDEN", f"Permission is required: {permission_code}"),
+            )
+        return current_user
+
+    return dependency
+
+
 @router.post("/auth/login")
 def login(payload: V1LoginRequest, request: Request, session: Session = Depends(get_db)) -> dict[str, Any]:
     """Open a documented client session."""

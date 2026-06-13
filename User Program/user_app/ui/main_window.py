@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from user_app.api.client import ApiClient, ApiClientError
-from user_app.core.i18n import Translator
+from user_app.core.i18n import CATALOG_TABLE_HEADER_KEYS, USER_TABLE_HEADER_KEYS, Translator
 from user_app.hardware.simulator import HardwareSimulator
 
 
@@ -122,6 +122,7 @@ class MainWindow(QWidget):
         top.addStretch(1)
         self.language_combo.addItem("Русский", "ru")
         self.language_combo.addItem("Türkmençe", "tk")
+        self.language_combo.addItem("English", "en")
         index = self.language_combo.findData(self.translator.language)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
@@ -141,7 +142,8 @@ class MainWindow(QWidget):
         self._add_page("roles", self._build_roles_page())
         self._add_page("settings", self._build_settings_page())
         self._add_page("hardware", self._build_hardware_page())
-        for page_id in ("catalog", "warehouse", "purchase", "pricing", "sales", "cashier", "reports"):
+        self._add_page("catalog", self._build_catalog_page())
+        for page_id in ("warehouse", "purchase", "pricing", "sales", "cashier", "reports"):
             self._add_page(page_id, self._build_placeholder_page(page_id))
 
         self.nav.setCurrentRow(0)
@@ -203,8 +205,8 @@ class MainWindow(QWidget):
         row.addWidget(refresh)
         row.addWidget(create)
         row.addStretch(1)
-        self.users_table = QTableWidget(0, 5)
-        self.users_table.setHorizontalHeaderLabels(["ID", "Username", "Full name", "Role", "Active"])
+        self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
+        self._set_users_table_headers()
         layout.addLayout(row)
         layout.addWidget(self.users_table, 1)
         return page
@@ -258,6 +260,38 @@ class MainWindow(QWidget):
         layout.addWidget(self.hardware_text, 1)
         return page
 
+    def _build_catalog_page(self) -> QWidget:
+        """Build product catalog page."""
+
+        page, layout, _title = self._page("catalog.title")
+        action_row = QHBoxLayout()
+        self.catalog_search = QLineEdit()
+        self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "catalog.refresh")
+        refresh.clicked.connect(self.refresh_catalog)
+        create_group = QPushButton()
+        create_group.setProperty("textKey", "catalog.create_group")
+        create_group.clicked.connect(self.create_product_group_dialog)
+        create_product = QPushButton()
+        create_product.setProperty("textKey", "catalog.create_product")
+        create_product.clicked.connect(self.create_product_dialog)
+        create_service = QPushButton()
+        create_service.setProperty("textKey", "catalog.create_service")
+        create_service.clicked.connect(self.create_service_dialog)
+        find_barcode = QPushButton()
+        find_barcode.setProperty("textKey", "catalog.find_barcode")
+        find_barcode.clicked.connect(self.find_barcode_dialog)
+        for widget in (self.catalog_search, refresh, create_group, create_product, create_service, find_barcode):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+
+        self.catalog_table = QTableWidget(0, len(CATALOG_TABLE_HEADER_KEYS))
+        self._set_catalog_table_headers()
+        layout.addLayout(action_row)
+        layout.addWidget(self.catalog_table, 1)
+        return page
+
     def _build_placeholder_page(self, page_id: str) -> QWidget:
         """Build a disabled future-module page."""
 
@@ -289,6 +323,8 @@ class MainWindow(QWidget):
             self.refresh_roles()
         elif page_id == "settings":
             self.refresh_settings()
+        elif page_id == "catalog":
+            self.refresh_catalog()
 
     def refresh_users(self) -> None:
         """Refresh users table."""
@@ -300,6 +336,156 @@ class MainWindow(QWidget):
                 values = [user.get("id"), user.get("username"), user.get("full_name"), user.get("role_name"), user.get("is_active")]
                 for col, value in enumerate(values):
                     self.users_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        self._run_api(action)
+
+    def refresh_catalog(self) -> None:
+        """Refresh product catalog table."""
+
+        def action() -> None:
+            products = self.api_client.get_products(self.catalog_search.text().strip() or None)
+            self.catalog_table.setRowCount(len(products))
+            for row, product in enumerate(products):
+                values = [
+                    product.get("id"),
+                    product.get("sku") or product.get("code"),
+                    product.get("name") or product.get("name_ru"),
+                    product.get("retail_price"),
+                    product.get("is_active"),
+                ]
+                for col, value in enumerate(values):
+                    self.catalog_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        self._run_api(action)
+
+    def create_product_group_dialog(self) -> None:
+        """Create a product group."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("catalog.create_group"))
+        form = QFormLayout(dialog)
+        code = QLineEdit()
+        name_ru = QLineEdit()
+        name_tk = QLineEdit()
+        form.addRow(self.translator.text("catalog.form.code"), code)
+        form.addRow(self.translator.text("catalog.form.name_ru"), name_ru)
+        form.addRow(self.translator.text("catalog.form.name_tk"), name_tk)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._run_api(
+            lambda: self.api_client.create_product_group(
+                {
+                    "code": code.text().strip(),
+                    "name_ru": name_ru.text().strip(),
+                    "name_tk": name_tk.text().strip() or None,
+                }
+            )
+        )
+
+    def create_product_dialog(self) -> None:
+        """Create a product and optional barcode."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("catalog.create_product"))
+        form = QFormLayout(dialog)
+        code = QLineEdit()
+        name_ru = QLineEdit()
+        name_tk = QLineEdit()
+        price = QLineEdit("0")
+        barcode = QLineEdit()
+        for key, widget in (
+            ("catalog.form.code", code),
+            ("catalog.form.name_ru", name_ru),
+            ("catalog.form.name_tk", name_tk),
+            ("catalog.form.price", price),
+            ("catalog.form.barcode", barcode),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            product = self.api_client.create_product(
+                {
+                    "sku": code.text().strip(),
+                    "name": name_ru.text().strip(),
+                    "name_tk": name_tk.text().strip() or None,
+                    "retail_price": price.text().strip() or "0",
+                }
+            )
+            barcode_value = barcode.text().strip()
+            if barcode_value:
+                self.api_client.add_product_barcode(int(product["id"]), barcode_value)
+            self.refresh_catalog()
+
+        self._run_api(action)
+
+    def create_service_dialog(self) -> None:
+        """Create a service."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("catalog.create_service"))
+        form = QFormLayout(dialog)
+        code = QLineEdit()
+        name_ru = QLineEdit()
+        name_tk = QLineEdit()
+        price = QLineEdit("0")
+        for key, widget in (
+            ("catalog.form.code", code),
+            ("catalog.form.name_ru", name_ru),
+            ("catalog.form.name_tk", name_tk),
+            ("catalog.form.price", price),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._run_api(
+            lambda: self.api_client.create_service(
+                {
+                    "code": code.text().strip(),
+                    "name_ru": name_ru.text().strip(),
+                    "name_tk": name_tk.text().strip() or None,
+                    "default_price": price.text().strip() or "0",
+                }
+            )
+        )
+
+    def find_barcode_dialog(self) -> None:
+        """Find a product by barcode."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("catalog.find_barcode"))
+        form = QFormLayout(dialog)
+        barcode = QLineEdit()
+        form.addRow(self.translator.text("catalog.form.barcode"), barcode)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            product = self.api_client.find_product_by_barcode(barcode.text().strip())
+            QMessageBox.information(
+                self,
+                self.translator.text("catalog.find_barcode"),
+                json.dumps(product, indent=2, ensure_ascii=False),
+            )
 
         self._run_api(action)
 
@@ -335,10 +521,10 @@ class MainWindow(QWidget):
         password = QLineEdit()
         password.setEchoMode(QLineEdit.EchoMode.Password)
         role = QLineEdit("Cashier")
-        form.addRow("Username", username)
-        form.addRow("Full name", full_name)
-        form.addRow("Password", password)
-        form.addRow("Role", role)
+        form.addRow(self.translator.text("users.form.username"), username)
+        form.addRow(self.translator.text("users.form.full_name"), full_name)
+        form.addRow(self.translator.text("users.form.password"), password)
+        form.addRow(self.translator.text("users.form.role"), role)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -362,27 +548,27 @@ class MainWindow(QWidget):
     def simulate_scan(self) -> None:
         """Run scanner simulator."""
 
-        self.hardware_text.appendPlainText(f"Scanner: {self.hardware.scan()}")
+        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.scanner')}: {self.hardware.scan()}")
 
     def simulate_print(self) -> None:
         """Run printer simulator."""
 
-        self.hardware_text.appendPlainText(f"Printer: {self.hardware.print_receipt()}")
+        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.printer')}: {self.hardware.print_receipt()}")
 
     def simulate_drawer(self) -> None:
         """Run cash drawer simulator."""
 
-        self.hardware_text.appendPlainText(f"Drawer: {self.hardware.open_drawer()}")
+        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.drawer')}: {self.hardware.open_drawer()}")
 
     def simulate_scale(self) -> None:
         """Run scale simulator."""
 
-        self.hardware_text.appendPlainText(f"Scale: {self.hardware.read_weight()} kg")
+        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.scale')}: {self.hardware.read_weight()} kg")
 
     def simulate_fiscal(self) -> None:
         """Run fiscal-device simulator."""
 
-        self.hardware_text.appendPlainText(f"Fiscal: {self.hardware.register_operation(Decimal('0.00'))}")
+        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.fiscal')}: {self.hardware.register_operation(Decimal('0.00'))}")
 
     def _run_api(self, action: Callable[[], None]) -> None:
         """Run an API action and show a simple error dialog."""
@@ -392,10 +578,24 @@ class MainWindow(QWidget):
         except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
 
+    def _set_users_table_headers(self) -> None:
+        """Apply translated column headers to the users table."""
+
+        self.users_table.setHorizontalHeaderLabels([self.translator.text(key) for key in USER_TABLE_HEADER_KEYS])
+
+    def _set_catalog_table_headers(self) -> None:
+        """Apply translated column headers to the catalog table."""
+
+        self.catalog_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CATALOG_TABLE_HEADER_KEYS])
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
         self.setWindowTitle(self.translator.text("app.title"))
+        self._set_users_table_headers()
+        self._set_catalog_table_headers()
+        if hasattr(self, "catalog_search"):
+            self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
         user = self.api_client.current_user
         user_text = f"{user.full_name} ({user.role_name})" if user else ""
         self.status_label.setText(f"{self.translator.text('main.connected')}: {user_text}")

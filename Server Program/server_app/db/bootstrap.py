@@ -20,7 +20,7 @@ from server_app.core.constants import (
     SUPER_ADMIN_USERNAME,
 )
 from server_app.core.security import hash_password, verify_password
-from server_app.db.models import Permission, Role, RolePermission, Setting, User
+from server_app.db.models import Permission, Role, RolePermission, Setting, UnitOfMeasure, User
 from server_app.db.session import create_db_engine, create_session_factory
 from server_app.service_control import SERVICE_SQL_LOGIN_NAME
 
@@ -226,6 +226,24 @@ def seed_default_settings(session: Session) -> None:
         session.flush()
 
 
+def seed_catalog_defaults(session: Session) -> None:
+    """Ensure basic units of measure exist for the product catalog."""
+
+    defaults = (
+        ("pcs", "Штука", "Sany"),
+        ("kg", "Килограмм", "Kilogram"),
+        ("l", "Литр", "Litr"),
+    )
+    existing = {
+        row.code
+        for row in session.query(UnitOfMeasure).filter(UnitOfMeasure.code.in_([item[0] for item in defaults])).all()
+    }
+    for code, name_ru, name_tk in defaults:
+        if code not in existing:
+            session.add(UnitOfMeasure(code=code, name_ru=name_ru, name_tk=name_tk, is_active=True))
+    session.flush()
+
+
 def seed_foundation_data(session: Session) -> dict[str, Role]:
     """Seed roles, permissions, and settings needed by API v1 clients."""
 
@@ -233,6 +251,7 @@ def seed_foundation_data(session: Session) -> dict[str, Role]:
     permissions = seed_builtin_permissions(session)
     seed_role_permissions(session, roles, permissions)
     seed_default_settings(session)
+    seed_catalog_defaults(session)
     return roles
 
 

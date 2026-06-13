@@ -121,6 +121,57 @@ class ApiClient:
 
         return dict(self._request("POST", "/workplaces", json=payload))
 
+    def get_product_groups(self) -> list[dict[str, Any]]:
+        """Return product groups."""
+
+        return list(self._request("GET", "/product-groups"))
+
+    def create_product_group(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a product group."""
+
+        return dict(self._request("POST", "/product-groups", json=payload))
+
+    def get_products(self, search: str | None = None) -> list[dict[str, Any]]:
+        """Return products."""
+
+        path = "/products"
+        if search:
+            path = f"{path}?search={requests.utils.quote(search)}"
+        return list(self._request("GET", path))
+
+    def create_product(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a product."""
+
+        return dict(self._request("POST", "/products", json=payload))
+
+    def add_product_barcode(self, product_id: int, barcode: str) -> dict[str, Any]:
+        """Add a barcode to a product."""
+
+        return dict(self._request("POST", f"/products/{product_id}/barcodes", json={"barcode": barcode}))
+
+    def find_product_by_barcode(self, barcode: str) -> dict[str, Any]:
+        """Find a product by barcode."""
+
+        return dict(self._request("GET", f"/products/by-barcode/{requests.utils.quote(barcode)}"))
+
+    def get_services(self, search: str | None = None) -> list[dict[str, Any]]:
+        """Return services."""
+
+        path = "/services"
+        if search:
+            path = f"{path}?search={requests.utils.quote(search)}"
+        return list(self._request("GET", path))
+
+    def create_service(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a service."""
+
+        return dict(self._request("POST", "/services", json=payload))
+
+    def get_expense_categories(self) -> list[dict[str, Any]]:
+        """Return expense categories."""
+
+        return list(self._request("GET", "/expense-categories"))
+
     def _request(
         self,
         method: str,

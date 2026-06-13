@@ -196,6 +196,37 @@ class Warehouse(Base, ReprMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
+class ProductGroup(Base, ReprMixin, TimestampMixin):
+    """Hierarchical product group used by catalogs and reports."""
+
+    __tablename__ = "product_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("product_groups.id"), nullable=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name_ru: Mapped[str] = mapped_column(String(180), nullable=False)
+    name_tk: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    parent: Mapped["ProductGroup | None"] = relationship(remote_side="ProductGroup.id")
+    products: Mapped[list["Product"]] = relationship(back_populates="group")
+
+
+class UnitOfMeasure(Base, ReprMixin, TimestampMixin):
+    """Unit of measure such as piece, kilogram, or package."""
+
+    __tablename__ = "unit_of_measures"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(30), unique=True, nullable=False, index=True)
+    name_ru: Mapped[str] = mapped_column(String(120), nullable=False)
+    name_tk: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    products: Mapped[list["Product"]] = relationship(back_populates="base_uom")
+
+
 class Product(Base, ReprMixin, TimestampMixin):
     """Stock item that can later participate in purchases, sales, and sets."""
 
@@ -204,12 +235,59 @@ class Product(Base, ReprMixin, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     sku: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(180), nullable=False)
+    name_tk: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("product_groups.id"), nullable=True)
+    base_uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    product_type: Mapped[str] = mapped_column(String(40), default="standard", nullable=False)
     unit: Mapped[str] = mapped_column(String(30), default="pcs", nullable=False)
     retail_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     last_known_cost: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    min_stock: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=0, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    group: Mapped[ProductGroup | None] = relationship(back_populates="products")
+    base_uom: Mapped[UnitOfMeasure | None] = relationship(back_populates="products")
     set_items: Mapped[list["ProductSetItem"]] = relationship(back_populates="product")
+    uoms: Mapped[list["ProductUom"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+    )
+    barcodes: Mapped[list["ProductBarcode"]] = relationship(
+        back_populates="product",
+        cascade="all, delete-orphan",
+    )
+
+
+class ProductUom(Base, ReprMixin):
+    """Additional unit of measure for a product with conversion coefficient."""
+
+    __tablename__ = "product_uoms"
+    __table_args__ = (UniqueConstraint("product_id", "uom_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=False)
+    coefficient: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
+    is_base: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    product: Mapped[Product] = relationship(back_populates="uoms")
+    uom: Mapped[UnitOfMeasure] = relationship()
+
+
+class ProductBarcode(Base, ReprMixin):
+    """Barcode linked to a product and optionally to a product UOM."""
+
+    __tablename__ = "product_barcodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    product_uom_id: Mapped[int | None] = mapped_column(ForeignKey("product_uoms.id"), nullable=True)
+    barcode: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    is_weight_barcode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    product: Mapped[Product] = relationship(back_populates="barcodes")
+    product_uom: Mapped[ProductUom | None] = relationship()
 
 
 class ProductSet(Base, ReprMixin, TimestampMixin):
@@ -292,6 +370,53 @@ class MoneyAccount(Base, ReprMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     currency: Mapped[Currency] = relationship(back_populates="money_accounts")
+
+
+class ExpenseCategory(Base, ReprMixin, TimestampMixin):
+    """Expense category used by service purchases and operating expenses."""
+
+    __tablename__ = "expense_categories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name_ru: Mapped[str] = mapped_column(String(160), nullable=False)
+    name_tk: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    services: Mapped[list["Service"]] = relationship(back_populates="expense_category")
+
+
+class Service(Base, ReprMixin, TimestampMixin):
+    """Service or non-stock item that can appear in sale/purchase documents."""
+
+    __tablename__ = "services"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    name_ru: Mapped[str] = mapped_column(String(180), nullable=False)
+    name_tk: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    service_type: Mapped[str] = mapped_column(String(40), default="sale", nullable=False)
+    expense_category_id: Mapped[int | None] = mapped_column(ForeignKey("expense_categories.id"), nullable=True)
+    default_price: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    expense_category: Mapped[ExpenseCategory | None] = relationship(back_populates="services")
+    barcodes: Mapped[list["ServiceBarcode"]] = relationship(
+        back_populates="service",
+        cascade="all, delete-orphan",
+    )
+
+
+class ServiceBarcode(Base, ReprMixin):
+    """Barcode linked to a service."""
+
+    __tablename__ = "service_barcodes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service_id: Mapped[int] = mapped_column(ForeignKey("services.id"), nullable=False)
+    barcode: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+
+    service: Mapped[Service] = relationship(back_populates="barcodes")
 
 
 class InventoryRevision(Base, ReprMixin, TimestampMixin):

@@ -10,6 +10,7 @@ from unittest.mock import Mock
 
 from user_app.api.client import ApiClient
 from user_app.core.config import ClientConfig, ClientConfigManager, normalize_server_url
+from user_app.core.i18n import TRANSLATIONS, Translator
 from user_app.hardware.simulator import HardwareSimulator
 
 
@@ -34,6 +35,55 @@ class ClientCoreTests(unittest.TestCase):
 
         self.assertEqual(loaded.server_url, "http://server:8000/api/v1")
         self.assertEqual(loaded.language, "tk")
+
+    def test_config_manager_roundtrips_english_language(self) -> None:
+        """English language preference should persist in config."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            manager = ClientConfigManager(path)
+            manager.save(ClientConfig(server_url="http://server:8000/api/v1", language="en"))
+
+            loaded = manager.load()
+
+        self.assertEqual(loaded.language, "en")
+
+    def test_config_manager_rejects_invalid_language(self) -> None:
+        """Unknown language codes should fall back to Russian."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "config.json"
+            path.write_text('{"server_url": "http://server:8000/api/v1", "language": "fr"}', encoding="utf-8")
+            loaded = ClientConfigManager(path).load()
+
+        self.assertEqual(loaded.language, "ru")
+
+    def test_translator_returns_english_strings(self) -> None:
+        """Translator should return English labels when language is en."""
+
+        translator = Translator("en")
+
+        self.assertEqual(translator.text("login.title"), "Sign in")
+        self.assertEqual(translator.text("nav.dashboard"), "Dashboard")
+
+    def test_translator_switches_language(self) -> None:
+        """Translator should update labels after set_language."""
+
+        translator = Translator("ru")
+        translator.set_language("en")
+
+        self.assertEqual(translator.language, "en")
+        self.assertEqual(translator.text("common.error"), "Error")
+
+    def test_translation_key_parity_across_languages(self) -> None:
+        """All supported languages should define the same translation keys."""
+
+        ru_keys = set(TRANSLATIONS["ru"])
+        tk_keys = set(TRANSLATIONS["tk"])
+        en_keys = set(TRANSLATIONS["en"])
+
+        self.assertEqual(ru_keys, tk_keys)
+        self.assertEqual(ru_keys, en_keys)
 
     def test_api_client_login_parses_envelope(self) -> None:
         """The API client should parse successful login envelopes."""
@@ -65,6 +115,28 @@ class ClientCoreTests(unittest.TestCase):
         self.assertEqual(client.session_token, "token")
         self.assertEqual(user.username, "super_admin")
         self.assertEqual(user.permissions, ["admin.manage_users"])
+
+    def test_api_client_catalog_helpers_use_envelopes(self) -> None:
+        """Catalog helpers should return envelope data."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 1, "sku": "P-001", "name": "Sugar"}],
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        products = client.get_products("Sugar")
+
+        self.assertEqual(products[0]["sku"], "P-001")
+        called_url = client.session.request.call_args.args[1]
+        self.assertIn("/products?search=Sugar", called_url)
 
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""

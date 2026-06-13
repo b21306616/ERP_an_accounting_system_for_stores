@@ -7,7 +7,7 @@ import sys
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from user_app.api.client import ApiClient, ApiClientError
-from user_app.core.config import ClientConfig, ClientConfigManager, normalize_server_url
+from user_app.core.config import ClientConfig, ClientConfigManager, SUPPORTED_LANGUAGES, normalize_server_url
 from user_app.core.i18n import Translator
 from user_app.ui.login_window import LoginWindow
 from user_app.ui.main_window import MainWindow
@@ -76,7 +76,7 @@ class ClientApplicationCoordinator:
     def handle_language_changed(self, language: str) -> None:
         """Switch UI language and save local preference."""
 
-        if language not in {"ru", "tk"}:
+        if language not in SUPPORTED_LANGUAGES:
             return
         self.translator.set_language(language)  # type: ignore[arg-type]
         self.config.language = self.translator.language

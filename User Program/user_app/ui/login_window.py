@@ -103,6 +103,7 @@ class LoginWindow(QWidget):
         self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.language_combo.addItem("Русский", "ru")
         self.language_combo.addItem("Türkmençe", "tk")
+        self.language_combo.addItem("English", "en")
         index = self.language_combo.findData(self.config.language)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)

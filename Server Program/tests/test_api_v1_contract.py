@@ -160,6 +160,72 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertTrue(created.json()["success"])
         self.assertEqual(created.json()["data"]["username"], "cashier1")
 
+    def test_catalog_endpoints_create_products_services_and_barcodes(self) -> None:
+        """Catalog endpoints should create and find products/services."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        uoms = requests.get(f"{self.base_url}/unit-of-measures", headers=headers, timeout=2)
+        self.assertEqual(uoms.status_code, 200)
+        self.assertTrue(any(row["code"] == "pcs" for row in uoms.json()["data"]))
+
+        group = requests.post(
+            f"{self.base_url}/product-groups",
+            json={"code": "G-FOOD", "name_ru": "Food", "name_tk": "Iymit"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(group.status_code, 201)
+        group_id = group.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={
+                "sku": "P-001",
+                "name": "Sugar",
+                "name_tk": "Seker",
+                "group_id": group_id,
+                "retail_price": "12.50",
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        barcode = requests.post(
+            f"{self.base_url}/products/{product_id}/barcodes",
+            json={"barcode": "4600000000017"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(barcode.status_code, 201)
+
+        found = requests.get(
+            f"{self.base_url}/products/by-barcode/4600000000017",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(found.status_code, 200)
+        self.assertEqual(found.json()["data"]["sku"], "P-001")
+
+        category = requests.post(
+            f"{self.base_url}/expense-categories",
+            json={"code": "EXP-OPS", "name_ru": "Operations"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(category.status_code, 201)
+
+        service = requests.post(
+            f"{self.base_url}/services",
+            json={"code": "S-DELIVERY", "name_ru": "Delivery", "default_price": "5.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(service.status_code, 201)
+
 
 if __name__ == "__main__":
     unittest.main()

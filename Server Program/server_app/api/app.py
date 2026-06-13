@@ -9,7 +9,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
-from server_app.api import routers_auth, routers_foundation, routers_system, routers_users, routers_v1
+from server_app.api import (
+    routers_auth,
+    routers_catalog_v1,
+    routers_foundation,
+    routers_system,
+    routers_users,
+    routers_v1,
+)
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
 
@@ -71,5 +78,6 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
     app.include_router(routers_users.router)
     app.include_router(routers_foundation.router)
     app.include_router(routers_v1.router)
+    app.include_router(routers_catalog_v1.router)
 
     return app

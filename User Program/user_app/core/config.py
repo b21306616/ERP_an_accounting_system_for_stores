@@ -9,7 +9,8 @@ from pathlib import Path
 from typing import Literal
 
 
-LanguageCode = Literal["ru", "tk"]
+LanguageCode = Literal["ru", "tk", "en"]
+SUPPORTED_LANGUAGES = frozenset({"ru", "tk", "en"})
 APP_DATA_DIR_NAME = "ERPAccountingUser"
 CONFIG_FILE_NAME = "config.json"
 DEFAULT_SERVER_URL = "http://127.0.0.1:8000/api/v1"
@@ -59,7 +60,7 @@ class ClientConfigManager:
             return ClientConfig()
 
         language = data.get("language", "ru")
-        if language not in {"ru", "tk"}:
+        if language not in SUPPORTED_LANGUAGES:
             language = "ru"
         return ClientConfig(
             server_url=str(data.get("server_url") or DEFAULT_SERVER_URL),
