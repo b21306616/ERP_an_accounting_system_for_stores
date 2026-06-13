@@ -226,6 +226,143 @@ class ApiV1ContractTests(unittest.TestCase):
         )
         self.assertEqual(service.status_code, 201)
 
+    def test_warehouse_endpoints_post_inventory_transfer_and_writeoff(self) -> None:
+        """Warehouse endpoints should maintain balances through posted documents."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        source = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-SRC", "name": "Source warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(source.status_code, 201)
+        source_id = source.json()["data"]["id"]
+
+        target = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-DST", "name": "Target warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(target.status_code, 201)
+        target_id = target.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-WH-001", "name": "Warehouse Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        inventory = requests.post(
+            f"{self.base_url}/inventories",
+            json={
+                "warehouse_id": source_id,
+                "lines": [{"product_id": product_id, "qty_actual": "10.000", "unit_cost_tmt": "2.50"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(inventory.status_code, 201)
+        inventory_id = inventory.json()["data"]["id"]
+
+        posted_inventory = requests.post(
+            f"{self.base_url}/inventories/{inventory_id}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_inventory.status_code, 200)
+        self.assertEqual(posted_inventory.json()["data"]["status"], "posted")
+
+        balances = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": source_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(balances.status_code, 200)
+        self.assertEqual(balances.json()["data"][0]["quantity"], "10.000")
+        self.assertEqual(balances.json()["data"][0]["avg_cost_tmt"], "2.50")
+
+        transfer = requests.post(
+            f"{self.base_url}/stock-transfers",
+            json={
+                "source_warehouse_id": source_id,
+                "target_warehouse_id": target_id,
+                "lines": [{"product_id": product_id, "quantity": "4.000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(transfer.status_code, 201)
+        transfer_id = transfer.json()["data"]["id"]
+
+        sent = requests.post(f"{self.base_url}/stock-transfers/{transfer_id}/send", headers=headers, timeout=2)
+        self.assertEqual(sent.status_code, 200)
+        self.assertEqual(sent.json()["data"]["status"], "in_transit")
+
+        received = requests.post(f"{self.base_url}/stock-transfers/{transfer_id}/receive", headers=headers, timeout=2)
+        self.assertEqual(received.status_code, 200)
+        self.assertEqual(received.json()["data"]["status"], "received")
+
+        source_balance = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": source_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        target_balance = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": target_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(source_balance.json()["data"][0]["quantity"], "6.000")
+        self.assertEqual(target_balance.json()["data"][0]["quantity"], "4.000")
+
+        writeoff = requests.post(
+            f"{self.base_url}/stock-writeoffs",
+            json={
+                "warehouse_id": target_id,
+                "reason_code": "damage",
+                "lines": [{"product_id": product_id, "quantity": "2.000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(writeoff.status_code, 201)
+        posted_writeoff = requests.post(
+            f"{self.base_url}/stock-writeoffs/{writeoff.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_writeoff.status_code, 200)
+        self.assertEqual(posted_writeoff.json()["data"]["status"], "posted")
+
+        failing_writeoff = requests.post(
+            f"{self.base_url}/stock-writeoffs",
+            json={
+                "warehouse_id": target_id,
+                "reason_code": "damage",
+                "lines": [{"product_id": product_id, "quantity": "99.000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(failing_writeoff.status_code, 201)
+        rejected = requests.post(
+            f"{self.base_url}/stock-writeoffs/{failing_writeoff.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(rejected.json()["error"]["code"], "INSUFFICIENT_STOCK")
+
 
 if __name__ == "__main__":
     unittest.main()

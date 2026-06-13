@@ -138,6 +138,28 @@ class ClientCoreTests(unittest.TestCase):
         called_url = client.session.request.call_args.args[1]
         self.assertIn("/products?search=Sugar", called_url)
 
+    def test_api_client_warehouse_helpers_use_query_params(self) -> None:
+        """Warehouse helpers should return envelope data and query by ids."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": [{"warehouse_id": 2, "product_id": 3, "quantity": "5.000"}],
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        balances = client.get_stock_balances(warehouse_id=2, product_id=3)
+
+        self.assertEqual(balances[0]["quantity"], "5.000")
+        called_url = client.session.request.call_args.args[1]
+        self.assertIn("/stock/balances?warehouse_id=2&product_id=3", called_url)
+
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""
 

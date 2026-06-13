@@ -195,6 +195,8 @@ class Warehouse(Base, ReprMixin, TimestampMixin):
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    stock_balances: Mapped[list["StockBalance"]] = relationship(back_populates="warehouse")
+
 
 class ProductGroup(Base, ReprMixin, TimestampMixin):
     """Hierarchical product group used by catalogs and reports."""
@@ -417,6 +419,167 @@ class ServiceBarcode(Base, ReprMixin):
     barcode: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
 
     service: Mapped[Service] = relationship(back_populates="barcodes")
+
+
+class StockBalance(Base, ReprMixin, TimestampMixin):
+    """Current stock balance for one product at one warehouse."""
+
+    __tablename__ = "stock_balances"
+    __table_args__ = (UniqueConstraint("warehouse_id", "product_id", "uom_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=0, nullable=False)
+    avg_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+
+    warehouse: Mapped[Warehouse] = relationship(back_populates="stock_balances")
+    product: Mapped[Product] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+
+
+class StockMovement(Base, ReprMixin):
+    """Immutable stock movement journal row."""
+
+    __tablename__ = "stock_movements"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    movement_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    document_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    unit_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    movement_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    warehouse: Mapped[Warehouse] = relationship()
+    product: Mapped[Product] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+    created_by_user: Mapped[User | None] = relationship()
+
+
+class StockTransfer(Base, ReprMixin, TimestampMixin):
+    """Two-step transfer between warehouses."""
+
+    __tablename__ = "stock_transfers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    target_warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sent_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    received_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    rejected_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    source_warehouse: Mapped[Warehouse] = relationship(foreign_keys=[source_warehouse_id])
+    target_warehouse: Mapped[Warehouse] = relationship(foreign_keys=[target_warehouse_id])
+    lines: Mapped[list["StockTransferLine"]] = relationship(
+        back_populates="transfer",
+        cascade="all, delete-orphan",
+    )
+
+
+class StockTransferLine(Base, ReprMixin):
+    """Line inside a warehouse transfer."""
+
+    __tablename__ = "stock_transfer_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transfer_id: Mapped[int] = mapped_column(ForeignKey("stock_transfers.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    unit_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+
+    transfer: Mapped[StockTransfer] = relationship(back_populates="lines")
+    product: Mapped[Product] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+
+
+class StockWriteoff(Base, ReprMixin, TimestampMixin):
+    """Warehouse write-off document."""
+
+    __tablename__ = "stock_writeoffs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    reason_code: Mapped[str] = mapped_column(String(40), default="other", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    warehouse: Mapped[Warehouse] = relationship()
+    lines: Mapped[list["StockWriteoffLine"]] = relationship(
+        back_populates="writeoff",
+        cascade="all, delete-orphan",
+    )
+
+
+class StockWriteoffLine(Base, ReprMixin):
+    """Line inside a warehouse write-off."""
+
+    __tablename__ = "stock_writeoff_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    writeoff_id: Mapped[int] = mapped_column(ForeignKey("stock_writeoffs.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 3), nullable=False)
+    unit_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+
+    writeoff: Mapped[StockWriteoff] = relationship(back_populates="lines")
+    product: Mapped[Product] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+
+
+class Inventory(Base, ReprMixin, TimestampMixin):
+    """Inventory count document for one warehouse."""
+
+    __tablename__ = "inventories"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="draft", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    warehouse: Mapped[Warehouse] = relationship()
+    lines: Mapped[list["InventoryLine"]] = relationship(
+        back_populates="inventory",
+        cascade="all, delete-orphan",
+    )
+
+
+class InventoryLine(Base, ReprMixin):
+    """Line inside an inventory count."""
+
+    __tablename__ = "inventory_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    inventory_id: Mapped[int] = mapped_column(ForeignKey("inventories.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    qty_expected: Mapped[Decimal] = mapped_column(Numeric(18, 3), default=0, nullable=False)
+    qty_actual: Mapped[Decimal | None] = mapped_column(Numeric(18, 3), nullable=True)
+    unit_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+
+    inventory: Mapped[Inventory] = relationship(back_populates="lines")
+    product: Mapped[Product] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
 
 
 class InventoryRevision(Base, ReprMixin, TimestampMixin):

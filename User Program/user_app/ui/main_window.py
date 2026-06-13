@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from user_app.api.client import ApiClient, ApiClientError
-from user_app.core.i18n import CATALOG_TABLE_HEADER_KEYS, USER_TABLE_HEADER_KEYS, Translator
+from user_app.core.i18n import CATALOG_TABLE_HEADER_KEYS, USER_TABLE_HEADER_KEYS, WAREHOUSE_TABLE_HEADER_KEYS, Translator
 from user_app.hardware.simulator import HardwareSimulator
 
 
@@ -143,7 +143,8 @@ class MainWindow(QWidget):
         self._add_page("settings", self._build_settings_page())
         self._add_page("hardware", self._build_hardware_page())
         self._add_page("catalog", self._build_catalog_page())
-        for page_id in ("warehouse", "purchase", "pricing", "sales", "cashier", "reports"):
+        self._add_page("warehouse", self._build_warehouse_page())
+        for page_id in ("purchase", "pricing", "sales", "cashier", "reports"):
             self._add_page(page_id, self._build_placeholder_page(page_id))
 
         self.nav.setCurrentRow(0)
@@ -292,6 +293,43 @@ class MainWindow(QWidget):
         layout.addWidget(self.catalog_table, 1)
         return page
 
+    def _build_warehouse_page(self) -> QWidget:
+        """Build warehouse balances and document actions page."""
+
+        page, layout, _title = self._page("warehouse.title")
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "warehouse.refresh")
+        refresh.clicked.connect(self.refresh_warehouse)
+        create_warehouse = QPushButton()
+        create_warehouse.setProperty("textKey", "warehouse.create_warehouse")
+        create_warehouse.clicked.connect(self.create_warehouse_dialog)
+        opening_inventory = QPushButton()
+        opening_inventory.setProperty("textKey", "warehouse.opening_inventory")
+        opening_inventory.clicked.connect(self.opening_inventory_dialog)
+        transfer = QPushButton()
+        transfer.setProperty("textKey", "warehouse.transfer")
+        transfer.clicked.connect(self.transfer_dialog)
+        writeoff = QPushButton()
+        writeoff.setProperty("textKey", "warehouse.writeoff")
+        writeoff.clicked.connect(self.writeoff_dialog)
+        for widget in (refresh, create_warehouse, opening_inventory, transfer, writeoff):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+
+        self.warehouse_table = QTableWidget(0, len(WAREHOUSE_TABLE_HEADER_KEYS))
+        self._set_warehouse_table_headers()
+        self.warehouse_movements_text = QPlainTextEdit()
+        self.warehouse_movements_text.setReadOnly(True)
+        self.warehouse_movements_text.setMinimumHeight(150)
+        layout.addLayout(action_row)
+        layout.addWidget(self.warehouse_table, 1)
+        movements_label = QLabel(self.translator.text("warehouse.movements"))
+        movements_label.setProperty("bodyKey", "warehouse.movements")
+        layout.addWidget(movements_label)
+        layout.addWidget(self.warehouse_movements_text)
+        return page
+
     def _build_placeholder_page(self, page_id: str) -> QWidget:
         """Build a disabled future-module page."""
 
@@ -325,6 +363,8 @@ class MainWindow(QWidget):
             self.refresh_settings()
         elif page_id == "catalog":
             self.refresh_catalog()
+        elif page_id == "warehouse":
+            self.refresh_warehouse()
 
     def refresh_users(self) -> None:
         """Refresh users table."""
@@ -355,6 +395,27 @@ class MainWindow(QWidget):
                 ]
                 for col, value in enumerate(values):
                     self.catalog_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        self._run_api(action)
+
+    def refresh_warehouse(self) -> None:
+        """Refresh warehouse balances and movement log."""
+
+        def action() -> None:
+            balances = self.api_client.get_stock_balances()
+            self.warehouse_table.setRowCount(len(balances))
+            for row, balance in enumerate(balances):
+                values = [
+                    balance.get("id"),
+                    balance.get("warehouse_name") or balance.get("warehouse_code"),
+                    balance.get("product_name") or balance.get("product_sku"),
+                    balance.get("quantity"),
+                    balance.get("avg_cost_tmt"),
+                ]
+                for col, value in enumerate(values):
+                    self.warehouse_table.setItem(row, col, QTableWidgetItem(str(value)))
+            movements = self.api_client.get_stock_movements()
+            self.warehouse_movements_text.setPlainText(json.dumps(movements, indent=2, ensure_ascii=False))
 
         self._run_api(action)
 
@@ -489,6 +550,165 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
+    def create_warehouse_dialog(self) -> None:
+        """Create a warehouse."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("warehouse.create_warehouse"))
+        form = QFormLayout(dialog)
+        code = QLineEdit()
+        name = QLineEdit()
+        location = QLineEdit()
+        form.addRow(self.translator.text("warehouse.form.code"), code)
+        form.addRow(self.translator.text("warehouse.form.name"), name)
+        form.addRow(self.translator.text("warehouse.form.location"), location)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.create_warehouse(
+                {
+                    "code": code.text().strip(),
+                    "name": name.text().strip(),
+                    "location": location.text().strip() or None,
+                }
+            )
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
+    def opening_inventory_dialog(self) -> None:
+        """Create and post an opening inventory line."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("warehouse.opening_inventory"))
+        form = QFormLayout(dialog)
+        warehouse_id = QLineEdit()
+        product_id = QLineEdit()
+        qty_actual = QLineEdit("0")
+        unit_cost = QLineEdit("0")
+        for key, widget in (
+            ("warehouse.form.warehouse_id", warehouse_id),
+            ("warehouse.form.product_id", product_id),
+            ("warehouse.form.quantity", qty_actual),
+            ("warehouse.form.unit_cost", unit_cost),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            inventory = self.api_client.create_inventory(
+                {
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "qty_actual": qty_actual.text().strip() or "0",
+                            "unit_cost_tmt": unit_cost.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.api_client.post_inventory(int(inventory["id"]))
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
+    def transfer_dialog(self) -> None:
+        """Create, send, and receive a one-line stock transfer."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("warehouse.transfer"))
+        form = QFormLayout(dialog)
+        source_warehouse_id = QLineEdit()
+        target_warehouse_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("0")
+        for key, widget in (
+            ("warehouse.form.source_warehouse_id", source_warehouse_id),
+            ("warehouse.form.target_warehouse_id", target_warehouse_id),
+            ("warehouse.form.product_id", product_id),
+            ("warehouse.form.quantity", quantity),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            transfer = self.api_client.create_stock_transfer(
+                {
+                    "source_warehouse_id": int(source_warehouse_id.text().strip()),
+                    "target_warehouse_id": int(target_warehouse_id.text().strip()),
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "quantity": quantity.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            transfer_id = int(transfer["id"])
+            self.api_client.send_stock_transfer(transfer_id)
+            self.api_client.receive_stock_transfer(transfer_id)
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
+    def writeoff_dialog(self) -> None:
+        """Create and post a one-line write-off."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("warehouse.writeoff"))
+        form = QFormLayout(dialog)
+        warehouse_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("0")
+        reason = QLineEdit("other")
+        for key, widget in (
+            ("warehouse.form.warehouse_id", warehouse_id),
+            ("warehouse.form.product_id", product_id),
+            ("warehouse.form.quantity", quantity),
+            ("warehouse.form.reason", reason),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            writeoff = self.api_client.create_stock_writeoff(
+                {
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                    "reason_code": reason.text().strip() or "other",
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "quantity": quantity.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.api_client.post_stock_writeoff(int(writeoff["id"]))
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
     def refresh_roles(self) -> None:
         """Refresh roles."""
 
@@ -588,12 +808,18 @@ class MainWindow(QWidget):
 
         self.catalog_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CATALOG_TABLE_HEADER_KEYS])
 
+    def _set_warehouse_table_headers(self) -> None:
+        """Apply translated column headers to the warehouse table."""
+
+        self.warehouse_table.setHorizontalHeaderLabels([self.translator.text(key) for key in WAREHOUSE_TABLE_HEADER_KEYS])
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
         self.setWindowTitle(self.translator.text("app.title"))
         self._set_users_table_headers()
         self._set_catalog_table_headers()
+        self._set_warehouse_table_headers()
         if hasattr(self, "catalog_search"):
             self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
         user = self.api_client.current_user

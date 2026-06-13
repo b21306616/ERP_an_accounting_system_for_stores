@@ -16,6 +16,7 @@ from server_app.api import (
     routers_system,
     routers_users,
     routers_v1,
+    routers_warehouse_v1,
 )
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
@@ -79,5 +80,6 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
     app.include_router(routers_foundation.router)
     app.include_router(routers_v1.router)
     app.include_router(routers_catalog_v1.router)
+    app.include_router(routers_warehouse_v1.router)
 
     return app

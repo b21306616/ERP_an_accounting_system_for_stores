@@ -172,6 +172,108 @@ class ApiClient:
 
         return list(self._request("GET", "/expense-categories"))
 
+    def get_warehouses(self) -> list[dict[str, Any]]:
+        """Return warehouses."""
+
+        return list(self._request("GET", "/warehouses"))
+
+    def create_warehouse(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a warehouse."""
+
+        return dict(self._request("POST", "/warehouses", json=payload))
+
+    def get_stock_balances(
+        self,
+        warehouse_id: int | None = None,
+        product_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return stock balances."""
+
+        return list(
+            self._request(
+                "GET",
+                self._path_with_params(
+                    "/stock/balances",
+                    {"warehouse_id": warehouse_id, "product_id": product_id},
+                ),
+            )
+        )
+
+    def get_stock_movements(
+        self,
+        warehouse_id: int | None = None,
+        product_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return recent stock movements."""
+
+        return list(
+            self._request(
+                "GET",
+                self._path_with_params(
+                    "/stock/movements",
+                    {"warehouse_id": warehouse_id, "product_id": product_id},
+                ),
+            )
+        )
+
+    def create_inventory(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create an inventory document."""
+
+        return dict(self._request("POST", "/inventories", json=payload))
+
+    def replace_inventory_lines(self, inventory_id: int, lines: list[dict[str, Any]]) -> dict[str, Any]:
+        """Replace counted inventory lines."""
+
+        return dict(self._request("PUT", f"/inventories/{inventory_id}/lines", json={"lines": lines}))
+
+    def post_inventory(self, inventory_id: int) -> dict[str, Any]:
+        """Post an inventory document."""
+
+        return dict(self._request("POST", f"/inventories/{inventory_id}/post"))
+
+    def create_stock_transfer(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a stock transfer."""
+
+        return dict(self._request("POST", "/stock-transfers", json=payload))
+
+    def send_stock_transfer(self, transfer_id: int) -> dict[str, Any]:
+        """Send a stock transfer."""
+
+        return dict(self._request("POST", f"/stock-transfers/{transfer_id}/send"))
+
+    def receive_stock_transfer(self, transfer_id: int) -> dict[str, Any]:
+        """Receive a stock transfer."""
+
+        return dict(self._request("POST", f"/stock-transfers/{transfer_id}/receive"))
+
+    def reject_stock_transfer(self, transfer_id: int) -> dict[str, Any]:
+        """Reject a stock transfer."""
+
+        return dict(self._request("POST", f"/stock-transfers/{transfer_id}/reject"))
+
+    def create_stock_writeoff(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a stock write-off."""
+
+        return dict(self._request("POST", "/stock-writeoffs", json=payload))
+
+    def post_stock_writeoff(self, writeoff_id: int) -> dict[str, Any]:
+        """Post a stock write-off."""
+
+        return dict(self._request("POST", f"/stock-writeoffs/{writeoff_id}/post"))
+
+    def cancel_stock_writeoff(self, writeoff_id: int) -> dict[str, Any]:
+        """Cancel a stock write-off."""
+
+        return dict(self._request("POST", f"/stock-writeoffs/{writeoff_id}/cancel"))
+
+    def _path_with_params(self, path: str, params: dict[str, Any]) -> str:
+        """Append URL query parameters, skipping empty values."""
+
+        clean = {key: value for key, value in params.items() if value is not None and value != ""}
+        if not clean:
+            return path
+        return f"{path}?{requests.compat.urlencode(clean)}"
+
     def _request(
         self,
         method: str,
