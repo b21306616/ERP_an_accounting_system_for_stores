@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from server_app.api.dependencies import get_db
 from server_app.api.routers_v1 import error_detail, require_v1_permission, success_response
 from server_app.db.models import (
+    CashShift,
     Counterparty,
     CounterpartyCategory,
     Currency,
@@ -26,6 +27,7 @@ from server_app.db.models import (
     ProductUom,
     PurchaseInvoice,
     PurchaseInvoiceLine,
+    Sale,
     Service,
     UnitOfMeasure,
     User,
@@ -272,6 +274,7 @@ def _payment_payload(payment: Payment) -> dict[str, Any]:
         "currency_id": payment.currency_id,
         "amount_cur": _decimal(payment.amount_cur, "0.01") if payment.amount_cur is not None else None,
         "currency_rate": _decimal(payment.currency_rate, "0.000001") if payment.currency_rate is not None else None,
+        "cash_shift_id": payment.cash_shift_id,
         "status": payment.status,
         "note": payment.note,
         "allocations": [
@@ -790,6 +793,10 @@ def create_payment(
     _ensure_active_counterparty(session, payload.counterparty_id)
     if payload.currency_id is not None:
         _ensure_active_currency(session, payload.currency_id)
+    if payload.cash_shift_id is not None:
+        shift = _get_or_404(session, CashShift, payload.cash_shift_id, "Cash shift")
+        if shift.status != "open":
+            raise HTTPException(status_code=400, detail=error_detail("SHIFT_CLOSED", "Payment cash shift is not open."))
     allocation_total = money(sum((allocation.allocated_amount for allocation in payload.allocations), Decimal("0")))
     if allocation_total > money(payload.amount_tmt):
         raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_EXCEEDS_PAYMENT", "Allocations cannot exceed payment amount."))
@@ -806,17 +813,23 @@ def create_payment(
         currency_id=payload.currency_id,
         amount_cur=money(payload.amount_cur) if payload.amount_cur is not None else None,
         currency_rate=payload.currency_rate,
+        cash_shift_id=payload.cash_shift_id,
         note=payload.note,
         created_by_user_id=current_user.id,
     )
     session.add(payment)
     session.flush()
     for allocation in payload.allocations:
-        if allocation.doc_type != "purchase_invoice":
-            raise HTTPException(status_code=400, detail=error_detail("UNSUPPORTED_ALLOCATION", "Only purchase_invoice allocations are supported in this layer."))
-        invoice = _get_or_404(session, PurchaseInvoice, allocation.doc_id, "Purchase invoice")
-        if invoice.counterparty_id != payment.counterparty_id:
-            raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_COUNTERPARTY_MISMATCH", "Allocation document belongs to another counterparty."))
+        if allocation.doc_type == "purchase_invoice":
+            invoice = _get_or_404(session, PurchaseInvoice, allocation.doc_id, "Purchase invoice")
+            if invoice.counterparty_id != payment.counterparty_id:
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_COUNTERPARTY_MISMATCH", "Allocation document belongs to another counterparty."))
+        elif allocation.doc_type == "sale":
+            sale = _get_or_404(session, Sale, allocation.doc_id, "Sale")
+            if sale.counterparty_id != payment.counterparty_id:
+                raise HTTPException(status_code=400, detail=error_detail("ALLOCATION_COUNTERPARTY_MISMATCH", "Allocation document belongs to another counterparty."))
+        else:
+            raise HTTPException(status_code=400, detail=error_detail("UNSUPPORTED_ALLOCATION", "Only purchase_invoice and sale allocations are supported."))
         payment.allocations.append(
             PaymentAllocation(
                 doc_type=allocation.doc_type,
@@ -824,7 +837,8 @@ def create_payment(
                 allocated_amount=money(allocation.allocated_amount),
             )
         )
-        update_purchase_invoice_payment_status(session, invoice)
+        if allocation.doc_type == "purchase_invoice":
+            update_purchase_invoice_payment_status(session, invoice)
 
     debt_type = "payable" if payment.direction == "outgoing" else "receivable"
     post_debt_entry(

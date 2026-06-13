@@ -199,6 +199,61 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/purchase-invoices/7/cancel", requested_paths[2])
         self.assertIn("/payments", requested_paths[3])
 
+    def test_api_client_sales_cashier_report_helpers_use_envelopes(self) -> None:
+        """Sales, cashier, and report helpers should return envelope data."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 3, "status": "open"}],
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        shifts = client.get_cash_shifts("open")
+
+        self.assertEqual(shifts[0]["status"], "open")
+        called_url = client.session.request.call_args.args[1]
+        self.assertIn("/cash-shifts?status=open", called_url)
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 9, "doc_number": "SAL-000001"},
+            "error": None,
+            "meta": None,
+        }
+        sale = client.create_sale({"warehouse_id": 1, "currency_id": 1, "lines": []})
+        client.post_sale(sale["id"])
+        client.cancel_sale(sale["id"])
+        client.create_cash_register({"name": "Register", "warehouse_id": 1})
+        client.open_cash_shift({"cash_register_id": 1, "opening_amount": "0"})
+        client.close_cash_shift(3, {"closing_amount": "0"})
+        client.create_cash_operation({"cash_shift_id": 3, "cash_register_from_id": 1, "operation_type": "collection", "amount_tmt": "1.00"})
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"sales_total_tmt": "30.00"},
+            "error": None,
+            "meta": None,
+        }
+        report = client.get_sales_report()
+
+        self.assertEqual(report["sales_total_tmt"], "30.00")
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-8:]]
+        self.assertIn("/sales", requested_paths[0])
+        self.assertIn("/sales/9/post", requested_paths[1])
+        self.assertIn("/sales/9/cancel", requested_paths[2])
+        self.assertIn("/cash-registers", requested_paths[3])
+        self.assertIn("/cash-shifts/open", requested_paths[4])
+        self.assertIn("/cash-shifts/3/close", requested_paths[5])
+        self.assertIn("/cash-operations", requested_paths[6])
+        self.assertIn("/reports/sales", requested_paths[7])
+
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""
 

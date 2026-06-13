@@ -196,6 +196,66 @@ class Warehouse(Base, ReprMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     stock_balances: Mapped[list["StockBalance"]] = relationship(back_populates="warehouse")
+    cash_registers: Mapped[list["CashRegister"]] = relationship(back_populates="warehouse")
+
+
+class CashRegister(Base, ReprMixin, TimestampMixin):
+    """Cash register/workplace bound to one warehouse."""
+
+    __tablename__ = "cash_registers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    warehouse: Mapped[Warehouse] = relationship(back_populates="cash_registers")
+    shifts: Mapped[list["CashShift"]] = relationship(back_populates="cash_register")
+    sales: Mapped[list["Sale"]] = relationship(back_populates="cash_register")
+
+
+class CashShift(Base, ReprMixin):
+    """Cashier shift opened on one cash register."""
+
+    __tablename__ = "cash_shifts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cash_register_id: Mapped[int] = mapped_column(ForeignKey("cash_registers.id"), nullable=False, index=True)
+    opened_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    closed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    opening_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    closing_amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
+    status: Mapped[str] = mapped_column(String(10), default="open", nullable=False, index=True)
+
+    cash_register: Mapped[CashRegister] = relationship(back_populates="shifts")
+    opened_by_user: Mapped[User | None] = relationship(foreign_keys=[opened_by_user_id])
+    closed_by_user: Mapped[User | None] = relationship(foreign_keys=[closed_by_user_id])
+    sales: Mapped[list["Sale"]] = relationship(back_populates="cash_shift")
+    cash_operations: Mapped[list["CashOperation"]] = relationship(back_populates="cash_shift")
+
+
+class CashOperation(Base, ReprMixin, TimestampMixin):
+    """Manual cash collection or transfer inside a shift."""
+
+    __tablename__ = "cash_operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    doc_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    cash_shift_id: Mapped[int] = mapped_column(ForeignKey("cash_shifts.id"), nullable=False)
+    cash_register_from_id: Mapped[int] = mapped_column(ForeignKey("cash_registers.id"), nullable=False)
+    cash_register_to_id: Mapped[int | None] = mapped_column(ForeignKey("cash_registers.id"), nullable=True)
+    operation_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    cash_shift: Mapped[CashShift] = relationship(back_populates="cash_operations")
+    cash_register_from: Mapped[CashRegister] = relationship(foreign_keys=[cash_register_from_id])
+    cash_register_to: Mapped[CashRegister | None] = relationship(foreign_keys=[cash_register_to_id])
+    created_by_user: Mapped[User | None] = relationship()
 
 
 class ProductGroup(Base, ReprMixin, TimestampMixin):
@@ -349,6 +409,7 @@ class Counterparty(Base, ReprMixin, TimestampMixin):
     price_list: Mapped["PriceList | None"] = relationship(back_populates="counterparties")
     contracts: Mapped[list["Contract"]] = relationship(back_populates="counterparty")
     purchase_invoices: Mapped[list["PurchaseInvoice"]] = relationship(back_populates="counterparty")
+    sales: Mapped[list["Sale"]] = relationship(back_populates="counterparty")
     debt_entries: Mapped[list["DebtLedger"]] = relationship(back_populates="counterparty")
     payments: Mapped[list["Payment"]] = relationship(back_populates="counterparty")
 
@@ -641,6 +702,7 @@ class PriceList(Base, ReprMixin, TimestampMixin):
         cascade="all, delete-orphan",
     )
     counterparties: Mapped[list[Counterparty]] = relationship(back_populates="price_list")
+    sales: Mapped[list["Sale"]] = relationship(back_populates="price_list")
 
 
 class PriceListItem(Base, ReprMixin, TimestampMixin):
@@ -729,6 +791,86 @@ class PurchaseInvoiceLine(Base, ReprMixin):
     uom: Mapped[UnitOfMeasure | None] = relationship()
 
 
+class Sale(Base, ReprMixin, TimestampMixin):
+    """Retail or wholesale sale document."""
+
+    __tablename__ = "sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    doc_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sale_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    cash_register_id: Mapped[int | None] = mapped_column(ForeignKey("cash_registers.id"), nullable=True)
+    cash_shift_id: Mapped[int | None] = mapped_column(ForeignKey("cash_shifts.id"), nullable=True)
+    counterparty_id: Mapped[int | None] = mapped_column(ForeignKey("counterparties.id"), nullable=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    price_list_id: Mapped[int | None] = mapped_column(ForeignKey("price_lists.id"), nullable=True)
+    currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
+    currency_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
+    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
+    discount_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    total_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    payment_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    paid_cash_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    paid_transfer_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    paid_bonus_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    debt_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    loyalty_card_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    admin_override_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    cash_register: Mapped[CashRegister | None] = relationship(back_populates="sales")
+    cash_shift: Mapped[CashShift | None] = relationship(back_populates="sales")
+    counterparty: Mapped[Counterparty | None] = relationship(back_populates="sales")
+    warehouse: Mapped[Warehouse] = relationship()
+    price_list: Mapped[PriceList | None] = relationship(back_populates="sales")
+    currency: Mapped[Currency] = relationship()
+    admin_override_by_user: Mapped[User | None] = relationship(foreign_keys=[admin_override_by_user_id])
+    created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
+    posted_by_user: Mapped[User | None] = relationship(foreign_keys=[posted_by_user_id])
+    cancelled_by_user: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_user_id])
+    lines: Mapped[list["SaleLine"]] = relationship(
+        back_populates="sale",
+        cascade="all, delete-orphan",
+    )
+
+
+class SaleLine(Base, ReprMixin):
+    """Product or service line inside a sale."""
+
+    __tablename__ = "sale_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), nullable=False)
+    line_type: Mapped[str] = mapped_column(String(20), default="product", nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    service_id: Mapped[int | None] = mapped_column(ForeignKey("services.id"), nullable=True)
+    product_uom_id: Mapped[int | None] = mapped_column(ForeignKey("product_uoms.id"), nullable=True)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    price_list_price: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    price_final: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    discount_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
+    discount_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    avg_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    promo_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parent_line_id: Mapped[int | None] = mapped_column(ForeignKey("sale_lines.id"), nullable=True)
+    price_override: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    sale: Mapped[Sale] = relationship(back_populates="lines")
+    product: Mapped[Product | None] = relationship()
+    service: Mapped[Service | None] = relationship()
+    product_uom: Mapped[ProductUom | None] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+    parent_line: Mapped["SaleLine | None"] = relationship(remote_side="SaleLine.id")
+
+
 class DebtLedger(Base, ReprMixin):
     """Append-only receivable/payable ledger."""
 
@@ -769,6 +911,7 @@ class Payment(Base, ReprMixin, TimestampMixin):
     currency_id: Mapped[int | None] = mapped_column(ForeignKey("currencies.id"), nullable=True)
     amount_cur: Mapped[Decimal | None] = mapped_column(Numeric(18, 2), nullable=True)
     currency_rate: Mapped[Decimal | None] = mapped_column(Numeric(18, 6), nullable=True)
+    cash_shift_id: Mapped[int | None] = mapped_column(ForeignKey("cash_shifts.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="posted", nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -777,6 +920,7 @@ class Payment(Base, ReprMixin, TimestampMixin):
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="payments")
     currency: Mapped[Currency | None] = relationship()
+    cash_shift: Mapped[CashShift | None] = relationship()
     allocations: Mapped[list["PaymentAllocation"]] = relationship(
         back_populates="payment",
         cascade="all, delete-orphan",

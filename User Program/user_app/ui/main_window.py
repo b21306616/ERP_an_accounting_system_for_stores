@@ -31,9 +31,11 @@ from PyQt6.QtWidgets import (
 from user_app.api.client import ApiClient, ApiClientError
 from user_app.core.i18n import (
     CATALOG_TABLE_HEADER_KEYS,
+    CASHIER_TABLE_HEADER_KEYS,
     COUNTERPARTY_TABLE_HEADER_KEYS,
     PRICING_TABLE_HEADER_KEYS,
     PURCHASE_TABLE_HEADER_KEYS,
+    SALES_TABLE_HEADER_KEYS,
     USER_TABLE_HEADER_KEYS,
     WAREHOUSE_TABLE_HEADER_KEYS,
     Translator,
@@ -156,8 +158,9 @@ class MainWindow(QWidget):
         self._add_page("counterparties", self._build_counterparties_page())
         self._add_page("pricing", self._build_pricing_page())
         self._add_page("purchase", self._build_purchase_page())
-        for page_id in ("sales", "cashier", "reports"):
-            self._add_page(page_id, self._build_placeholder_page(page_id))
+        self._add_page("sales", self._build_sales_page())
+        self._add_page("cashier", self._build_cashier_page())
+        self._add_page("reports", self._build_reports_page())
 
         self.nav.setCurrentRow(0)
 
@@ -414,6 +417,82 @@ class MainWindow(QWidget):
         layout.addWidget(self.purchase_debt_text)
         return page
 
+    def _build_sales_page(self) -> QWidget:
+        """Build sales and customer payment page."""
+
+        page, layout, _title = self._page("sales.title")
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "sales.refresh")
+        refresh.clicked.connect(self.refresh_sales)
+        create_sale = QPushButton()
+        create_sale.setProperty("textKey", "sales.create_sale")
+        create_sale.clicked.connect(self.create_sale_dialog)
+        create_payment = QPushButton()
+        create_payment.setProperty("textKey", "sales.create_payment")
+        create_payment.clicked.connect(self.create_customer_payment_dialog)
+        cancel_sale = QPushButton()
+        cancel_sale.setProperty("textKey", "sales.cancel")
+        cancel_sale.clicked.connect(self.cancel_sale_dialog)
+        for widget in (refresh, create_sale, create_payment, cancel_sale):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+        self.sales_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
+        self._set_sales_table_headers()
+        self.sales_debt_text = QPlainTextEdit()
+        self.sales_debt_text.setReadOnly(True)
+        self.sales_debt_text.setMinimumHeight(130)
+        layout.addLayout(action_row)
+        layout.addWidget(self.sales_table, 1)
+        layout.addWidget(self.sales_debt_text)
+        return page
+
+    def _build_cashier_page(self) -> QWidget:
+        """Build cashier shift and cash-operation page."""
+
+        page, layout, _title = self._page("cashier.title")
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "cashier.refresh")
+        refresh.clicked.connect(self.refresh_cashier)
+        create_register = QPushButton()
+        create_register.setProperty("textKey", "cashier.create_register")
+        create_register.clicked.connect(self.create_cash_register_dialog)
+        open_shift = QPushButton()
+        open_shift.setProperty("textKey", "cashier.open_shift")
+        open_shift.clicked.connect(self.open_cash_shift_dialog)
+        close_shift = QPushButton()
+        close_shift.setProperty("textKey", "cashier.close_shift")
+        close_shift.clicked.connect(self.close_cash_shift_dialog)
+        cash_operation = QPushButton()
+        cash_operation.setProperty("textKey", "cashier.cash_operation")
+        cash_operation.clicked.connect(self.cash_operation_dialog)
+        for widget in (refresh, create_register, open_shift, close_shift, cash_operation):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+        self.cashier_table = QTableWidget(0, len(CASHIER_TABLE_HEADER_KEYS))
+        self._set_cashier_table_headers()
+        self.cashier_text = QPlainTextEdit()
+        self.cashier_text.setReadOnly(True)
+        self.cashier_text.setMinimumHeight(130)
+        layout.addLayout(action_row)
+        layout.addWidget(self.cashier_table, 1)
+        layout.addWidget(self.cashier_text)
+        return page
+
+    def _build_reports_page(self) -> QWidget:
+        """Build reports summary page."""
+
+        page, layout, _title = self._page("reports.title")
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "reports.refresh")
+        refresh.clicked.connect(self.refresh_reports)
+        self.reports_text = QPlainTextEdit()
+        self.reports_text.setReadOnly(True)
+        layout.addWidget(refresh)
+        layout.addWidget(self.reports_text, 1)
+        return page
+
     def _build_placeholder_page(self, page_id: str) -> QWidget:
         """Build a disabled future-module page."""
 
@@ -455,6 +534,12 @@ class MainWindow(QWidget):
             self.refresh_pricing()
         elif page_id == "purchase":
             self.refresh_purchase()
+        elif page_id == "sales":
+            self.refresh_sales()
+        elif page_id == "cashier":
+            self.refresh_cashier()
+        elif page_id == "reports":
+            self.refresh_reports()
 
     def refresh_users(self) -> None:
         """Refresh users table."""
@@ -567,6 +652,66 @@ class MainWindow(QWidget):
                     self.purchase_table.setItem(row, col, QTableWidgetItem(str(value)))
             ledger = self.api_client.get_debt_ledger(debt_type="payable")
             self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
+
+        self._run_api(action)
+
+    def refresh_sales(self) -> None:
+        """Refresh sales and receivable ledger."""
+
+        def action() -> None:
+            rows = self.api_client.get_sales()
+            self.sales_table.setRowCount(len(rows))
+            for row, sale in enumerate(rows):
+                values = [
+                    sale.get("id"),
+                    sale.get("doc_number"),
+                    sale.get("sale_type"),
+                    sale.get("counterparty_name"),
+                    sale.get("total_amount_tmt"),
+                    sale.get("status"),
+                    sale.get("payment_type"),
+                ]
+                for col, value in enumerate(values):
+                    self.sales_table.setItem(row, col, QTableWidgetItem(str(value)))
+            ledger = self.api_client.get_debt_ledger(debt_type="receivable")
+            self.sales_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
+
+        self._run_api(action)
+
+    def refresh_cashier(self) -> None:
+        """Refresh cashier shifts and cash-flow snapshot."""
+
+        def action() -> None:
+            rows = self.api_client.get_cash_shifts()
+            self.cashier_table.setRowCount(len(rows))
+            for row, shift in enumerate(rows):
+                values = [
+                    shift.get("id"),
+                    shift.get("cash_register_name") or shift.get("cash_register_id"),
+                    shift.get("opened_at"),
+                    shift.get("opening_amount"),
+                    shift.get("closing_amount"),
+                    shift.get("status"),
+                ]
+                for col, value in enumerate(values):
+                    self.cashier_table.setItem(row, col, QTableWidgetItem(str(value)))
+            self.cashier_text.setPlainText(json.dumps(self.api_client.get_cash_flow_report(), indent=2, ensure_ascii=False))
+
+        self._run_api(action)
+
+    def refresh_reports(self) -> None:
+        """Refresh summary reports."""
+
+        def action() -> None:
+            reports = {
+                "dashboard": self.api_client.get_dashboard_report(),
+                "sales": self.api_client.get_sales_report(),
+                "purchases": self.api_client.get_purchases_report(),
+                "debts": self.api_client.get_debts_report(),
+                "cash_flow": self.api_client.get_cash_flow_report(),
+                "stock": self.api_client.get_stock_report(),
+            }
+            self.reports_text.setPlainText(json.dumps(reports, indent=2, ensure_ascii=False))
 
         self._run_api(action)
 
@@ -916,6 +1061,261 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
+    def create_sale_dialog(self) -> None:
+        """Create and post a one-line sale."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("sales.create_sale"))
+        form = QFormLayout(dialog)
+        cash_register_id = QLineEdit()
+        cash_shift_id = QLineEdit()
+        customer_id = QLineEdit()
+        warehouse_id = QLineEdit()
+        currency_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("1")
+        sale_price = QLineEdit("0")
+        payment_type = QLineEdit("cash")
+        paid_cash = QLineEdit("0")
+        paid_transfer = QLineEdit("0")
+        debt_amount = QLineEdit("0")
+        for key, widget in (
+            ("sales.form.cash_register_id", cash_register_id),
+            ("sales.form.cash_shift_id", cash_shift_id),
+            ("sales.form.customer_id", customer_id),
+            ("sales.form.warehouse_id", warehouse_id),
+            ("sales.form.currency_id", currency_id),
+            ("sales.form.product_id", product_id),
+            ("sales.form.quantity", quantity),
+            ("sales.form.price", sale_price),
+            ("sales.form.payment_type", payment_type),
+            ("sales.form.paid_cash", paid_cash),
+            ("sales.form.paid_transfer", paid_transfer),
+            ("sales.form.debt_amount", debt_amount),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def optional_int(widget: QLineEdit) -> int | None:
+            text = widget.text().strip()
+            return int(text) if text else None
+
+        def action() -> None:
+            sale = self.api_client.create_sale(
+                {
+                    "sale_type": "retail",
+                    "cash_register_id": optional_int(cash_register_id),
+                    "cash_shift_id": optional_int(cash_shift_id),
+                    "counterparty_id": optional_int(customer_id),
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "payment_type": payment_type.text().strip() or "cash",
+                    "paid_cash_tmt": paid_cash.text().strip() or "0",
+                    "paid_transfer_tmt": paid_transfer.text().strip() or "0",
+                    "debt_amount_tmt": debt_amount.text().strip() or "0",
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "quantity": quantity.text().strip() or "1",
+                            "price_final": sale_price.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.api_client.post_sale(int(sale["id"]))
+            self.refresh_sales()
+
+        self._run_api(action)
+
+    def create_customer_payment_dialog(self) -> None:
+        """Create an incoming customer payment."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("sales.create_payment"))
+        form = QFormLayout(dialog)
+        customer_id = QLineEdit()
+        sale_id = QLineEdit()
+        shift_id = QLineEdit()
+        amount = QLineEdit("0")
+        for key, widget in (
+            ("sales.form.customer_id", customer_id),
+            ("sales.form.sale_id", sale_id),
+            ("sales.form.cash_shift_id", shift_id),
+            ("sales.form.paid_cash", amount),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            sale_text = sale_id.text().strip()
+            payload: dict[str, object] = {
+                "counterparty_id": int(customer_id.text().strip()),
+                "direction": "incoming",
+                "payment_method": "cash",
+                "amount_tmt": amount.text().strip() or "0",
+            }
+            shift_text = shift_id.text().strip()
+            if shift_text:
+                payload["cash_shift_id"] = int(shift_text)
+            if sale_text:
+                payload["allocations"] = [
+                    {
+                        "doc_type": "sale",
+                        "doc_id": int(sale_text),
+                        "allocated_amount": amount.text().strip() or "0",
+                    }
+                ]
+            self.api_client.create_payment(payload)
+            self.refresh_sales()
+
+        self._run_api(action)
+
+    def cancel_sale_dialog(self) -> None:
+        """Cancel a sale by id."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("sales.cancel"))
+        form = QFormLayout(dialog)
+        sale_id = QLineEdit()
+        form.addRow(self.translator.text("sales.form.sale_id"), sale_id)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.cancel_sale(int(sale_id.text().strip()))
+            self.refresh_sales()
+
+        self._run_api(action)
+
+    def create_cash_register_dialog(self) -> None:
+        """Create a cash register."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("cashier.create_register"))
+        form = QFormLayout(dialog)
+        name = QLineEdit()
+        warehouse_id = QLineEdit()
+        form.addRow(self.translator.text("cashier.form.register_name"), name)
+        form.addRow(self.translator.text("cashier.form.warehouse_id"), warehouse_id)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.create_cash_register({"name": name.text().strip(), "warehouse_id": int(warehouse_id.text().strip())})
+            self.refresh_cashier()
+
+        self._run_api(action)
+
+    def open_cash_shift_dialog(self) -> None:
+        """Open a cash shift."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("cashier.open_shift"))
+        form = QFormLayout(dialog)
+        register_id = QLineEdit()
+        opening_amount = QLineEdit("0")
+        form.addRow(self.translator.text("cashier.form.register_id"), register_id)
+        form.addRow(self.translator.text("cashier.form.opening_amount"), opening_amount)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.open_cash_shift(
+                {
+                    "cash_register_id": int(register_id.text().strip()),
+                    "opening_amount": opening_amount.text().strip() or "0",
+                }
+            )
+            self.refresh_cashier()
+
+        self._run_api(action)
+
+    def close_cash_shift_dialog(self) -> None:
+        """Close a cash shift."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("cashier.close_shift"))
+        form = QFormLayout(dialog)
+        shift_id = QLineEdit()
+        closing_amount = QLineEdit("0")
+        form.addRow(self.translator.text("cashier.form.shift_id"), shift_id)
+        form.addRow(self.translator.text("cashier.form.closing_amount"), closing_amount)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.close_cash_shift(int(shift_id.text().strip()), {"closing_amount": closing_amount.text().strip() or "0"})
+            self.refresh_cashier()
+
+        self._run_api(action)
+
+    def cash_operation_dialog(self) -> None:
+        """Create a cash collection or transfer."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("cashier.cash_operation"))
+        form = QFormLayout(dialog)
+        shift_id = QLineEdit()
+        register_id = QLineEdit()
+        operation_type = QLineEdit("collection")
+        amount = QLineEdit("0")
+        target_register_id = QLineEdit()
+        for key, widget in (
+            ("cashier.form.shift_id", shift_id),
+            ("cashier.form.register_id", register_id),
+            ("cashier.form.operation_type", operation_type),
+            ("cashier.form.amount", amount),
+            ("cashier.form.target_register_id", target_register_id),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            payload: dict[str, object] = {
+                "cash_shift_id": int(shift_id.text().strip()),
+                "cash_register_from_id": int(register_id.text().strip()),
+                "operation_type": operation_type.text().strip() or "collection",
+                "amount_tmt": amount.text().strip() or "0",
+            }
+            target_text = target_register_id.text().strip()
+            if target_text:
+                payload["cash_register_to_id"] = int(target_text)
+            self.api_client.create_cash_operation(payload)
+            self.refresh_cashier()
+
+        self._run_api(action)
+
     def create_warehouse_dialog(self) -> None:
         """Create a warehouse."""
 
@@ -1196,6 +1596,16 @@ class MainWindow(QWidget):
 
         self.purchase_table.setHorizontalHeaderLabels([self.translator.text(key) for key in PURCHASE_TABLE_HEADER_KEYS])
 
+    def _set_sales_table_headers(self) -> None:
+        """Apply translated column headers to the sales table."""
+
+        self.sales_table.setHorizontalHeaderLabels([self.translator.text(key) for key in SALES_TABLE_HEADER_KEYS])
+
+    def _set_cashier_table_headers(self) -> None:
+        """Apply translated column headers to the cashier table."""
+
+        self.cashier_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_TABLE_HEADER_KEYS])
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
@@ -1206,6 +1616,8 @@ class MainWindow(QWidget):
         self._set_counterparties_table_headers()
         self._set_pricing_table_headers()
         self._set_purchase_table_headers()
+        self._set_sales_table_headers()
+        self._set_cashier_table_headers()
         if hasattr(self, "catalog_search"):
             self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
         if hasattr(self, "counterparty_search"):

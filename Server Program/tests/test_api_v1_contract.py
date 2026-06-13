@@ -493,6 +493,205 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(refreshed_invoice.status_code, 200)
         self.assertEqual(refreshed_invoice.json()["data"]["payment_status"], "partial")
 
+    def test_sales_cashier_and_reports_workflow(self) -> None:
+        """Sales posting should update stock, receivables, cashier shifts, and reports."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        currencies = requests.get(f"{self.base_url}/currencies", headers=headers, timeout=2)
+        self.assertEqual(currencies.status_code, 200)
+        currency_id = next(row for row in currencies.json()["data"] if row["code"] == "TMT")["id"]
+
+        warehouse = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-SALE", "name": "Sale warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(warehouse.status_code, 201)
+        warehouse_id = warehouse.json()["data"]["id"]
+
+        register = requests.post(
+            f"{self.base_url}/cash-registers",
+            json={"name": "Cash Register 1", "warehouse_id": warehouse_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(register.status_code, 201)
+        register_id = register.json()["data"]["id"]
+
+        shift = requests.post(
+            f"{self.base_url}/cash-shifts/open",
+            json={"cash_register_id": register_id, "opening_amount": "5.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(shift.status_code, 201)
+        shift_id = shift.json()["data"]["id"]
+        self.assertEqual(shift.json()["data"]["status"], "open")
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-SALE-001", "name": "Sale Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        supplier = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "SUP-SALE", "name": "Sale Supplier", "role_flags": 1, "counterparty_type": "supplier"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier.status_code, 201)
+        supplier_id = supplier.json()["data"]["id"]
+
+        purchase = requests.post(
+            f"{self.base_url}/purchase-invoices",
+            json={
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [{"product_id": product_id, "quantity": "5.0000", "price_cur": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(purchase.status_code, 201)
+        posted_purchase = requests.post(
+            f"{self.base_url}/purchase-invoices/{purchase.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_purchase.status_code, 200)
+
+        customer = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "CUS-SALE", "name": "Sale Customer", "role_flags": 2, "counterparty_type": "customer"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer.status_code, 201)
+        customer_id = customer.json()["data"]["id"]
+
+        sale = requests.post(
+            f"{self.base_url}/sales",
+            json={
+                "sale_type": "retail",
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "counterparty_id": customer_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "payment_type": "mixed",
+                "paid_cash_tmt": "10.00",
+                "debt_amount_tmt": "20.00",
+                "lines": [{"product_id": product_id, "quantity": "2.0000", "price_final": "15.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale.status_code, 201)
+        sale_id = sale.json()["data"]["id"]
+        self.assertEqual(sale.json()["data"]["total_amount_tmt"], "30.00")
+
+        posted_sale = requests.post(f"{self.base_url}/sales/{sale_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_sale.status_code, 200)
+        self.assertEqual(posted_sale.json()["data"]["status"], "posted")
+        self.assertEqual(posted_sale.json()["data"]["lines"][0]["avg_cost_tmt"], "10.0000")
+
+        balances = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(balances.status_code, 200)
+        self.assertEqual(balances.json()["data"][0]["quantity"], "3.000")
+        self.assertEqual(balances.json()["data"][0]["avg_cost_tmt"], "10.00")
+
+        customer_debt = requests.get(
+            f"{self.base_url}/counterparties/{customer_id}/debt-summary",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer_debt.status_code, 200)
+        self.assertEqual(customer_debt.json()["data"]["receivable"], "20.00")
+
+        customer_payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": customer_id,
+                "direction": "incoming",
+                "payment_method": "cash",
+                "amount_tmt": "5.00",
+                "cash_shift_id": shift_id,
+                "allocations": [{"doc_type": "sale", "doc_id": sale_id, "allocated_amount": "5.00"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer_payment.status_code, 201)
+
+        after_payment = requests.get(
+            f"{self.base_url}/counterparties/{customer_id}/debt-summary",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(after_payment.status_code, 200)
+        self.assertEqual(after_payment.json()["data"]["receivable"], "15.00")
+
+        collection = requests.post(
+            f"{self.base_url}/cash-operations",
+            json={
+                "cash_shift_id": shift_id,
+                "cash_register_from_id": register_id,
+                "operation_type": "collection",
+                "amount_tmt": "3.00",
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(collection.status_code, 201)
+
+        closed = requests.post(
+            f"{self.base_url}/cash-shifts/{shift_id}/close",
+            json={"closing_amount": "17.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(closed.status_code, 200)
+        self.assertEqual(closed.json()["data"]["status"], "closed")
+
+        sales_report = requests.get(f"{self.base_url}/reports/sales", headers=headers, timeout=2)
+        self.assertEqual(sales_report.status_code, 200)
+        self.assertEqual(sales_report.json()["data"]["sales_total_tmt"], "30.00")
+        self.assertEqual(sales_report.json()["data"]["cash_tmt"], "10.00")
+        self.assertEqual(sales_report.json()["data"]["debt_tmt"], "20.00")
+
+        debts_report = requests.get(f"{self.base_url}/reports/debts", headers=headers, timeout=2)
+        self.assertEqual(debts_report.status_code, 200)
+        self.assertEqual(debts_report.json()["data"]["total_receivable_tmt"], "15.00")
+        self.assertEqual(debts_report.json()["data"]["total_payable_tmt"], "50.00")
+
+        cash_flow = requests.get(f"{self.base_url}/reports/cash-flow", headers=headers, timeout=2)
+        self.assertEqual(cash_flow.status_code, 200)
+        self.assertEqual(cash_flow.json()["data"]["sale_cash_tmt"], "10.00")
+        self.assertEqual(cash_flow.json()["data"]["incoming_payments_tmt"], "5.00")
+        self.assertEqual(cash_flow.json()["data"]["collections_tmt"], "3.00")
+        self.assertEqual(cash_flow.json()["data"]["net_cash_flow_tmt"], "12.00")
+
+        dashboard = requests.get(f"{self.base_url}/reports/dashboard", headers=headers, timeout=2)
+        self.assertEqual(dashboard.status_code, 200)
+        self.assertEqual(dashboard.json()["data"]["sales_total_tmt"], "30.00")
+        self.assertEqual(dashboard.json()["data"]["purchase_total_tmt"], "50.00")
+        self.assertEqual(dashboard.json()["data"]["receivable_tmt"], "15.00")
+        self.assertEqual(dashboard.json()["data"]["open_shift_count"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

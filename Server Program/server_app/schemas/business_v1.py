@@ -142,5 +142,6 @@ class PaymentCreate(BaseModel):
     currency_id: int | None = None
     amount_cur: Decimal | None = Field(default=None, ge=0)
     currency_rate: Decimal | None = Field(default=None, gt=0)
+    cash_shift_id: int | None = None
     note: str | None = None
     allocations: list[PaymentAllocationCreate] = Field(default_factory=list)

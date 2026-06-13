@@ -351,6 +351,86 @@ class ApiClient:
 
         return dict(self._request("POST", "/payments", json=payload))
 
+    def get_cash_registers(self) -> list[dict[str, Any]]:
+        """Return cash registers."""
+
+        return list(self._request("GET", "/cash-registers"))
+
+    def create_cash_register(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a cash register."""
+
+        return dict(self._request("POST", "/cash-registers", json=payload))
+
+    def get_cash_shifts(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Return cash shifts."""
+
+        return list(self._request("GET", self._path_with_params("/cash-shifts", {"status": status})))
+
+    def open_cash_shift(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Open a cash shift."""
+
+        return dict(self._request("POST", "/cash-shifts/open", json=payload))
+
+    def close_cash_shift(self, shift_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Close a cash shift."""
+
+        return dict(self._request("POST", f"/cash-shifts/{shift_id}/close", json=payload))
+
+    def create_cash_operation(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a cash operation."""
+
+        return dict(self._request("POST", "/cash-operations", json=payload))
+
+    def get_sales(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Return sales."""
+
+        return list(self._request("GET", self._path_with_params("/sales", {"status": status})))
+
+    def create_sale(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a sale."""
+
+        return dict(self._request("POST", "/sales", json=payload))
+
+    def post_sale(self, sale_id: int) -> dict[str, Any]:
+        """Post a sale."""
+
+        return dict(self._request("POST", f"/sales/{sale_id}/post"))
+
+    def cancel_sale(self, sale_id: int) -> dict[str, Any]:
+        """Cancel a sale."""
+
+        return dict(self._request("POST", f"/sales/{sale_id}/cancel"))
+
+    def get_dashboard_report(self) -> dict[str, Any]:
+        """Return dashboard report totals."""
+
+        return dict(self._request("GET", "/reports/dashboard"))
+
+    def get_stock_report(self) -> list[dict[str, Any]]:
+        """Return stock report rows."""
+
+        return list(self._request("GET", "/reports/stock"))
+
+    def get_sales_report(self) -> dict[str, Any]:
+        """Return sales report totals."""
+
+        return dict(self._request("GET", "/reports/sales"))
+
+    def get_purchases_report(self) -> dict[str, Any]:
+        """Return purchases report totals."""
+
+        return dict(self._request("GET", "/reports/purchases"))
+
+    def get_debts_report(self) -> dict[str, Any]:
+        """Return debt report totals."""
+
+        return dict(self._request("GET", "/reports/debts"))
+
+    def get_cash_flow_report(self) -> dict[str, Any]:
+        """Return cash-flow report totals."""
+
+        return dict(self._request("GET", "/reports/cash-flow"))
+
     def _path_with_params(self, path: str, params: dict[str, Any]) -> str:
         """Append URL query parameters, skipping empty values."""
 
