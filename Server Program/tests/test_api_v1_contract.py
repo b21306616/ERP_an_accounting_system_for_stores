@@ -692,6 +692,18 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(dashboard.json()["data"]["receivable_tmt"], "15.00")
         self.assertEqual(dashboard.json()["data"]["open_shift_count"], 0)
 
+        audit = requests.get(f"{self.base_url}/audit-log", headers=headers, timeout=2)
+        self.assertEqual(audit.status_code, 200)
+        audit_rows = audit.json()["data"]
+        audit_pairs = {(row["module"], row["action"], row["entity_name"]) for row in audit_rows}
+        self.assertIn(("cashier", "open", "cash-shifts"), audit_pairs)
+        self.assertIn(("purchase", "post", "purchase-invoices"), audit_pairs)
+        self.assertIn(("sale", "create", "sales"), audit_pairs)
+        self.assertIn(("sale", "post", "sales"), audit_pairs)
+        self.assertIn(("counterparty", "create", "payments"), audit_pairs)
+        self.assertIn(("cashier", "close", "cash-shifts"), audit_pairs)
+        self.assertTrue(all(row["user_id"] is not None for row in audit_rows))
+
 
 if __name__ == "__main__":
     unittest.main()

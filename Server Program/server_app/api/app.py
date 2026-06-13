@@ -11,17 +11,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from server_app.api import (
     routers_business_v1,
-    routers_auth,
     routers_catalog_v1,
-    routers_foundation,
     routers_sales_v1,
     routers_system,
-    routers_users,
     routers_v1,
     routers_warehouse_v1,
 )
 from server_app.core.config import AppConfig
 from server_app.core.constants import APP_NAME
+from server_app.services.audit import log_api_mutation
 
 
 def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> FastAPI:
@@ -76,10 +74,25 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
             },
         )
 
+    @app.middleware("http")
+    async def audit_mutating_api_v1_requests(request: Request, call_next):
+        """Append audit rows for successful mutating API v1 requests."""
+
+        response = await call_next(request)
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"} and response.status_code < 400:
+            session_factory_from_state = getattr(request.app.state, "session_factory", None)
+            if session_factory_from_state is not None:
+                log_api_mutation(
+                    session_factory_from_state,
+                    method=request.method,
+                    path=request.url.path,
+                    status_code=response.status_code,
+                    session_token=request.headers.get("X-Session-Token"),
+                    ip_address=request.client.host if request.client else None,
+                )
+        return response
+
     app.include_router(routers_system.router)
-    app.include_router(routers_auth.router)
-    app.include_router(routers_users.router)
-    app.include_router(routers_foundation.router)
     app.include_router(routers_v1.router)
     app.include_router(routers_catalog_v1.router)
     app.include_router(routers_warehouse_v1.router)

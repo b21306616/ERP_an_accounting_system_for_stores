@@ -15,8 +15,8 @@ SQLAlchemy + pyodbc for MSSQL access, and Alembic for database migrations.
 - Built-in roles: Super Admin, Accountant, Manager, Cashier, Auditor.
 - PBKDF2 password hashing and session tokens for the `/api/v1` client contract.
 - API surface:
-  - System: `GET /health`, `GET /system/status`
-  - Legacy JWT auth: `POST /auth/login`, `GET /auth/me`, `/users`, `/reference`
+  - Internal service health: `GET /health`
+  - Public client API: `/api/v1/*` with `X-Session-Token` and `{ success, data, error, meta }` envelopes
   - Client contract: `/api/v1/*` (catalog, warehouse, pricing/purchase, sales/cashier, reports)
 
 Alembic revision IDs must be **32 characters or fewer** (Alembic default `version_num` column limit).

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import unittest
 import socket
 import threading
 import time
+import unittest
 
 import requests
 from sqlalchemy import create_engine
@@ -15,22 +15,18 @@ import uvicorn
 
 from server_app.api.app import create_app
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
-from server_app.core.constants import (
-    BUILTIN_ROLES,
-    SUPER_ADMIN_FULL_NAME,
-    SUPER_ADMIN_ROLE,
-    SUPER_ADMIN_USERNAME,
-)
+from server_app.core.constants import SUPER_ADMIN_FULL_NAME, SUPER_ADMIN_ROLE, SUPER_ADMIN_USERNAME
 from server_app.core.security import hash_password, verify_password
 from server_app.db.base import Base
-from server_app.db.models import Role, User
+from server_app.db.bootstrap import seed_foundation_data
+from server_app.db.models import User
 
 
 class ApiSmokeTests(unittest.TestCase):
     """Validate core API behavior without requiring MSSQL."""
 
     def setUp(self) -> None:
-        """Create a fresh in-memory database and FastAPI test client."""
+        """Create a fresh in-memory database and FastAPI test server."""
 
         self.engine = create_engine(
             "sqlite+pysqlite://",
@@ -47,8 +43,7 @@ class ApiSmokeTests(unittest.TestCase):
         )
 
         with self.session_factory() as session:
-            roles = {name: Role(name=name) for name in BUILTIN_ROLES}
-            session.add_all(roles.values())
+            roles = seed_foundation_data(session)
             session.add(
                 User(
                     username=SUPER_ADMIN_USERNAME,
@@ -81,10 +76,11 @@ class ApiSmokeTests(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.thread.start()
         self.base_url = f"http://127.0.0.1:{self.port}"
+        self.v1_url = f"{self.base_url}/api/v1"
         self._wait_for_server()
 
     def tearDown(self) -> None:
-        """Dispose the in-memory database."""
+        """Stop server and dispose DB."""
 
         self.server.should_exit = True
         self.thread.join(timeout=5)
@@ -114,29 +110,27 @@ class ApiSmokeTests(unittest.TestCase):
         raise RuntimeError(f"API test server did not start: {last_error}")
 
     def _login(self, username: str) -> str:
-        """Return an access token for a seeded user."""
+        """Return an API v1 session token for a seeded user."""
 
         response = requests.post(
-            f"{self.base_url}/auth/login",
+            f"{self.v1_url}/auth/login",
             json={"username": username, "password": "password123"},
             timeout=2,
         )
         self.assertEqual(response.status_code, 200)
-        return response.json()["access_token"]
+        envelope = response.json()
+        self.assertTrue(envelope["success"])
+        return str(envelope["data"]["session_token"])
 
     def _super_admin_id(self, token: str) -> int:
         """Return the seeded Super Admin user id."""
 
-        response = requests.get(
-            f"{self.base_url}/users",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=2,
-        )
+        response = requests.get(f"{self.v1_url}/users", headers={"X-Session-Token": token}, timeout=2)
         self.assertEqual(response.status_code, 200)
-        for user in response.json():
+        for user in response.json()["data"]:
             if user["username"] == SUPER_ADMIN_USERNAME:
                 return int(user["id"])
-        raise AssertionError("Seeded super_admin user was not returned by /users")
+        raise AssertionError("Seeded super_admin user was not returned by /api/v1/users")
 
     def test_health(self) -> None:
         """Health endpoint should report ok when DB is reachable."""
@@ -146,51 +140,47 @@ class ApiSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    def test_legacy_non_v1_endpoints_are_not_public(self) -> None:
+        """Legacy bearer-token endpoints should not be mounted on the public app."""
+
+        self.assertEqual(requests.post(f"{self.base_url}/auth/login", json={}, timeout=2).status_code, 404)
+        self.assertEqual(requests.get(f"{self.base_url}/system/status", timeout=2).status_code, 404)
+        self.assertEqual(requests.get(f"{self.base_url}/reference/currencies", timeout=2).status_code, 404)
+
     def test_login_and_me(self) -> None:
         """Login token should authorize the current-user endpoint."""
 
         token = self._login(SUPER_ADMIN_USERNAME)
-        response = requests.get(
-            f"{self.base_url}/auth/me",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=2,
-        )
+        response = requests.get(f"{self.v1_url}/auth/me", headers={"X-Session-Token": token}, timeout=2)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["username"], SUPER_ADMIN_USERNAME)
-        self.assertEqual(response.json()["role"], SUPER_ADMIN_ROLE)
+        data = response.json()["data"]
+        self.assertEqual(data["username"], SUPER_ADMIN_USERNAME)
+        self.assertEqual(data["role_name"], SUPER_ADMIN_ROLE)
 
     def test_protected_endpoint_rejects_missing_token(self) -> None:
-        """Protected endpoints should reject unauthenticated calls."""
+        """Protected v1 endpoints should reject unauthenticated calls."""
 
-        response = requests.get(f"{self.base_url}/reference/currencies", timeout=2)
+        response = requests.get(f"{self.v1_url}/users", timeout=2)
 
         self.assertEqual(response.status_code, 401)
+        self.assertFalse(response.json()["success"])
 
-    def test_super_admin_can_create_currency(self) -> None:
-        """Super Admin role should be allowed to create reference data."""
+    def test_super_admin_can_list_seeded_currencies(self) -> None:
+        """Super Admin should be allowed to access v1 reference data."""
 
         token = self._login(SUPER_ADMIN_USERNAME)
-        response = requests.post(
-            f"{self.base_url}/reference/currencies",
-            json={"code": "USD", "name": "US Dollar", "symbol": "$"},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=2,
-        )
+        response = requests.get(f"{self.v1_url}/currencies", headers={"X-Session-Token": token}, timeout=2)
 
-        self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["code"], "USD")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["success"])
+        self.assertTrue(any(row["code"] == "TMT" for row in response.json()["data"]))
 
-    def test_cashier_cannot_create_currency(self) -> None:
+    def test_cashier_cannot_manage_users(self) -> None:
         """Non-super-admin roles should not pass Super Admin dependency checks."""
 
         token = self._login("cashier")
-        response = requests.post(
-            f"{self.base_url}/reference/currencies",
-            json={"code": "USD", "name": "US Dollar", "symbol": "$"},
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=2,
-        )
+        response = requests.get(f"{self.v1_url}/users", headers={"X-Session-Token": token}, timeout=2)
 
         self.assertEqual(response.status_code, 403)
 
@@ -199,14 +189,9 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         response = requests.post(
-            f"{self.base_url}/users",
-            json={
-                "username": "extra_admin",
-                "full_name": "Extra Admin",
-                "password": "password123",
-                "role_name": SUPER_ADMIN_ROLE,
-            },
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self.v1_url}/users",
+            json={"username": "extra_admin", "full_name": "Extra Admin", "password": "password123", "role_name": SUPER_ADMIN_ROLE},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -217,14 +202,9 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         response = requests.post(
-            f"{self.base_url}/users",
-            json={
-                "username": SUPER_ADMIN_USERNAME,
-                "full_name": SUPER_ADMIN_FULL_NAME,
-                "password": "password123",
-                "role_name": "Cashier",
-            },
-            headers={"Authorization": f"Bearer {token}"},
+            f"{self.v1_url}/users",
+            json={"username": SUPER_ADMIN_USERNAME, "full_name": SUPER_ADMIN_FULL_NAME, "password": "password123", "role_name": "Cashier"},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -235,10 +215,10 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         user_id = self._super_admin_id(token)
-        response = requests.patch(
-            f"{self.base_url}/users/{user_id}",
+        response = requests.put(
+            f"{self.v1_url}/users/{user_id}",
             json={"full_name": "Changed Name"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -249,10 +229,10 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         user_id = self._super_admin_id(token)
-        response = requests.patch(
-            f"{self.base_url}/users/{user_id}",
+        response = requests.put(
+            f"{self.v1_url}/users/{user_id}",
             json={"role_name": "Cashier"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -263,10 +243,10 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         user_id = self._super_admin_id(token)
-        response = requests.patch(
-            f"{self.base_url}/users/{user_id}",
+        response = requests.put(
+            f"{self.v1_url}/users/{user_id}",
             json={"password": "changed123", "current_password": "password123"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -283,10 +263,10 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         user_id = self._super_admin_id(token)
-        response = requests.patch(
-            f"{self.base_url}/users/{user_id}",
+        response = requests.put(
+            f"{self.v1_url}/users/{user_id}",
             json={"password": "changed123", "current_password": "wrong-password"},
-            headers={"Authorization": f"Bearer {token}"},
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
@@ -297,9 +277,9 @@ class ApiSmokeTests(unittest.TestCase):
 
         token = self._login(SUPER_ADMIN_USERNAME)
         user_id = self._super_admin_id(token)
-        response = requests.delete(
-            f"{self.base_url}/users/{user_id}",
-            headers={"Authorization": f"Bearer {token}"},
+        response = requests.post(
+            f"{self.v1_url}/users/{user_id}/deactivate",
+            headers={"X-Session-Token": token},
             timeout=2,
         )
 
