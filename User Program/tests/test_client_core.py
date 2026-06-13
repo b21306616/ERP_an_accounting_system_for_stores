@@ -160,6 +160,45 @@ class ClientCoreTests(unittest.TestCase):
         called_url = client.session.request.call_args.args[1]
         self.assertIn("/stock/balances?warehouse_id=2&product_id=3", called_url)
 
+    def test_api_client_purchase_helpers_use_envelopes(self) -> None:
+        """Purchase and settlement helpers should return envelope data."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 5, "name": "Supplier", "payable_balance": "20.00"}],
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        counterparties = client.get_counterparties("Supplier", include_debt=True)
+
+        self.assertEqual(counterparties[0]["payable_balance"], "20.00")
+        called_url = client.session.request.call_args.args[1]
+        self.assertIn("/counterparties?search=Supplier&include_debt=true", called_url)
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 7, "status": "draft"},
+            "error": None,
+            "meta": None,
+        }
+        invoice = client.create_purchase_invoice({"counterparty_id": 5, "warehouse_id": 2, "lines": []})
+        client.post_purchase_invoice(invoice["id"])
+        client.cancel_purchase_invoice(invoice["id"])
+        client.create_payment({"counterparty_id": 5, "amount_cur": "10.00"})
+
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-4:]]
+        self.assertIn("/purchase-invoices", requested_paths[0])
+        self.assertIn("/purchase-invoices/7/post", requested_paths[1])
+        self.assertIn("/purchase-invoices/7/cancel", requested_paths[2])
+        self.assertIn("/payments", requested_paths[3])
+
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""
 

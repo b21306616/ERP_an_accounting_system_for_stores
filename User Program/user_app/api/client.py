@@ -266,6 +266,91 @@ class ApiClient:
 
         return dict(self._request("POST", f"/stock-writeoffs/{writeoff_id}/cancel"))
 
+    def get_currencies(self) -> list[dict[str, Any]]:
+        """Return currencies."""
+
+        return list(self._request("GET", "/currencies"))
+
+    def get_counterparties(self, search: str | None = None, include_debt: bool = False) -> list[dict[str, Any]]:
+        """Return counterparties."""
+
+        return list(
+            self._request(
+                "GET",
+                self._path_with_params("/counterparties", {"search": search, "include_debt": str(include_debt).lower()}),
+            )
+        )
+
+    def create_counterparty(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a counterparty."""
+
+        return dict(self._request("POST", "/counterparties", json=payload))
+
+    def get_debt_summary(self, counterparty_id: int) -> dict[str, Any]:
+        """Return debt balances for one counterparty."""
+
+        return dict(self._request("GET", f"/counterparties/{counterparty_id}/debt-summary"))
+
+    def get_debt_ledger(self, counterparty_id: int | None = None, debt_type: str | None = None) -> list[dict[str, Any]]:
+        """Return debt ledger rows."""
+
+        return list(
+            self._request(
+                "GET",
+                self._path_with_params("/debt-ledger", {"counterparty_id": counterparty_id, "debt_type": debt_type}),
+            )
+        )
+
+    def get_price_lists(self) -> list[dict[str, Any]]:
+        """Return price lists."""
+
+        return list(self._request("GET", "/price-lists"))
+
+    def create_price_list(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a price list."""
+
+        return dict(self._request("POST", "/price-lists", json=payload))
+
+    def add_price_list_item(self, price_list_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Add a versioned price-list item."""
+
+        return dict(self._request("POST", f"/price-lists/{price_list_id}/items", json=payload))
+
+    def get_current_price(self, product_id: int, price_list_id: int | None = None) -> dict[str, Any]:
+        """Return the current product price."""
+
+        return dict(
+            self._request(
+                "GET",
+                self._path_with_params("/prices/current", {"product_id": product_id, "price_list_id": price_list_id}),
+            )
+        )
+
+    def get_purchase_invoices(self) -> list[dict[str, Any]]:
+        """Return purchase invoices."""
+
+        return list(self._request("GET", "/purchase-invoices"))
+
+    def create_purchase_invoice(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a purchase invoice."""
+
+        return dict(self._request("POST", "/purchase-invoices", json=payload))
+
+    def post_purchase_invoice(self, invoice_id: int) -> dict[str, Any]:
+        """Post a purchase invoice."""
+
+        return dict(self._request("POST", f"/purchase-invoices/{invoice_id}/post"))
+
+    def cancel_purchase_invoice(self, invoice_id: int) -> dict[str, Any]:
+        """Cancel a purchase invoice."""
+
+        return dict(self._request("POST", f"/purchase-invoices/{invoice_id}/cancel"))
+
+    def create_payment(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a payment document."""
+
+        return dict(self._request("POST", "/payments", json=payload))
+
     def _path_with_params(self, path: str, params: dict[str, Any]) -> str:
         """Append URL query parameters, skipping empty values."""
 

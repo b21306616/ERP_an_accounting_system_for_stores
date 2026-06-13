@@ -20,7 +20,7 @@ from server_app.core.constants import (
     SUPER_ADMIN_USERNAME,
 )
 from server_app.core.security import hash_password, verify_password
-from server_app.db.models import Permission, Role, RolePermission, Setting, UnitOfMeasure, User
+from server_app.db.models import Currency, Permission, Role, RolePermission, Setting, UnitOfMeasure, User
 from server_app.db.session import create_db_engine, create_session_factory
 from server_app.service_control import SERVICE_SQL_LOGIN_NAME
 
@@ -244,6 +244,14 @@ def seed_catalog_defaults(session: Session) -> None:
     session.flush()
 
 
+def seed_currency_defaults(session: Session) -> None:
+    """Ensure the base TMT currency exists."""
+
+    if session.query(Currency).filter(Currency.code == "TMT").one_or_none() is None:
+        session.add(Currency(code="TMT", name="Turkmen manat", symbol="TMT", is_system=True, is_active=True))
+    session.flush()
+
+
 def seed_foundation_data(session: Session) -> dict[str, Role]:
     """Seed roles, permissions, and settings needed by API v1 clients."""
 
@@ -252,6 +260,7 @@ def seed_foundation_data(session: Session) -> dict[str, Role]:
     seed_role_permissions(session, roles, permissions)
     seed_default_settings(session)
     seed_catalog_defaults(session)
+    seed_currency_defaults(session)
     return roles
 
 

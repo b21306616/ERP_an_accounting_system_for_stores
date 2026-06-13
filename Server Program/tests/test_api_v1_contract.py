@@ -363,6 +363,136 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(rejected.status_code, 400)
         self.assertEqual(rejected.json()["error"]["code"], "INSUFFICIENT_STOCK")
 
+    def test_business_endpoints_price_purchase_and_payable_debt(self) -> None:
+        """Pricing, purchase posting, and payable debt should work together."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        currencies = requests.get(f"{self.base_url}/currencies", headers=headers, timeout=2)
+        self.assertEqual(currencies.status_code, 200)
+        tmt = next(row for row in currencies.json()["data"] if row["code"] == "TMT")
+        currency_id = tmt["id"]
+
+        warehouse = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-PUR", "name": "Purchase warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(warehouse.status_code, 201)
+        warehouse_id = warehouse.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-BIZ-001", "name": "Purchased Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        supplier = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "SUP-001", "name": "Supplier One", "role_flags": 1, "counterparty_type": "supplier"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier.status_code, 201)
+        supplier_id = supplier.json()["data"]["id"]
+
+        price_list = requests.post(
+            f"{self.base_url}/price-lists",
+            json={"name_ru": "Retail", "currency_id": currency_id, "is_default": True},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(price_list.status_code, 201)
+        price_list_id = price_list.json()["data"]["id"]
+
+        price_item = requests.post(
+            f"{self.base_url}/price-lists/{price_list_id}/items",
+            json={"product_id": product_id, "price_tmt": "7.5000", "valid_from": "2026-01-01"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(price_item.status_code, 201)
+
+        current_price = requests.get(
+            f"{self.base_url}/prices/current",
+            params={"product_id": product_id, "on_date": "2026-06-13"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(current_price.status_code, 200)
+        self.assertEqual(current_price.json()["data"]["price_tmt"], "7.5000")
+
+        invoice = requests.post(
+            f"{self.base_url}/purchase-invoices",
+            json={
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [{"product_id": product_id, "quantity": "3.0000", "price_cur": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(invoice.status_code, 201)
+        invoice_id = invoice.json()["data"]["id"]
+        self.assertEqual(invoice.json()["data"]["total_amount_tmt"], "30.00")
+
+        posted = requests.post(f"{self.base_url}/purchase-invoices/{invoice_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted.status_code, 200)
+        self.assertEqual(posted.json()["data"]["status"], "posted")
+
+        balances = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(balances.status_code, 200)
+        self.assertEqual(balances.json()["data"][0]["quantity"], "3.000")
+        self.assertEqual(balances.json()["data"][0]["avg_cost_tmt"], "10.00")
+
+        debt = requests.get(
+            f"{self.base_url}/counterparties/{supplier_id}/debt-summary",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(debt.status_code, 200)
+        self.assertEqual(debt.json()["data"]["payable"], "30.00")
+
+        payment = requests.post(
+            f"{self.base_url}/payments",
+            json={
+                "counterparty_id": supplier_id,
+                "direction": "outgoing",
+                "payment_method": "cash",
+                "amount_tmt": "10.00",
+                "allocations": [
+                    {"doc_type": "purchase_invoice", "doc_id": invoice_id, "allocated_amount": "10.00"}
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(payment.status_code, 201)
+
+        after_payment = requests.get(
+            f"{self.base_url}/counterparties/{supplier_id}/debt-summary",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(after_payment.status_code, 200)
+        self.assertEqual(after_payment.json()["data"]["payable"], "20.00")
+
+        refreshed_invoice = requests.get(f"{self.base_url}/purchase-invoices/{invoice_id}", headers=headers, timeout=2)
+        self.assertEqual(refreshed_invoice.status_code, 200)
+        self.assertEqual(refreshed_invoice.json()["data"]["payment_status"], "partial")
+
 
 if __name__ == "__main__":
     unittest.main()

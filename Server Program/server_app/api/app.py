@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, sessionmaker
 
 from server_app.api import (
+    routers_business_v1,
     routers_auth,
     routers_catalog_v1,
     routers_foundation,
@@ -81,5 +82,6 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
     app.include_router(routers_v1.router)
     app.include_router(routers_catalog_v1.router)
     app.include_router(routers_warehouse_v1.router)
+    app.include_router(routers_business_v1.router)
 
     return app

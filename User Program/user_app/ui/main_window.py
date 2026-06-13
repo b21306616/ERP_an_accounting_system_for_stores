@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 import json
 from typing import Callable
@@ -28,7 +29,15 @@ from PyQt6.QtWidgets import (
 )
 
 from user_app.api.client import ApiClient, ApiClientError
-from user_app.core.i18n import CATALOG_TABLE_HEADER_KEYS, USER_TABLE_HEADER_KEYS, WAREHOUSE_TABLE_HEADER_KEYS, Translator
+from user_app.core.i18n import (
+    CATALOG_TABLE_HEADER_KEYS,
+    COUNTERPARTY_TABLE_HEADER_KEYS,
+    PRICING_TABLE_HEADER_KEYS,
+    PURCHASE_TABLE_HEADER_KEYS,
+    USER_TABLE_HEADER_KEYS,
+    WAREHOUSE_TABLE_HEADER_KEYS,
+    Translator,
+)
 from user_app.hardware.simulator import HardwareSimulator
 
 
@@ -144,7 +153,10 @@ class MainWindow(QWidget):
         self._add_page("hardware", self._build_hardware_page())
         self._add_page("catalog", self._build_catalog_page())
         self._add_page("warehouse", self._build_warehouse_page())
-        for page_id in ("purchase", "pricing", "sales", "cashier", "reports"):
+        self._add_page("counterparties", self._build_counterparties_page())
+        self._add_page("pricing", self._build_pricing_page())
+        self._add_page("purchase", self._build_purchase_page())
+        for page_id in ("sales", "cashier", "reports"):
             self._add_page(page_id, self._build_placeholder_page(page_id))
 
         self.nav.setCurrentRow(0)
@@ -330,6 +342,78 @@ class MainWindow(QWidget):
         layout.addWidget(self.warehouse_movements_text)
         return page
 
+    def _build_counterparties_page(self) -> QWidget:
+        """Build counterparties page."""
+
+        page, layout, _title = self._page("counterparties.title")
+        action_row = QHBoxLayout()
+        self.counterparty_search = QLineEdit()
+        self.counterparty_search.setPlaceholderText(self.translator.text("counterparties.search"))
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "counterparties.refresh")
+        refresh.clicked.connect(self.refresh_counterparties)
+        create = QPushButton()
+        create.setProperty("textKey", "counterparties.create")
+        create.clicked.connect(self.create_counterparty_dialog)
+        for widget in (self.counterparty_search, refresh, create):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+        self.counterparties_table = QTableWidget(0, len(COUNTERPARTY_TABLE_HEADER_KEYS))
+        self._set_counterparties_table_headers()
+        layout.addLayout(action_row)
+        layout.addWidget(self.counterparties_table, 1)
+        return page
+
+    def _build_pricing_page(self) -> QWidget:
+        """Build pricing page."""
+
+        page, layout, _title = self._page("pricing.title")
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "pricing.refresh")
+        refresh.clicked.connect(self.refresh_pricing)
+        create = QPushButton()
+        create.setProperty("textKey", "pricing.create_price_list")
+        create.clicked.connect(self.create_price_list_dialog)
+        add_price = QPushButton()
+        add_price.setProperty("textKey", "pricing.add_price")
+        add_price.clicked.connect(self.add_price_dialog)
+        for widget in (refresh, create, add_price):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+        self.pricing_table = QTableWidget(0, len(PRICING_TABLE_HEADER_KEYS))
+        self._set_pricing_table_headers()
+        layout.addLayout(action_row)
+        layout.addWidget(self.pricing_table, 1)
+        return page
+
+    def _build_purchase_page(self) -> QWidget:
+        """Build purchase invoices and supplier payment page."""
+
+        page, layout, _title = self._page("purchase.title")
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "purchase.refresh")
+        refresh.clicked.connect(self.refresh_purchase)
+        create_invoice = QPushButton()
+        create_invoice.setProperty("textKey", "purchase.create_invoice")
+        create_invoice.clicked.connect(self.create_purchase_invoice_dialog)
+        create_payment = QPushButton()
+        create_payment.setProperty("textKey", "purchase.create_payment")
+        create_payment.clicked.connect(self.create_supplier_payment_dialog)
+        for widget in (refresh, create_invoice, create_payment):
+            action_row.addWidget(widget)
+        action_row.addStretch(1)
+        self.purchase_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
+        self._set_purchase_table_headers()
+        self.purchase_debt_text = QPlainTextEdit()
+        self.purchase_debt_text.setReadOnly(True)
+        self.purchase_debt_text.setMinimumHeight(130)
+        layout.addLayout(action_row)
+        layout.addWidget(self.purchase_table, 1)
+        layout.addWidget(self.purchase_debt_text)
+        return page
+
     def _build_placeholder_page(self, page_id: str) -> QWidget:
         """Build a disabled future-module page."""
 
@@ -365,6 +449,12 @@ class MainWindow(QWidget):
             self.refresh_catalog()
         elif page_id == "warehouse":
             self.refresh_warehouse()
+        elif page_id == "counterparties":
+            self.refresh_counterparties()
+        elif page_id == "pricing":
+            self.refresh_pricing()
+        elif page_id == "purchase":
+            self.refresh_purchase()
 
     def refresh_users(self) -> None:
         """Refresh users table."""
@@ -418,6 +508,78 @@ class MainWindow(QWidget):
             self.warehouse_movements_text.setPlainText(json.dumps(movements, indent=2, ensure_ascii=False))
 
         self._run_api(action)
+
+    def refresh_counterparties(self) -> None:
+        """Refresh counterparties table with debt balances."""
+
+        def action() -> None:
+            rows = self.api_client.get_counterparties(self.counterparty_search.text().strip() or None, include_debt=True)
+            self.counterparties_table.setRowCount(len(rows))
+            for row, counterparty in enumerate(rows):
+                debt = counterparty.get("debt") or {}
+                debt_text = f"R {debt.get('receivable', '0.00')} / P {debt.get('payable', '0.00')}"
+                values = [
+                    counterparty.get("id"),
+                    counterparty.get("code"),
+                    counterparty.get("name"),
+                    counterparty.get("role_flags"),
+                    debt_text,
+                ]
+                for col, value in enumerate(values):
+                    self.counterparties_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        self._run_api(action)
+
+    def refresh_pricing(self) -> None:
+        """Refresh price-list table."""
+
+        def action() -> None:
+            rows = self.api_client.get_price_lists()
+            self.pricing_table.setRowCount(len(rows))
+            for row, price_list in enumerate(rows):
+                values = [
+                    price_list.get("id"),
+                    price_list.get("name_ru"),
+                    price_list.get("currency_code") or price_list.get("currency_id"),
+                    price_list.get("is_default"),
+                ]
+                for col, value in enumerate(values):
+                    self.pricing_table.setItem(row, col, QTableWidgetItem(str(value)))
+
+        self._run_api(action)
+
+    def refresh_purchase(self) -> None:
+        """Refresh purchase invoices and payable ledger."""
+
+        def action() -> None:
+            invoices = self.api_client.get_purchase_invoices()
+            self.purchase_table.setRowCount(len(invoices))
+            for row, invoice in enumerate(invoices):
+                values = [
+                    invoice.get("id"),
+                    invoice.get("doc_number"),
+                    invoice.get("counterparty_name"),
+                    invoice.get("total_amount_tmt"),
+                    invoice.get("status"),
+                    invoice.get("payment_status"),
+                ]
+                for col, value in enumerate(values):
+                    self.purchase_table.setItem(row, col, QTableWidgetItem(str(value)))
+            ledger = self.api_client.get_debt_ledger(debt_type="payable")
+            self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
+
+        self._run_api(action)
+
+    def _default_currency_id(self) -> int:
+        """Return the seeded TMT currency id, or the first available currency id."""
+
+        currencies = self.api_client.get_currencies()
+        for currency in currencies:
+            if currency.get("code") == "TMT":
+                return int(currency["id"])
+        if not currencies:
+            raise ValueError("No currencies are configured.")
+        return int(currencies[0]["id"])
 
     def create_product_group_dialog(self) -> None:
         """Create a product group."""
@@ -547,6 +709,210 @@ class MainWindow(QWidget):
                 self.translator.text("catalog.find_barcode"),
                 json.dumps(product, indent=2, ensure_ascii=False),
             )
+
+        self._run_api(action)
+
+    def create_counterparty_dialog(self) -> None:
+        """Create a supplier/customer counterparty."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("counterparties.create"))
+        form = QFormLayout(dialog)
+        code = QLineEdit()
+        name = QLineEdit()
+        role = QLineEdit("1")
+        phone = QLineEdit()
+        address = QLineEdit()
+        for key, widget in (
+            ("counterparties.form.code", code),
+            ("counterparties.form.name", name),
+            ("counterparties.form.role", role),
+            ("counterparties.form.phone", phone),
+            ("counterparties.form.address", address),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            role_flags = int(role.text().strip() or "1")
+            self.api_client.create_counterparty(
+                {
+                    "code": code.text().strip(),
+                    "name": name.text().strip(),
+                    "role_flags": role_flags,
+                    "counterparty_type": "supplier" if role_flags == 1 else "both" if role_flags == 3 else "customer",
+                    "phone": phone.text().strip() or None,
+                    "address": address.text().strip() or None,
+                }
+            )
+            self.refresh_counterparties()
+
+        self._run_api(action)
+
+    def create_price_list_dialog(self) -> None:
+        """Create a price list."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("pricing.create_price_list"))
+        form = QFormLayout(dialog)
+        name = QLineEdit()
+        currency_id = QLineEdit()
+        is_default = QLineEdit("true")
+        form.addRow(self.translator.text("pricing.form.name"), name)
+        form.addRow(self.translator.text("pricing.form.currency_id"), currency_id)
+        form.addRow(self.translator.text("pricing.table.default"), is_default)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            selected_currency_id = int(currency_id.text().strip() or self._default_currency_id())
+            self.api_client.create_price_list(
+                {
+                    "name_ru": name.text().strip(),
+                    "currency_id": selected_currency_id,
+                    "is_default": is_default.text().strip().lower() in {"1", "true", "yes", "да"},
+                }
+            )
+            self.refresh_pricing()
+
+        self._run_api(action)
+
+    def add_price_dialog(self) -> None:
+        """Add a product price to a price list."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("pricing.add_price"))
+        form = QFormLayout(dialog)
+        price_list_id = QLineEdit()
+        product_id = QLineEdit()
+        product_price = QLineEdit("0")
+        valid_from = QLineEdit(date.today().isoformat())
+        for key, widget in (
+            ("pricing.form.price_list_id", price_list_id),
+            ("pricing.form.product_id", product_id),
+            ("pricing.form.price", product_price),
+            ("pricing.form.valid_from", valid_from),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.add_price_list_item(
+                int(price_list_id.text().strip()),
+                {
+                    "product_id": int(product_id.text().strip()),
+                    "price_tmt": product_price.text().strip() or "0",
+                    "valid_from": valid_from.text().strip() or date.today().isoformat(),
+                },
+            )
+            self.refresh_pricing()
+
+        self._run_api(action)
+
+    def create_purchase_invoice_dialog(self) -> None:
+        """Create and post a one-line purchase invoice."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("purchase.create_invoice"))
+        form = QFormLayout(dialog)
+        supplier_id = QLineEdit()
+        warehouse_id = QLineEdit()
+        currency_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("1")
+        purchase_price = QLineEdit("0")
+        for key, widget in (
+            ("purchase.form.supplier_id", supplier_id),
+            ("purchase.form.warehouse_id", warehouse_id),
+            ("purchase.form.currency_id", currency_id),
+            ("purchase.form.product_id", product_id),
+            ("purchase.form.quantity", quantity),
+            ("purchase.form.price", purchase_price),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            invoice = self.api_client.create_purchase_invoice(
+                {
+                    "counterparty_id": int(supplier_id.text().strip()),
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "currency_rate": "1",
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "quantity": quantity.text().strip() or "1",
+                            "price_cur": purchase_price.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.api_client.post_purchase_invoice(int(invoice["id"]))
+            self.refresh_purchase()
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
+    def create_supplier_payment_dialog(self) -> None:
+        """Create an outgoing supplier payment."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("purchase.create_payment"))
+        form = QFormLayout(dialog)
+        supplier_id = QLineEdit()
+        invoice_id = QLineEdit()
+        amount = QLineEdit("0")
+        for key, widget in (
+            ("purchase.form.supplier_id", supplier_id),
+            ("purchase.form.invoice_id", invoice_id),
+            ("purchase.form.payment_amount", amount),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.create_payment(
+                {
+                    "counterparty_id": int(supplier_id.text().strip()),
+                    "direction": "outgoing",
+                    "payment_method": "cash",
+                    "amount_tmt": amount.text().strip() or "0",
+                    "allocations": [
+                        {
+                            "doc_type": "purchase_invoice",
+                            "doc_id": int(invoice_id.text().strip()),
+                            "allocated_amount": amount.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.refresh_purchase()
+            self.refresh_counterparties()
 
         self._run_api(action)
 
@@ -813,6 +1179,23 @@ class MainWindow(QWidget):
 
         self.warehouse_table.setHorizontalHeaderLabels([self.translator.text(key) for key in WAREHOUSE_TABLE_HEADER_KEYS])
 
+    def _set_counterparties_table_headers(self) -> None:
+        """Apply translated column headers to the counterparties table."""
+
+        self.counterparties_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in COUNTERPARTY_TABLE_HEADER_KEYS]
+        )
+
+    def _set_pricing_table_headers(self) -> None:
+        """Apply translated column headers to the pricing table."""
+
+        self.pricing_table.setHorizontalHeaderLabels([self.translator.text(key) for key in PRICING_TABLE_HEADER_KEYS])
+
+    def _set_purchase_table_headers(self) -> None:
+        """Apply translated column headers to the purchase table."""
+
+        self.purchase_table.setHorizontalHeaderLabels([self.translator.text(key) for key in PURCHASE_TABLE_HEADER_KEYS])
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
@@ -820,8 +1203,13 @@ class MainWindow(QWidget):
         self._set_users_table_headers()
         self._set_catalog_table_headers()
         self._set_warehouse_table_headers()
+        self._set_counterparties_table_headers()
+        self._set_pricing_table_headers()
+        self._set_purchase_table_headers()
         if hasattr(self, "catalog_search"):
             self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
+        if hasattr(self, "counterparty_search"):
+            self.counterparty_search.setPlaceholderText(self.translator.text("counterparties.search"))
         user = self.api_client.current_user
         user_text = f"{user.full_name} ({user.role_name})" if user else ""
         self.status_label.setText(f"{self.translator.text('main.connected')}: {user_text}")
@@ -854,6 +1242,7 @@ class MainWindow(QWidget):
             "hardware": None,
             "catalog": "goods.view",
             "warehouse": "warehouse.view",
+            "counterparties": "counterparty.view",
             "purchase": "purchase.view",
             "pricing": "pricing.view",
             "sales": "sale.view",
