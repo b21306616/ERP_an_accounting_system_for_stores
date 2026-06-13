@@ -106,3 +106,27 @@ class SaleCreate(BaseModel):
         if self.payment_type == "debt" and self.counterparty_id is None:
             raise ValueError("counterparty_id is required for debt sales.")
         return self
+
+class SaleReturnLineCreate(BaseModel):
+    """Create payload for one sale-return line."""
+
+    source_sale_line_id: int
+    quantity: Decimal = Field(gt=0)
+    price_final: Decimal | None = Field(default=None, ge=0)
+
+
+class SaleReturnCreate(BaseModel):
+    """Create payload for a customer sale return."""
+
+    doc_number: str | None = Field(default=None, max_length=50)
+    doc_date: datetime | None = None
+    sale_id: int
+    cash_register_id: int | None = None
+    cash_shift_id: int | None = None
+    refund_method: str = Field(pattern="^(cash|transfer|debt_correction|mixed)$")
+    refund_cash_tmt: Decimal = Field(default=Decimal("0"), ge=0)
+    refund_transfer_tmt: Decimal = Field(default=Decimal("0"), ge=0)
+    receivable_correction_tmt: Decimal = Field(default=Decimal("0"), ge=0)
+    note: str | None = Field(default=None, max_length=200)
+    lines: list[SaleReturnLineCreate] = Field(min_length=1)
+

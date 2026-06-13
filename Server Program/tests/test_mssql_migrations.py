@@ -37,7 +37,7 @@ class MSSQLMigrationSmokeTests(unittest.TestCase):
         try:
             with engine.connect() as connection:
                 result = connection.execute(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(result.scalar_one(), "0006_sales_cashier_reports")
+                self.assertEqual(result.scalar_one(), "0007_document_lifecycle")
         finally:
             engine.dispose()
 

@@ -53,11 +53,13 @@ _MODULE_SEGMENTS = {
     "counterparties": "counterparty",
     "debt-ledger": "counterparty",
     "payments": "counterparty",
+    "purchase-orders": "purchase",
     "purchase-invoices": "purchase",
     "cash-registers": "cashier",
     "cash-shifts": "cashier",
     "cash-operations": "cashier",
     "sales": "sale",
+    "sale-returns": "sale_return",
     "reports": "reports",
     "system": "system",
 }

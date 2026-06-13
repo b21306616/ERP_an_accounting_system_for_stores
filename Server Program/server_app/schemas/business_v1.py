@@ -83,9 +83,57 @@ class PriceListItemCreate(BaseModel):
         return self
 
 
+class PurchaseOrderLineCreate(BaseModel):
+    """Create payload for a purchase order line."""
+
+    product_id: int | None = None
+    service_id: int | None = None
+    expense_category_id: int | None = None
+    product_uom_id: int | None = None
+    uom_id: int | None = None
+    quantity: Decimal = Field(gt=0)
+    price_cur: Decimal = Field(ge=0)
+
+    @model_validator(mode="after")
+    def validate_target(self) -> "PurchaseOrderLineCreate":
+        """Require exactly one line target."""
+
+        if (self.product_id is None) == (self.service_id is None):
+            raise ValueError("Exactly one of product_id or service_id is required.")
+        if self.service_id is not None and self.expense_category_id is None:
+            raise ValueError("expense_category_id is required for service purchase order lines.")
+        return self
+
+
+class PurchaseOrderCreate(BaseModel):
+    """Create payload for a supplier purchase order."""
+
+    doc_number: str | None = Field(default=None, max_length=50)
+    doc_date: date | None = None
+    counterparty_id: int
+    warehouse_id: int
+    currency_id: int
+    currency_rate: Decimal = Field(default=Decimal("1"), gt=0)
+    note: str | None = None
+    lines: list[PurchaseOrderLineCreate] = Field(min_length=1)
+
+
+class PurchaseOrderUpdate(BaseModel):
+    """Replace editable fields and lines for an open purchase order."""
+
+    doc_date: date | None = None
+    counterparty_id: int | None = None
+    warehouse_id: int | None = None
+    currency_id: int | None = None
+    currency_rate: Decimal | None = Field(default=None, gt=0)
+    note: str | None = None
+    lines: list[PurchaseOrderLineCreate] | None = Field(default=None, min_length=1)
+
+
 class PurchaseInvoiceLineCreate(BaseModel):
     """Create payload for a purchase invoice line."""
 
+    purchase_order_line_id: int | None = None
     product_id: int | None = None
     service_id: int | None = None
     expense_category_id: int | None = None

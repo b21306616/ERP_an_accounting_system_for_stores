@@ -25,6 +25,8 @@ from server_app.db.models import (
     PriceListItem,
     Product,
     ProductUom,
+    PurchaseOrder,
+    PurchaseOrderLine,
     PurchaseInvoice,
     PurchaseInvoiceLine,
     Sale,
@@ -41,6 +43,8 @@ from server_app.schemas.business_v1 import (
     PriceListCreate,
     PriceListItemCreate,
     PurchaseInvoiceCreate,
+    PurchaseOrderCreate,
+    PurchaseOrderUpdate,
 )
 from server_app.services.settlements import (
     current_debt_balance,
@@ -67,9 +71,13 @@ require_pricing_view = require_v1_permission("pricing.view")
 require_pricing_create = require_v1_permission("pricing.price_list_create")
 require_pricing_edit = require_v1_permission("pricing.price_list_edit")
 require_purchase_view = require_v1_permission("purchase.view")
+require_purchase_order_create = require_v1_permission("purchase.order_create")
+require_purchase_order_edit = require_v1_permission("purchase.order_edit")
+require_purchase_order_cancel = require_v1_permission("purchase.order_cancel")
 require_purchase_create = require_v1_permission("purchase.invoice_create")
 require_purchase_post = require_v1_permission("purchase.post")
 require_purchase_cancel = require_v1_permission("purchase.cancel")
+require_purchase_return = require_v1_permission("purchase.return")
 
 
 def _decimal(value: Decimal | int | str | None, places: str) -> str:
@@ -186,11 +194,62 @@ def _price_item_payload(row: PriceListItem) -> dict[str, Any]:
     }
 
 
+def _order_line_payload(line: PurchaseOrderLine) -> dict[str, Any]:
+    """Return a purchase order line payload."""
+
+    return {
+        "id": line.id,
+        "product_id": line.product_id,
+        "product_sku": line.product.sku if line.product else None,
+        "product_name": line.product.name if line.product else None,
+        "service_id": line.service_id,
+        "service_code": line.service.code if line.service else None,
+        "service_name_ru": line.service.name_ru if line.service else None,
+        "expense_category_id": line.expense_category_id,
+        "product_uom_id": line.product_uom_id,
+        "uom_id": line.uom_id,
+        "uom_code": line.uom.code if line.uom else None,
+        "quantity_ordered": _decimal(line.quantity_ordered, "0.0001"),
+        "quantity_received": _decimal(line.quantity_received, "0.0001"),
+        "price_cur": _decimal(line.price_cur, "0.0001"),
+        "price_tmt": _decimal(line.price_tmt, "0.0001"),
+        "amount_cur": _decimal(line.amount_cur, "0.01"),
+        "amount_tmt": _decimal(line.amount_tmt, "0.01"),
+    }
+
+
+def _order_payload(order: PurchaseOrder) -> dict[str, Any]:
+    """Return a purchase order payload."""
+
+    return {
+        "id": order.id,
+        "doc_number": order.doc_number,
+        "doc_date": order.doc_date.isoformat() if order.doc_date else None,
+        "counterparty_id": order.counterparty_id,
+        "counterparty_name": order.counterparty.name if order.counterparty else None,
+        "warehouse_id": order.warehouse_id,
+        "warehouse_name": order.warehouse.name if order.warehouse else None,
+        "currency_id": order.currency_id,
+        "currency_code": order.currency.code if order.currency else None,
+        "currency_rate": _decimal(order.currency_rate, "0.000001"),
+        "total_amount_cur": _decimal(order.total_amount_cur, "0.01"),
+        "total_amount_tmt": _decimal(order.total_amount_tmt, "0.01"),
+        "status": order.status,
+        "note": order.note,
+        "sent_by_user_id": order.sent_by_user_id,
+        "sent_at": order.sent_at.isoformat() if order.sent_at else None,
+        "cancelled_by_user_id": order.cancelled_by_user_id,
+        "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
+        "lines": [_order_line_payload(line) for line in order.lines],
+    }
+
+
 def _invoice_line_payload(line: PurchaseInvoiceLine) -> dict[str, Any]:
     """Return a purchase invoice line payload."""
 
     return {
         "id": line.id,
+        "purchase_order_line_id": line.purchase_order_line_id,
         "product_id": line.product_id,
         "product_sku": line.product.sku if line.product else None,
         "product_name": line.product.name if line.product else None,
@@ -220,6 +279,7 @@ def _invoice_payload(invoice: PurchaseInvoice) -> dict[str, Any]:
         "doc_date": invoice.doc_date.isoformat() if invoice.doc_date else None,
         "counterparty_id": invoice.counterparty_id,
         "counterparty_name": invoice.counterparty.name if invoice.counterparty else None,
+        "purchase_order_id": invoice.purchase_order_id,
         "warehouse_id": invoice.warehouse_id,
         "warehouse_name": invoice.warehouse.name if invoice.warehouse else None,
         "currency_id": invoice.currency_id,
@@ -289,11 +349,34 @@ def _payment_payload(payment: Payment) -> dict[str, Any]:
     }
 
 
+def _order_query(session: Session):
+    """Return a purchase order query with response relationships loaded."""
+
+    return session.query(PurchaseOrder).options(
+        selectinload(PurchaseOrder.counterparty),
+        selectinload(PurchaseOrder.warehouse),
+        selectinload(PurchaseOrder.currency),
+        selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.product),
+        selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.service),
+        selectinload(PurchaseOrder.lines).selectinload(PurchaseOrderLine.uom),
+    )
+
+
+def _refresh_order(session: Session, order_id: int) -> PurchaseOrder:
+    """Reload a purchase order with response relationships."""
+
+    order = _order_query(session).filter(PurchaseOrder.id == order_id).one_or_none()
+    if order is None:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Purchase order not found."))
+    return order
+
+
 def _invoice_query(session: Session):
     """Return a purchase invoice query with response relationships loaded."""
 
     return session.query(PurchaseInvoice).options(
         selectinload(PurchaseInvoice.counterparty),
+        selectinload(PurchaseInvoice.purchase_order),
         selectinload(PurchaseInvoice.warehouse),
         selectinload(PurchaseInvoice.currency),
         selectinload(PurchaseInvoice.lines).selectinload(PurchaseInvoiceLine.product),
@@ -357,12 +440,12 @@ def _line_uom_id(session: Session, product: Product | None, product_uom_id: int 
     return product.base_uom_id if product is not None else None
 
 
-def _create_invoice_line(session: Session, invoice: PurchaseInvoice, line_payload: Any) -> PurchaseInvoiceLine:
-    """Create one invoice line and validate references."""
+def _create_order_line(session: Session, order: PurchaseOrder, line_payload: Any) -> PurchaseOrderLine:
+    """Create one purchase order line and validate references."""
 
     line_qty = qty4(line_payload.quantity)
     line_price_cur = price(line_payload.price_cur)
-    line_price_tmt = price(line_price_cur * invoice.currency_rate)
+    line_price_tmt = price(line_price_cur * order.currency_rate)
     amount_cur = money(line_qty * line_price_cur)
     amount_tmt = money(line_qty * line_price_tmt)
     product: Product | None = None
@@ -378,7 +461,107 @@ def _create_invoice_line(session: Session, invoice: PurchaseInvoice, line_payloa
         _get_or_404(session, ExpenseCategory, line_payload.expense_category_id, "Expense category")
 
     resolved_uom_id = _line_uom_id(session, product, line_payload.product_uom_id, line_payload.uom_id)
+    return PurchaseOrderLine(
+        product_id=line_payload.product_id,
+        service_id=line_payload.service_id,
+        expense_category_id=line_payload.expense_category_id,
+        product_uom_id=line_payload.product_uom_id,
+        uom_id=resolved_uom_id,
+        quantity_ordered=line_qty,
+        quantity_received=Decimal("0.0000"),
+        price_cur=line_price_cur,
+        price_tmt=line_price_tmt,
+        amount_cur=amount_cur,
+        amount_tmt=amount_tmt,
+    )
+
+
+def _recalculate_order_totals(order: PurchaseOrder) -> None:
+    """Recalculate purchase order totals from lines."""
+
+    order.total_amount_cur = money(sum((line.amount_cur for line in order.lines), Decimal("0")))
+    order.total_amount_tmt = money(sum((line.amount_tmt for line in order.lines), Decimal("0")))
+
+
+def _update_order_status_from_receipts(order: PurchaseOrder) -> None:
+    """Set purchase order status from received quantities."""
+
+    if order.status == "cancelled":
+        return
+    if not order.lines:
+        order.status = "sent" if order.sent_at else "draft"
+        return
+    received_quantities = [qty4(line.quantity_received) for line in order.lines]
+    ordered_quantities = [qty4(line.quantity_ordered) for line in order.lines]
+    if all(received >= ordered for received, ordered in zip(received_quantities, ordered_quantities)):
+        order.status = "received"
+    elif any(received > Decimal("0.0000") for received in received_quantities):
+        order.status = "partial"
+    else:
+        order.status = "sent" if order.sent_at else "draft"
+
+
+def _apply_invoice_to_order(session: Session, invoice: PurchaseInvoice, direction: int) -> None:
+    """Adjust linked purchase-order received quantities for invoice posting/cancel."""
+
+    if invoice.purchase_order_id is None:
+        return
+    order = session.get(PurchaseOrder, invoice.purchase_order_id)
+    if order is None:
+        return
+    for line in invoice.lines:
+        if line.purchase_order_line_id is None:
+            continue
+        order_line = session.get(PurchaseOrderLine, line.purchase_order_line_id)
+        if order_line is None:
+            continue
+        sign = Decimal(direction)
+        if invoice.is_return:
+            sign = -sign
+        new_quantity = qty4(order_line.quantity_received + (qty4(line.quantity) * sign))
+        if new_quantity < Decimal("0.0000"):
+            new_quantity = Decimal("0.0000")
+        order_line.quantity_received = new_quantity
+    session.flush()
+    _update_order_status_from_receipts(order)
+
+
+def _ensure_order_line_matches_invoice(invoice: PurchaseInvoice, order_line: PurchaseOrderLine, line_payload: Any) -> None:
+    """Validate that an invoice line belongs to and matches its order line."""
+
+    if invoice.purchase_order_id is None or order_line.purchase_order_id != invoice.purchase_order_id:
+        raise HTTPException(status_code=400, detail=error_detail("ORDER_LINE_MISMATCH", "Purchase order line does not belong to the invoice order."))
+    if order_line.product_id != line_payload.product_id or order_line.service_id != line_payload.service_id:
+        raise HTTPException(status_code=400, detail=error_detail("ORDER_LINE_TARGET_MISMATCH", "Invoice line target differs from the purchase order line."))
+
+
+def _create_invoice_line(session: Session, invoice: PurchaseInvoice, line_payload: Any) -> PurchaseInvoiceLine:
+    """Create one invoice line and validate references."""
+
+    line_qty = qty4(line_payload.quantity)
+    line_price_cur = price(line_payload.price_cur)
+    line_price_tmt = price(line_price_cur * invoice.currency_rate)
+    amount_cur = money(line_qty * line_price_cur)
+    amount_tmt = money(line_qty * line_price_tmt)
+    product: Product | None = None
+
+    if line_payload.purchase_order_line_id is not None:
+        order_line = _get_or_404(session, PurchaseOrderLine, line_payload.purchase_order_line_id, "Purchase order line")
+        _ensure_order_line_matches_invoice(invoice, order_line, line_payload)
+
+    if line_payload.product_id is not None:
+        product = _get_or_404(session, Product, line_payload.product_id, "Product")
+        if not product.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_PRODUCT", "Product is inactive."))
+    if line_payload.service_id is not None:
+        service = _get_or_404(session, Service, line_payload.service_id, "Service")
+        if not service.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_SERVICE", "Service is inactive."))
+        _get_or_404(session, ExpenseCategory, line_payload.expense_category_id, "Expense category")
+
+    resolved_uom_id = _line_uom_id(session, product, line_payload.product_uom_id, line_payload.uom_id)
     return PurchaseInvoiceLine(
+        purchase_order_line_id=line_payload.purchase_order_line_id,
         product_id=line_payload.product_id,
         service_id=line_payload.service_id,
         expense_category_id=line_payload.expense_category_id,
@@ -592,6 +775,135 @@ def get_current_price(
     return success_response(_price_item_payload(item))
 
 
+@router.get("/purchase-orders")
+def list_purchase_orders(
+    _: User = Depends(require_purchase_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List recent purchase orders."""
+
+    rows = _order_query(session).order_by(PurchaseOrder.id.desc()).limit(200).all()
+    return success_response([_order_payload(row) for row in rows])
+
+
+@router.post("/purchase-orders", status_code=status.HTTP_201_CREATED)
+def create_purchase_order(
+    payload: PurchaseOrderCreate,
+    current_user: User = Depends(require_purchase_order_create),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a draft supplier purchase order."""
+
+    counterparty = _ensure_active_counterparty(session, payload.counterparty_id)
+    _ensure_supplier(counterparty)
+    _ensure_active_warehouse(session, payload.warehouse_id)
+    _ensure_active_currency(session, payload.currency_id)
+    doc_number = payload.doc_number or generate_doc_number(session, PurchaseOrder, "PO")
+    if session.query(PurchaseOrder).filter(PurchaseOrder.doc_number == doc_number).one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Purchase order number already exists."))
+    order = PurchaseOrder(
+        doc_number=doc_number,
+        doc_date=payload.doc_date or date.today(),
+        counterparty_id=payload.counterparty_id,
+        warehouse_id=payload.warehouse_id,
+        currency_id=payload.currency_id,
+        currency_rate=payload.currency_rate,
+        note=payload.note,
+        created_by_user_id=current_user.id,
+    )
+    session.add(order)
+    session.flush()
+    for line_payload in payload.lines:
+        order.lines.append(_create_order_line(session, order, line_payload))
+    _recalculate_order_totals(order)
+    session.commit()
+    return success_response(_order_payload(_refresh_order(session, order.id)))
+
+
+@router.get("/purchase-orders/{order_id}")
+def get_purchase_order(
+    order_id: int,
+    _: User = Depends(require_purchase_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return one purchase order."""
+
+    return success_response(_order_payload(_refresh_order(session, order_id)))
+
+
+@router.put("/purchase-orders/{order_id}")
+def update_purchase_order(
+    order_id: int,
+    payload: PurchaseOrderUpdate,
+    _: User = Depends(require_purchase_order_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Update an unreceived purchase order."""
+
+    order = _refresh_order(session, order_id)
+    if order.status not in {"draft", "sent"}:
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft or sent purchase orders can be edited."))
+    if any(qty4(line.quantity_received) > Decimal("0.0000") for line in order.lines):
+        raise HTTPException(status_code=400, detail=error_detail("ORDER_HAS_RECEIPTS", "Purchase order with received quantities cannot be edited."))
+    updates = _updates(payload)
+    if updates.get("counterparty_id") is not None:
+        counterparty = _ensure_active_counterparty(session, int(updates["counterparty_id"]))
+        _ensure_supplier(counterparty)
+    if updates.get("warehouse_id") is not None:
+        _ensure_active_warehouse(session, int(updates["warehouse_id"]))
+    if updates.get("currency_id") is not None:
+        _ensure_active_currency(session, int(updates["currency_id"]))
+    for key in ("doc_date", "counterparty_id", "warehouse_id", "currency_id", "currency_rate", "note"):
+        if key in updates:
+            setattr(order, key, updates[key])
+    if payload.lines is not None:
+        order.lines.clear()
+        session.flush()
+        for line_payload in payload.lines:
+            order.lines.append(_create_order_line(session, order, line_payload))
+    _recalculate_order_totals(order)
+    session.commit()
+    return success_response(_order_payload(_refresh_order(session, order.id)))
+
+
+@router.post("/purchase-orders/{order_id}/send")
+def send_purchase_order(
+    order_id: int,
+    current_user: User = Depends(require_purchase_order_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Mark a draft purchase order as sent to the supplier."""
+
+    order = _refresh_order(session, order_id)
+    if order.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft purchase orders can be sent."))
+    order.status = "sent"
+    order.sent_by_user_id = current_user.id
+    order.sent_at = now_utc()
+    session.commit()
+    return success_response(_order_payload(_refresh_order(session, order.id)))
+
+
+@router.post("/purchase-orders/{order_id}/cancel")
+def cancel_purchase_order(
+    order_id: int,
+    current_user: User = Depends(require_purchase_order_cancel),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cancel a purchase order that has not received goods."""
+
+    order = _refresh_order(session, order_id)
+    if order.status == "cancelled":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Purchase order is already cancelled."))
+    if any(qty4(line.quantity_received) > Decimal("0.0000") for line in order.lines):
+        raise HTTPException(status_code=400, detail=error_detail("ORDER_HAS_RECEIPTS", "Cancel linked purchase invoices before cancelling this order."))
+    order.status = "cancelled"
+    order.cancelled_by_user_id = current_user.id
+    order.cancelled_at = now_utc()
+    session.commit()
+    return success_response(_order_payload(_refresh_order(session, order.id)))
+
+
 @router.get("/purchase-invoices")
 def list_purchase_invoices(
     _: User = Depends(require_purchase_view),
@@ -615,8 +927,18 @@ def create_purchase_invoice(
     _ensure_supplier(counterparty)
     _ensure_active_warehouse(session, payload.warehouse_id)
     _ensure_active_currency(session, payload.currency_id)
+    if payload.purchase_order_id is not None:
+        order = _refresh_order(session, payload.purchase_order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_CANCELLED", "Purchase order is cancelled."))
+        if order.counterparty_id != payload.counterparty_id or order.warehouse_id != payload.warehouse_id or order.currency_id != payload.currency_id:
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_HEADER_MISMATCH", "Invoice header differs from the linked purchase order."))
+        if any(line.purchase_order_line_id is None for line in payload.lines):
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_LINE_REQUIRED", "Every invoice line linked to an order must reference a purchase order line."))
     if payload.return_invoice_id is not None:
-        _get_or_404(session, PurchaseInvoice, payload.return_invoice_id, "Return source invoice")
+        source_invoice = _get_or_404(session, PurchaseInvoice, payload.return_invoice_id, "Return source invoice")
+        if source_invoice.status != "posted" or source_invoice.is_return:
+            raise HTTPException(status_code=400, detail=error_detail("INVALID_RETURN_SOURCE", "Supplier returns must reference a posted purchase invoice."))
     doc_number = payload.doc_number or generate_doc_number(session, PurchaseInvoice, "PIN")
     if session.query(PurchaseInvoice).filter(PurchaseInvoice.doc_number == doc_number).one_or_none() is not None:
         raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Purchase invoice number already exists."))
@@ -645,6 +967,17 @@ def create_purchase_invoice(
         invoice.total_amount_tmt = -invoice.total_amount_tmt
     session.commit()
     return success_response(_invoice_payload(_refresh_invoice(session, invoice.id)))
+
+
+@router.post("/purchase-invoices/return", status_code=status.HTTP_201_CREATED)
+def create_purchase_return_invoice(
+    payload: PurchaseInvoiceCreate,
+    current_user: User = Depends(require_purchase_return),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a supplier-return purchase invoice."""
+
+    return create_purchase_invoice(payload.model_copy(update={"is_return": True}), current_user, session)
 
 
 @router.get("/purchase-invoices/{invoice_id}")
@@ -680,7 +1013,7 @@ def post_purchase_invoice(
                 warehouse_id=invoice.warehouse_id,
                 product_id=line.product_id,
                 uom_id=line.uom_id,
-                movement_type="purchase",
+                movement_type=("purchase_return" if invoice.is_return else "purchase"),
                 document_type="purchase_invoice",
                 document_id=invoice.id,
                 quantity_delta=(-line.quantity if invoice.is_return else line.quantity),
@@ -710,6 +1043,7 @@ def post_purchase_invoice(
         note="Purchase invoice posted",
         user_id=current_user.id,
     )
+    _apply_invoice_to_order(session, invoice, direction=1)
     session.commit()
     return success_response(_invoice_payload(_refresh_invoice(session, invoice.id)))
 
@@ -720,11 +1054,17 @@ def cancel_purchase_invoice(
     current_user: User = Depends(require_purchase_cancel),
     session: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Cancel a posted purchase invoice with reversing entries."""
+    """Cancel a draft purchase invoice or reverse a posted one."""
 
     invoice = _refresh_invoice(session, invoice_id)
+    if invoice.status == "cancelled":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Purchase invoice is already cancelled."))
+    if invoice.status == "draft":
+        invoice.status = "cancelled"
+        session.commit()
+        return success_response(_invoice_payload(_refresh_invoice(session, invoice.id)))
     if invoice.status != "posted":
-        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only posted purchase invoices can be cancelled."))
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft or posted purchase invoices can be cancelled."))
     try:
         for line in invoice.lines:
             if line.product_id is None:
@@ -734,7 +1074,7 @@ def cancel_purchase_invoice(
                 warehouse_id=invoice.warehouse_id,
                 product_id=line.product_id,
                 uom_id=line.uom_id,
-                movement_type="purchase_cancel",
+                movement_type=("purchase_return_cancel" if invoice.is_return else "purchase_cancel"),
                 document_type="purchase_invoice",
                 document_id=invoice.id,
                 quantity_delta=(line.quantity if invoice.is_return else -line.quantity),
@@ -760,6 +1100,7 @@ def cancel_purchase_invoice(
         note="Purchase invoice cancelled",
         user_id=current_user.id,
     )
+    _apply_invoice_to_order(session, invoice, direction=-1)
     session.commit()
     return success_response(_invoice_payload(_refresh_invoice(session, invoice.id)))
 

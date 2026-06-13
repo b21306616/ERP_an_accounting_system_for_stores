@@ -398,13 +398,19 @@ class MainWindow(QWidget):
         refresh = QPushButton()
         refresh.setProperty("textKey", "purchase.refresh")
         refresh.clicked.connect(self.refresh_purchase)
+        create_order = QPushButton()
+        create_order.setProperty("textKey", "purchase.create_order")
+        create_order.clicked.connect(self.create_purchase_order_dialog)
         create_invoice = QPushButton()
         create_invoice.setProperty("textKey", "purchase.create_invoice")
         create_invoice.clicked.connect(self.create_purchase_invoice_dialog)
+        create_return = QPushButton()
+        create_return.setProperty("textKey", "purchase.create_return")
+        create_return.clicked.connect(self.create_supplier_return_dialog)
         create_payment = QPushButton()
         create_payment.setProperty("textKey", "purchase.create_payment")
         create_payment.clicked.connect(self.create_supplier_payment_dialog)
-        for widget in (refresh, create_invoice, create_payment):
+        for widget in (refresh, create_order, create_invoice, create_return, create_payment):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.purchase_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
@@ -431,10 +437,13 @@ class MainWindow(QWidget):
         create_payment = QPushButton()
         create_payment.setProperty("textKey", "sales.create_payment")
         create_payment.clicked.connect(self.create_customer_payment_dialog)
+        create_return = QPushButton()
+        create_return.setProperty("textKey", "sales.create_return")
+        create_return.clicked.connect(self.create_sale_return_dialog)
         cancel_sale = QPushButton()
         cancel_sale.setProperty("textKey", "sales.cancel")
         cancel_sale.clicked.connect(self.cancel_sale_dialog)
-        for widget in (refresh, create_sale, create_payment, cancel_sale):
+        for widget in (refresh, create_sale, create_return, create_payment, cancel_sale):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.sales_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
@@ -968,6 +977,55 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
+    def create_purchase_order_dialog(self) -> None:
+        """Create a one-line purchase order."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("purchase.create_order"))
+        form = QFormLayout(dialog)
+        supplier_id = QLineEdit()
+        warehouse_id = QLineEdit()
+        currency_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("1")
+        purchase_price = QLineEdit("0")
+        for key, widget in (
+            ("purchase.form.supplier_id", supplier_id),
+            ("purchase.form.warehouse_id", warehouse_id),
+            ("purchase.form.currency_id", currency_id),
+            ("purchase.form.product_id", product_id),
+            ("purchase.form.quantity", quantity),
+            ("purchase.form.price", purchase_price),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def action() -> None:
+            self.api_client.create_purchase_order(
+                {
+                    "counterparty_id": int(supplier_id.text().strip()),
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "currency_rate": "1",
+                    "lines": [
+                        {
+                            "product_id": int(product_id.text().strip()),
+                            "quantity": quantity.text().strip() or "1",
+                            "price_cur": purchase_price.text().strip() or "0",
+                        }
+                    ],
+                }
+            )
+            self.refresh_purchase()
+
+        self._run_api(action)
+
+
     def create_purchase_invoice_dialog(self) -> None:
         """Create and post a one-line purchase invoice."""
 
@@ -1017,6 +1075,72 @@ class MainWindow(QWidget):
             self.refresh_warehouse()
 
         self._run_api(action)
+
+    def create_supplier_return_dialog(self) -> None:
+        """Create and post a one-line supplier return invoice."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("purchase.create_return"))
+        form = QFormLayout(dialog)
+        supplier_id = QLineEdit()
+        warehouse_id = QLineEdit()
+        currency_id = QLineEdit()
+        source_invoice_id = QLineEdit()
+        order_id = QLineEdit()
+        order_line_id = QLineEdit()
+        product_id = QLineEdit()
+        quantity = QLineEdit("1")
+        purchase_price = QLineEdit("0")
+        for key, widget in (
+            ("purchase.form.supplier_id", supplier_id),
+            ("purchase.form.warehouse_id", warehouse_id),
+            ("purchase.form.currency_id", currency_id),
+            ("purchase.form.return_invoice_id", source_invoice_id),
+            ("purchase.form.order_id", order_id),
+            ("purchase.form.order_line_id", order_line_id),
+            ("purchase.form.product_id", product_id),
+            ("purchase.form.quantity", quantity),
+            ("purchase.form.price", purchase_price),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def optional_int(widget: QLineEdit) -> int | None:
+            text = widget.text().strip()
+            return int(text) if text else None
+
+        def action() -> None:
+            line: dict[str, object] = {
+                "product_id": int(product_id.text().strip()),
+                "quantity": quantity.text().strip() or "1",
+                "price_cur": purchase_price.text().strip() or "0",
+            }
+            order_line = optional_int(order_line_id)
+            if order_line is not None:
+                line["purchase_order_line_id"] = order_line
+            payload: dict[str, object] = {
+                "counterparty_id": int(supplier_id.text().strip()),
+                "warehouse_id": int(warehouse_id.text().strip()),
+                "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                "currency_rate": "1",
+                "return_invoice_id": int(source_invoice_id.text().strip()),
+                "lines": [line],
+            }
+            linked_order = optional_int(order_id)
+            if linked_order is not None:
+                payload["purchase_order_id"] = linked_order
+            invoice = self.api_client.create_purchase_return(payload)
+            self.api_client.post_purchase_invoice(int(invoice["id"]))
+            self.refresh_purchase()
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
 
     def create_supplier_payment_dialog(self) -> None:
         """Create an outgoing supplier payment."""
@@ -1131,6 +1255,72 @@ class MainWindow(QWidget):
             self.refresh_sales()
 
         self._run_api(action)
+
+    def create_sale_return_dialog(self) -> None:
+        """Create and post a one-line sale return."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("sales.create_return"))
+        form = QFormLayout(dialog)
+        sale_id = QLineEdit()
+        sale_line_id = QLineEdit()
+        cash_register_id = QLineEdit()
+        cash_shift_id = QLineEdit()
+        quantity = QLineEdit("1")
+        refund_method = QLineEdit("debt_correction")
+        refund_cash = QLineEdit("0")
+        refund_transfer = QLineEdit("0")
+        receivable_correction = QLineEdit("0")
+        for key, widget in (
+            ("sales.form.sale_id", sale_id),
+            ("sales.form.sale_line_id", sale_line_id),
+            ("sales.form.cash_register_id", cash_register_id),
+            ("sales.form.cash_shift_id", cash_shift_id),
+            ("sales.form.quantity", quantity),
+            ("sales.form.refund_method", refund_method),
+            ("sales.form.refund_cash", refund_cash),
+            ("sales.form.refund_transfer", refund_transfer),
+            ("sales.form.receivable_correction", receivable_correction),
+        ):
+            form.addRow(self.translator.text(key), widget)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        def optional_int(widget: QLineEdit) -> int | None:
+            text = widget.text().strip()
+            return int(text) if text else None
+
+        def action() -> None:
+            payload: dict[str, object] = {
+                "sale_id": int(sale_id.text().strip()),
+                "refund_method": refund_method.text().strip() or "debt_correction",
+                "refund_cash_tmt": refund_cash.text().strip() or "0",
+                "refund_transfer_tmt": refund_transfer.text().strip() or "0",
+                "receivable_correction_tmt": receivable_correction.text().strip() or "0",
+                "lines": [
+                    {
+                        "source_sale_line_id": int(sale_line_id.text().strip()),
+                        "quantity": quantity.text().strip() or "1",
+                    }
+                ],
+            }
+            register = optional_int(cash_register_id)
+            shift = optional_int(cash_shift_id)
+            if register is not None:
+                payload["cash_register_id"] = register
+            if shift is not None:
+                payload["cash_shift_id"] = shift
+            sale_return = self.api_client.create_sale_return(payload)
+            self.api_client.post_sale_return(int(sale_return["id"]))
+            self.refresh_sales()
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
 
     def create_customer_payment_dialog(self) -> None:
         """Create an incoming customer payment."""

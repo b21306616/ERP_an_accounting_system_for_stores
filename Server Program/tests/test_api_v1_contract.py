@@ -704,6 +704,297 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertIn(("cashier", "close", "cash-shifts"), audit_pairs)
         self.assertTrue(all(row["user_id"] is not None for row in audit_rows))
 
+    def test_document_lifecycle_orders_returns_and_storno(self) -> None:
+        """Purchase orders, supplier returns, sale returns, and storno should stay consistent."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        currencies = requests.get(f"{self.base_url}/currencies", headers=headers, timeout=2)
+        self.assertEqual(currencies.status_code, 200)
+        currency_id = next(row for row in currencies.json()["data"] if row["code"] == "TMT")["id"]
+
+        warehouse = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-LIFE", "name": "Lifecycle warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(warehouse.status_code, 201)
+        warehouse_id = warehouse.json()["data"]["id"]
+
+        register = requests.post(
+            f"{self.base_url}/cash-registers",
+            json={"name": "Lifecycle Register", "warehouse_id": warehouse_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(register.status_code, 201)
+        register_id = register.json()["data"]["id"]
+
+        shift = requests.post(
+            f"{self.base_url}/cash-shifts/open",
+            json={"cash_register_id": register_id, "opening_amount": "0.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(shift.status_code, 201)
+        shift_id = shift.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-LIFE-001", "name": "Lifecycle Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        supplier = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "SUP-LIFE", "name": "Lifecycle Supplier", "role_flags": 1, "counterparty_type": "supplier"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier.status_code, 201)
+        supplier_id = supplier.json()["data"]["id"]
+
+        customer = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "CUS-LIFE", "name": "Lifecycle Customer", "role_flags": 2, "counterparty_type": "customer"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer.status_code, 201)
+        customer_id = customer.json()["data"]["id"]
+
+        order = requests.post(
+            f"{self.base_url}/purchase-orders",
+            json={
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [{"product_id": product_id, "quantity": "5.0000", "price_cur": "4.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(order.status_code, 201)
+        order_id = order.json()["data"]["id"]
+        order_line_id = order.json()["data"]["lines"][0]["id"]
+        self.assertEqual(order.json()["data"]["status"], "draft")
+
+        sent_order = requests.post(f"{self.base_url}/purchase-orders/{order_id}/send", headers=headers, timeout=2)
+        self.assertEqual(sent_order.status_code, 200)
+        self.assertEqual(sent_order.json()["data"]["status"], "sent")
+
+        first_invoice = requests.post(
+            f"{self.base_url}/purchase-invoices",
+            json={
+                "purchase_order_id": order_id,
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [
+                    {
+                        "purchase_order_line_id": order_line_id,
+                        "product_id": product_id,
+                        "quantity": "3.0000",
+                        "price_cur": "4.0000",
+                    }
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(first_invoice.status_code, 201)
+        first_invoice_id = first_invoice.json()["data"]["id"]
+        posted_first = requests.post(f"{self.base_url}/purchase-invoices/{first_invoice_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_first.status_code, 200)
+
+        partial_order = requests.get(f"{self.base_url}/purchase-orders/{order_id}", headers=headers, timeout=2)
+        self.assertEqual(partial_order.status_code, 200)
+        self.assertEqual(partial_order.json()["data"]["status"], "partial")
+        self.assertEqual(partial_order.json()["data"]["lines"][0]["quantity_received"], "3.0000")
+
+        second_invoice = requests.post(
+            f"{self.base_url}/purchase-invoices",
+            json={
+                "purchase_order_id": order_id,
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [
+                    {
+                        "purchase_order_line_id": order_line_id,
+                        "product_id": product_id,
+                        "quantity": "2.0000",
+                        "price_cur": "4.0000",
+                    }
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(second_invoice.status_code, 201)
+        posted_second = requests.post(
+            f"{self.base_url}/purchase-invoices/{second_invoice.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_second.status_code, 200)
+
+        received_order = requests.get(f"{self.base_url}/purchase-orders/{order_id}", headers=headers, timeout=2)
+        self.assertEqual(received_order.status_code, 200)
+        self.assertEqual(received_order.json()["data"]["status"], "received")
+        self.assertEqual(received_order.json()["data"]["lines"][0]["quantity_received"], "5.0000")
+
+        supplier_return = requests.post(
+            f"{self.base_url}/purchase-invoices/return",
+            json={
+                "purchase_order_id": order_id,
+                "return_invoice_id": first_invoice_id,
+                "counterparty_id": supplier_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "currency_rate": "1",
+                "lines": [
+                    {
+                        "purchase_order_line_id": order_line_id,
+                        "product_id": product_id,
+                        "quantity": "1.0000",
+                        "price_cur": "4.0000",
+                    }
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(supplier_return.status_code, 201)
+        self.assertTrue(supplier_return.json()["data"]["is_return"])
+        posted_supplier_return = requests.post(
+            f"{self.base_url}/purchase-invoices/{supplier_return.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_supplier_return.status_code, 200)
+
+        returned_order = requests.get(f"{self.base_url}/purchase-orders/{order_id}", headers=headers, timeout=2)
+        self.assertEqual(returned_order.json()["data"]["status"], "partial")
+        self.assertEqual(returned_order.json()["data"]["lines"][0]["quantity_received"], "4.0000")
+
+        supplier_debt = requests.get(f"{self.base_url}/counterparties/{supplier_id}/debt-summary", headers=headers, timeout=2)
+        self.assertEqual(supplier_debt.status_code, 200)
+        self.assertEqual(supplier_debt.json()["data"]["payable"], "16.00")
+
+        stock_after_purchase_return = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(stock_after_purchase_return.json()["data"][0]["quantity"], "4.000")
+
+        sale = requests.post(
+            f"{self.base_url}/sales",
+            json={
+                "sale_type": "retail",
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "counterparty_id": customer_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "payment_type": "debt",
+                "lines": [{"product_id": product_id, "quantity": "2.0000", "price_final": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale.status_code, 201)
+        sale_id = sale.json()["data"]["id"]
+        posted_sale = requests.post(f"{self.base_url}/sales/{sale_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_sale.status_code, 200)
+        sale_line_id = posted_sale.json()["data"]["lines"][0]["id"]
+
+        sale_return = requests.post(
+            f"{self.base_url}/sale-returns",
+            json={
+                "sale_id": sale_id,
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "refund_method": "debt_correction",
+                "lines": [{"source_sale_line_id": sale_line_id, "quantity": "1.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale_return.status_code, 201)
+        sale_return_id = sale_return.json()["data"]["id"]
+        self.assertEqual(sale_return.json()["data"]["receivable_correction_tmt"], "10.00")
+
+        posted_return = requests.post(f"{self.base_url}/sale-returns/{sale_return_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_return.status_code, 200)
+        self.assertEqual(posted_return.json()["data"]["status"], "posted")
+
+        customer_debt = requests.get(f"{self.base_url}/counterparties/{customer_id}/debt-summary", headers=headers, timeout=2)
+        self.assertEqual(customer_debt.status_code, 200)
+        self.assertEqual(customer_debt.json()["data"]["receivable"], "10.00")
+
+        stock_after_sale_return = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(stock_after_sale_return.json()["data"][0]["quantity"], "3.000")
+
+        excessive_return = requests.post(
+            f"{self.base_url}/sale-returns",
+            json={
+                "sale_id": sale_id,
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "refund_method": "debt_correction",
+                "lines": [{"source_sale_line_id": sale_line_id, "quantity": "2.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(excessive_return.status_code, 400)
+        self.assertEqual(excessive_return.json()["error"]["code"], "RETURN_EXCEEDS_SALE")
+
+        blocked_sale_cancel = requests.post(f"{self.base_url}/sales/{sale_id}/cancel", headers=headers, timeout=2)
+        self.assertEqual(blocked_sale_cancel.status_code, 400)
+        self.assertEqual(blocked_sale_cancel.json()["error"]["code"], "SALE_HAS_RETURNS")
+
+        sales_report = requests.get(f"{self.base_url}/reports/sales", headers=headers, timeout=2)
+        self.assertEqual(sales_report.status_code, 200)
+        self.assertEqual(sales_report.json()["data"]["returns_amount_tmt"], "10.00")
+        self.assertEqual(sales_report.json()["data"]["net_amount_tmt"], "10.00")
+
+        cancelled_return = requests.post(f"{self.base_url}/sale-returns/{sale_return_id}/cancel", headers=headers, timeout=2)
+        self.assertEqual(cancelled_return.status_code, 200)
+        self.assertEqual(cancelled_return.json()["data"]["status"], "cancelled")
+
+        sale_cancel = requests.post(f"{self.base_url}/sales/{sale_id}/cancel", headers=headers, timeout=2)
+        self.assertEqual(sale_cancel.status_code, 200)
+        self.assertEqual(sale_cancel.json()["data"]["status"], "cancelled")
+
+        final_stock = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(final_stock.json()["data"][0]["quantity"], "4.000")
+
+        final_customer_debt = requests.get(f"{self.base_url}/counterparties/{customer_id}/debt-summary", headers=headers, timeout=2)
+        self.assertEqual(final_customer_debt.json()["data"]["receivable"], "0.00")
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -188,16 +188,24 @@ class ClientCoreTests(unittest.TestCase):
             "error": None,
             "meta": None,
         }
+        order = client.create_purchase_order({"counterparty_id": 5, "warehouse_id": 2, "lines": []})
+        client.send_purchase_order(order["id"])
+        client.cancel_purchase_order(order["id"])
         invoice = client.create_purchase_invoice({"counterparty_id": 5, "warehouse_id": 2, "lines": []})
+        client.create_purchase_return({"counterparty_id": 5, "warehouse_id": 2, "lines": []})
         client.post_purchase_invoice(invoice["id"])
         client.cancel_purchase_invoice(invoice["id"])
         client.create_payment({"counterparty_id": 5, "amount_cur": "10.00"})
 
-        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-4:]]
-        self.assertIn("/purchase-invoices", requested_paths[0])
-        self.assertIn("/purchase-invoices/7/post", requested_paths[1])
-        self.assertIn("/purchase-invoices/7/cancel", requested_paths[2])
-        self.assertIn("/payments", requested_paths[3])
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-8:]]
+        self.assertIn("/purchase-orders", requested_paths[0])
+        self.assertIn("/purchase-orders/7/send", requested_paths[1])
+        self.assertIn("/purchase-orders/7/cancel", requested_paths[2])
+        self.assertIn("/purchase-invoices", requested_paths[3])
+        self.assertIn("/purchase-invoices/return", requested_paths[4])
+        self.assertIn("/purchase-invoices/7/post", requested_paths[5])
+        self.assertIn("/purchase-invoices/7/cancel", requested_paths[6])
+        self.assertIn("/payments", requested_paths[7])
 
     def test_api_client_sales_cashier_report_helpers_use_envelopes(self) -> None:
         """Sales, cashier, and report helpers should return envelope data."""
@@ -230,6 +238,9 @@ class ClientCoreTests(unittest.TestCase):
         sale = client.create_sale({"warehouse_id": 1, "currency_id": 1, "lines": []})
         client.post_sale(sale["id"])
         client.cancel_sale(sale["id"])
+        sale_return = client.create_sale_return({"sale_id": sale["id"], "lines": []})
+        client.post_sale_return(sale_return["id"])
+        client.cancel_sale_return(sale_return["id"])
         client.create_cash_register({"name": "Register", "warehouse_id": 1})
         client.open_cash_shift({"cash_register_id": 1, "opening_amount": "0"})
         client.close_cash_shift(3, {"closing_amount": "0"})
@@ -244,15 +255,18 @@ class ClientCoreTests(unittest.TestCase):
         report = client.get_sales_report()
 
         self.assertEqual(report["sales_total_tmt"], "30.00")
-        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-8:]]
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-11:]]
         self.assertIn("/sales", requested_paths[0])
         self.assertIn("/sales/9/post", requested_paths[1])
         self.assertIn("/sales/9/cancel", requested_paths[2])
-        self.assertIn("/cash-registers", requested_paths[3])
-        self.assertIn("/cash-shifts/open", requested_paths[4])
-        self.assertIn("/cash-shifts/3/close", requested_paths[5])
-        self.assertIn("/cash-operations", requested_paths[6])
-        self.assertIn("/reports/sales", requested_paths[7])
+        self.assertIn("/sale-returns", requested_paths[3])
+        self.assertIn("/sale-returns/9/post", requested_paths[4])
+        self.assertIn("/sale-returns/9/cancel", requested_paths[5])
+        self.assertIn("/cash-registers", requested_paths[6])
+        self.assertIn("/cash-shifts/open", requested_paths[7])
+        self.assertIn("/cash-shifts/3/close", requested_paths[8])
+        self.assertIn("/cash-operations", requested_paths[9])
+        self.assertIn("/reports/sales", requested_paths[10])
 
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""

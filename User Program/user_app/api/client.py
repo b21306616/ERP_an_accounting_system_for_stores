@@ -326,6 +326,31 @@ class ApiClient:
             )
         )
 
+    def get_purchase_orders(self) -> list[dict[str, Any]]:
+        """Return purchase orders."""
+
+        return list(self._request("GET", "/purchase-orders"))
+
+    def create_purchase_order(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a purchase order."""
+
+        return dict(self._request("POST", "/purchase-orders", json=payload))
+
+    def update_purchase_order(self, order_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Update a purchase order."""
+
+        return dict(self._request("PUT", f"/purchase-orders/{order_id}", json=payload))
+
+    def send_purchase_order(self, order_id: int) -> dict[str, Any]:
+        """Mark a purchase order as sent."""
+
+        return dict(self._request("POST", f"/purchase-orders/{order_id}/send"))
+
+    def cancel_purchase_order(self, order_id: int) -> dict[str, Any]:
+        """Cancel a purchase order."""
+
+        return dict(self._request("POST", f"/purchase-orders/{order_id}/cancel"))
+
     def get_purchase_invoices(self) -> list[dict[str, Any]]:
         """Return purchase invoices."""
 
@@ -335,6 +360,11 @@ class ApiClient:
         """Create a purchase invoice."""
 
         return dict(self._request("POST", "/purchase-invoices", json=payload))
+
+    def create_purchase_return(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a supplier return invoice."""
+
+        return dict(self._request("POST", "/purchase-invoices/return", json=payload))
 
     def post_purchase_invoice(self, invoice_id: int) -> dict[str, Any]:
         """Post a purchase invoice."""
@@ -400,6 +430,26 @@ class ApiClient:
         """Cancel a sale."""
 
         return dict(self._request("POST", f"/sales/{sale_id}/cancel"))
+
+    def get_sale_returns(self, status: str | None = None) -> list[dict[str, Any]]:
+        """Return sale returns."""
+
+        return list(self._request("GET", self._path_with_params("/sale-returns", {"status": status})))
+
+    def create_sale_return(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a sale return."""
+
+        return dict(self._request("POST", "/sale-returns", json=payload))
+
+    def post_sale_return(self, sale_return_id: int) -> dict[str, Any]:
+        """Post a sale return."""
+
+        return dict(self._request("POST", f"/sale-returns/{sale_return_id}/post"))
+
+    def cancel_sale_return(self, sale_return_id: int) -> dict[str, Any]:
+        """Cancel a sale return."""
+
+        return dict(self._request("POST", f"/sale-returns/{sale_return_id}/cancel"))
 
     def get_dashboard_report(self) -> dict[str, Any]:
         """Return dashboard report totals."""

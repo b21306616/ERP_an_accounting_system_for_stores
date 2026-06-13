@@ -408,8 +408,10 @@ class Counterparty(Base, ReprMixin, TimestampMixin):
     category: Mapped["CounterpartyCategory | None"] = relationship(back_populates="counterparties")
     price_list: Mapped["PriceList | None"] = relationship(back_populates="counterparties")
     contracts: Mapped[list["Contract"]] = relationship(back_populates="counterparty")
+    purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="counterparty")
     purchase_invoices: Mapped[list["PurchaseInvoice"]] = relationship(back_populates="counterparty")
     sales: Mapped[list["Sale"]] = relationship(back_populates="counterparty")
+    sale_returns: Mapped[list["SaleReturn"]] = relationship(back_populates="counterparty")
     debt_entries: Mapped[list["DebtLedger"]] = relationship(back_populates="counterparty")
     payments: Mapped[list["Payment"]] = relationship(back_populates="counterparty")
 
@@ -727,6 +729,69 @@ class PriceListItem(Base, ReprMixin, TimestampMixin):
     uom: Mapped[UnitOfMeasure | None] = relationship()
 
 
+class PurchaseOrder(Base, ReprMixin, TimestampMixin):
+    """Supplier purchase order tracked through invoice receiving."""
+
+    __tablename__ = "purchase_orders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    doc_date: Mapped[date] = mapped_column(Date, nullable=False)
+    counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
+    currency_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
+    total_amount_cur: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    total_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sent_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    counterparty: Mapped[Counterparty] = relationship(back_populates="purchase_orders")
+    warehouse: Mapped[Warehouse] = relationship()
+    currency: Mapped[Currency] = relationship()
+    created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
+    sent_by_user: Mapped[User | None] = relationship(foreign_keys=[sent_by_user_id])
+    cancelled_by_user: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_user_id])
+    lines: Mapped[list["PurchaseOrderLine"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+    )
+    invoices: Mapped[list["PurchaseInvoice"]] = relationship(back_populates="purchase_order")
+
+
+class PurchaseOrderLine(Base, ReprMixin):
+    """Product or service line requested from a supplier."""
+
+    __tablename__ = "purchase_order_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    purchase_order_id: Mapped[int] = mapped_column(ForeignKey("purchase_orders.id"), nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    service_id: Mapped[int | None] = mapped_column(ForeignKey("services.id"), nullable=True)
+    expense_category_id: Mapped[int | None] = mapped_column(ForeignKey("expense_categories.id"), nullable=True)
+    product_uom_id: Mapped[int | None] = mapped_column(ForeignKey("product_uoms.id"), nullable=True)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity_ordered: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    quantity_received: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    price_cur: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    price_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    amount_cur: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+
+    order: Mapped[PurchaseOrder] = relationship(back_populates="lines")
+    product: Mapped[Product | None] = relationship()
+    service: Mapped[Service | None] = relationship()
+    expense_category: Mapped[ExpenseCategory | None] = relationship()
+    product_uom: Mapped[ProductUom | None] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
+    invoice_lines: Mapped[list["PurchaseInvoiceLine"]] = relationship(back_populates="purchase_order_line")
+
+
 class PurchaseInvoice(Base, ReprMixin, TimestampMixin):
     """Purchase invoice that can post stock and payable debt."""
 
@@ -735,7 +800,7 @@ class PurchaseInvoice(Base, ReprMixin, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     doc_date: Mapped[date] = mapped_column(Date, nullable=False)
-    purchase_order_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    purchase_order_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_orders.id"), nullable=True)
     counterparty_id: Mapped[int] = mapped_column(ForeignKey("counterparties.id"), nullable=False)
     warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
     currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
@@ -753,6 +818,7 @@ class PurchaseInvoice(Base, ReprMixin, TimestampMixin):
     posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     counterparty: Mapped[Counterparty] = relationship(back_populates="purchase_invoices")
+    purchase_order: Mapped[PurchaseOrder | None] = relationship(back_populates="invoices")
     warehouse: Mapped[Warehouse] = relationship()
     currency: Mapped[Currency] = relationship()
     return_invoice: Mapped["PurchaseInvoice | None"] = relationship(remote_side="PurchaseInvoice.id")
@@ -769,7 +835,7 @@ class PurchaseInvoiceLine(Base, ReprMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     purchase_invoice_id: Mapped[int] = mapped_column(ForeignKey("purchase_invoices.id"), nullable=False)
-    purchase_order_line_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    purchase_order_line_id: Mapped[int | None] = mapped_column(ForeignKey("purchase_order_lines.id"), nullable=True)
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
     service_id: Mapped[int | None] = mapped_column(ForeignKey("services.id"), nullable=True)
     expense_category_id: Mapped[int | None] = mapped_column(ForeignKey("expense_categories.id"), nullable=True)
@@ -784,6 +850,7 @@ class PurchaseInvoiceLine(Base, ReprMixin):
     avg_cost_after: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
 
     invoice: Mapped[PurchaseInvoice] = relationship(back_populates="lines")
+    purchase_order_line: Mapped[PurchaseOrderLine | None] = relationship(back_populates="invoice_lines")
     product: Mapped[Product | None] = relationship()
     service: Mapped[Service | None] = relationship()
     expense_category: Mapped[ExpenseCategory | None] = relationship()
@@ -838,6 +905,7 @@ class Sale(Base, ReprMixin, TimestampMixin):
         back_populates="sale",
         cascade="all, delete-orphan",
     )
+    returns: Mapped[list["SaleReturn"]] = relationship(back_populates="sale")
 
 
 class SaleLine(Base, ReprMixin):
@@ -869,6 +937,75 @@ class SaleLine(Base, ReprMixin):
     product_uom: Mapped[ProductUom | None] = relationship()
     uom: Mapped[UnitOfMeasure | None] = relationship()
     parent_line: Mapped["SaleLine | None"] = relationship(remote_side="SaleLine.id")
+    return_lines: Mapped[list["SaleReturnLine"]] = relationship(back_populates="source_sale_line")
+
+
+class SaleReturn(Base, ReprMixin, TimestampMixin):
+    """Customer return document that restores stock and can correct receivables."""
+
+    __tablename__ = "sale_returns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    doc_number: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    doc_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    sale_id: Mapped[int] = mapped_column(ForeignKey("sales.id"), nullable=False)
+    cash_register_id: Mapped[int | None] = mapped_column(ForeignKey("cash_registers.id"), nullable=True)
+    cash_shift_id: Mapped[int | None] = mapped_column(ForeignKey("cash_shifts.id"), nullable=True)
+    counterparty_id: Mapped[int | None] = mapped_column(ForeignKey("counterparties.id"), nullable=True)
+    warehouse_id: Mapped[int] = mapped_column(ForeignKey("warehouses.id"), nullable=False)
+    currency_id: Mapped[int] = mapped_column(ForeignKey("currencies.id"), nullable=False)
+    currency_rate: Mapped[Decimal] = mapped_column(Numeric(18, 6), default=1, nullable=False)
+    total_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    refund_method: Mapped[str] = mapped_column(String(20), nullable=False)
+    refund_cash_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    refund_transfer_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    receivable_correction_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    sale: Mapped[Sale] = relationship(back_populates="returns")
+    cash_register: Mapped[CashRegister | None] = relationship()
+    cash_shift: Mapped[CashShift | None] = relationship()
+    counterparty: Mapped[Counterparty | None] = relationship(back_populates="sale_returns")
+    warehouse: Mapped[Warehouse] = relationship()
+    currency: Mapped[Currency] = relationship()
+    created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
+    posted_by_user: Mapped[User | None] = relationship(foreign_keys=[posted_by_user_id])
+    cancelled_by_user: Mapped[User | None] = relationship(foreign_keys=[cancelled_by_user_id])
+    lines: Mapped[list["SaleReturnLine"]] = relationship(
+        back_populates="sale_return",
+        cascade="all, delete-orphan",
+    )
+
+
+class SaleReturnLine(Base, ReprMixin):
+    """Line returned against one original sale line."""
+
+    __tablename__ = "sale_return_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sale_return_id: Mapped[int] = mapped_column(ForeignKey("sale_returns.id"), nullable=False)
+    source_sale_line_id: Mapped[int] = mapped_column(ForeignKey("sale_lines.id"), nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    service_id: Mapped[int | None] = mapped_column(ForeignKey("services.id"), nullable=True)
+    product_uom_id: Mapped[int | None] = mapped_column(ForeignKey("product_uoms.id"), nullable=True)
+    uom_id: Mapped[int | None] = mapped_column(ForeignKey("unit_of_measures.id"), nullable=True)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    price_final: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    avg_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+
+    sale_return: Mapped[SaleReturn] = relationship(back_populates="lines")
+    source_sale_line: Mapped[SaleLine] = relationship(back_populates="return_lines")
+    product: Mapped[Product | None] = relationship()
+    service: Mapped[Service | None] = relationship()
+    product_uom: Mapped[ProductUom | None] = relationship()
+    uom: Mapped[UnitOfMeasure | None] = relationship()
 
 
 class DebtLedger(Base, ReprMixin):

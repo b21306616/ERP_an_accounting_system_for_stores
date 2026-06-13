@@ -25,6 +25,8 @@ from server_app.db.models import (
     PurchaseInvoice,
     Sale,
     SaleLine,
+    SaleReturn,
+    SaleReturnLine,
     Service,
     StockBalance,
     Warehouse,
@@ -37,6 +39,7 @@ from server_app.schemas.sales_v1 import (
     CashShiftOpen,
     SaleCreate,
     SaleLineCreate,
+    SaleReturnCreate,
 )
 from server_app.services.settlements import (
     current_debt_balance,
@@ -61,6 +64,9 @@ require_sale_view = require_v1_permission("sale.view")
 require_sale_create = require_v1_permission("sale.create")
 require_sale_post = require_v1_permission("sale.post")
 require_sale_cancel = require_v1_permission("sale.cancel")
+require_sale_return_create = require_v1_permission("sale_return.create")
+require_sale_return_post = require_v1_permission("sale_return.post")
+require_sale_return_cancel = require_v1_permission("sale_return.cancel")
 require_reports_view = require_v1_permission("reports.view")
 
 
@@ -202,6 +208,58 @@ def _sale_payload(row: Sale) -> dict[str, Any]:
     }
 
 
+def _sale_return_line_payload(line: SaleReturnLine) -> dict[str, Any]:
+    """Return a sale-return line payload."""
+
+    return {
+        "id": line.id,
+        "source_sale_line_id": line.source_sale_line_id,
+        "product_id": line.product_id,
+        "product_sku": line.product.sku if line.product else None,
+        "product_name": line.product.name if line.product else None,
+        "service_id": line.service_id,
+        "service_code": line.service.code if line.service else None,
+        "service_name_ru": line.service.name_ru if line.service else None,
+        "product_uom_id": line.product_uom_id,
+        "uom_id": line.uom_id,
+        "uom_code": line.uom.code if line.uom else None,
+        "quantity": _decimal(line.quantity, "0.0001"),
+        "price_final": _decimal(line.price_final, "0.0001"),
+        "amount_tmt": _decimal(line.amount_tmt, "0.01"),
+        "avg_cost_tmt": _decimal(line.avg_cost_tmt, "0.0001"),
+    }
+
+
+def _sale_return_payload(row: SaleReturn) -> dict[str, Any]:
+    """Return a sale-return payload."""
+
+    return {
+        "id": row.id,
+        "doc_number": row.doc_number,
+        "doc_date": row.doc_date.isoformat() if row.doc_date else None,
+        "sale_id": row.sale_id,
+        "cash_register_id": row.cash_register_id,
+        "cash_register_name": row.cash_register.name if row.cash_register else None,
+        "cash_shift_id": row.cash_shift_id,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "warehouse_id": row.warehouse_id,
+        "warehouse_name": row.warehouse.name if row.warehouse else None,
+        "currency_id": row.currency_id,
+        "currency_code": row.currency.code if row.currency else None,
+        "currency_rate": _decimal(row.currency_rate, "0.000001"),
+        "total_amount_tmt": _decimal(row.total_amount_tmt, "0.01"),
+        "refund_method": row.refund_method,
+        "refund_cash_tmt": _decimal(row.refund_cash_tmt, "0.01"),
+        "refund_transfer_tmt": _decimal(row.refund_transfer_tmt, "0.01"),
+        "receivable_correction_tmt": _decimal(row.receivable_correction_tmt, "0.01"),
+        "status": row.status,
+        "note": row.note,
+        "posted_at": row.posted_at.isoformat() if row.posted_at else None,
+        "lines": [_sale_return_line_payload(line) for line in row.lines],
+    }
+
+
 def _sale_query(session: Session):
     """Return a sale query with relationships used by payloads."""
 
@@ -224,6 +282,72 @@ def _refresh_sale(session: Session, sale_id: int) -> Sale:
     if sale is None:
         raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Sale not found."))
     return sale
+
+
+def _sale_return_query(session: Session):
+    """Return a sale-return query with relationships used by payloads."""
+
+    return session.query(SaleReturn).options(
+        selectinload(SaleReturn.sale),
+        selectinload(SaleReturn.cash_register),
+        selectinload(SaleReturn.cash_shift),
+        selectinload(SaleReturn.counterparty),
+        selectinload(SaleReturn.warehouse),
+        selectinload(SaleReturn.currency),
+        selectinload(SaleReturn.lines).selectinload(SaleReturnLine.product),
+        selectinload(SaleReturn.lines).selectinload(SaleReturnLine.service),
+        selectinload(SaleReturn.lines).selectinload(SaleReturnLine.uom),
+    )
+
+
+def _refresh_sale_return(session: Session, sale_return_id: int) -> SaleReturn:
+    """Reload one sale return with payload relationships."""
+
+    sale_return = _sale_return_query(session).filter(SaleReturn.id == sale_return_id).one_or_none()
+    if sale_return is None:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Sale return not found."))
+    return sale_return
+
+
+def _returned_quantity_for_sale_line(session: Session, sale_line_id: int) -> Decimal:
+    """Return already posted return quantity for a sale line."""
+
+    value = (
+        session.query(func.coalesce(func.sum(SaleReturnLine.quantity), 0))
+        .join(SaleReturn, SaleReturn.id == SaleReturnLine.sale_return_id)
+        .filter(SaleReturn.status == "posted", SaleReturnLine.source_sale_line_id == sale_line_id)
+        .scalar()
+        or 0
+    )
+    return qty4(value)
+
+
+def _sale_return_payment_split(payload: SaleReturnCreate, total: Decimal) -> tuple[Decimal, Decimal, Decimal]:
+    """Return normalized cash, transfer, and receivable-correction amounts."""
+
+    zero = Decimal("0.00")
+    if payload.refund_method == "cash":
+        supplied = money(payload.refund_cash_tmt)
+        if supplied not in (zero, total):
+            raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Cash refund must equal return total."))
+        return total, zero, zero
+    if payload.refund_method == "transfer":
+        supplied = money(payload.refund_transfer_tmt)
+        if supplied not in (zero, total):
+            raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Transfer refund must equal return total."))
+        return zero, total, zero
+    if payload.refund_method == "debt_correction":
+        supplied = money(payload.receivable_correction_tmt)
+        if supplied not in (zero, total):
+            raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Receivable correction must equal return total."))
+        return zero, zero, total
+
+    cash = money(payload.refund_cash_tmt)
+    transfer = money(payload.refund_transfer_tmt)
+    receivable = money(payload.receivable_correction_tmt)
+    if money(cash + transfer + receivable) != total:
+        raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Mixed refund parts must equal return total."))
+    return cash, transfer, receivable
 
 
 def _validate_shift_for_register(session: Session, shift_id: int | None, register_id: int | None) -> CashShift | None:
@@ -592,6 +716,9 @@ def cancel_sale(
     if sale.status == "cancelled":
         raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Sale is already cancelled."))
     if sale.status == "posted":
+        posted_returns = session.query(func.count(SaleReturn.id)).filter(SaleReturn.sale_id == sale.id, SaleReturn.status == "posted").scalar() or 0
+        if posted_returns:
+            raise HTTPException(status_code=400, detail=error_detail("SALE_HAS_RETURNS", "Cancel posted sale returns before cancelling this sale."))
         try:
             for line in sale.lines:
                 if line.product_id is None:
@@ -632,6 +759,224 @@ def cancel_sale(
     return success_response(_sale_payload(_refresh_sale(session, sale.id)))
 
 
+@router.get("/sale-returns")
+def list_sale_returns(
+    status_filter: str | None = Query(default=None, alias="status"),
+    _: User = Depends(require_sale_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List recent sale returns."""
+
+    query = _sale_return_query(session)
+    if status_filter is not None:
+        query = query.filter(SaleReturn.status == status_filter)
+    rows = query.order_by(SaleReturn.id.desc()).limit(200).all()
+    return success_response([_sale_return_payload(row) for row in rows])
+
+
+@router.get("/sale-returns/{sale_return_id}")
+def get_sale_return(
+    sale_return_id: int,
+    _: User = Depends(require_sale_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return one sale return."""
+
+    return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return_id)))
+
+
+@router.post("/sale-returns", status_code=status.HTTP_201_CREATED)
+def create_sale_return(
+    payload: SaleReturnCreate,
+    current_user: User = Depends(require_sale_return_create),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a draft sale return against a posted sale."""
+
+    sale = _refresh_sale(session, payload.sale_id)
+    if sale.status != "posted":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only posted sales can be returned."))
+    register_id = payload.cash_register_id if payload.cash_register_id is not None else sale.cash_register_id
+    shift_id = payload.cash_shift_id if payload.cash_shift_id is not None else sale.cash_shift_id
+    if register_id is not None:
+        register = _get_or_404(session, CashRegister, register_id, "Cash register")
+        if register.warehouse_id != sale.warehouse_id:
+            raise HTTPException(status_code=400, detail=error_detail("REGISTER_WAREHOUSE_MISMATCH", "Cash register belongs to another warehouse."))
+    if shift_id is not None:
+        _validate_shift_for_register(session, shift_id, register_id)
+
+    source_lines = {line.id: line for line in sale.lines}
+    seen_lines: set[int] = set()
+    return_lines: list[SaleReturnLine] = []
+    for line_payload in payload.lines:
+        if line_payload.source_sale_line_id in seen_lines:
+            raise HTTPException(status_code=400, detail=error_detail("DUPLICATE_RETURN_LINE", "A sale line can appear only once in a return."))
+        seen_lines.add(line_payload.source_sale_line_id)
+        source_line = source_lines.get(line_payload.source_sale_line_id)
+        if source_line is None:
+            raise HTTPException(status_code=400, detail=error_detail("SALE_LINE_MISMATCH", "Return line does not belong to the source sale."))
+        returned_qty = _returned_quantity_for_sale_line(session, source_line.id)
+        remaining_qty = qty4(source_line.quantity) - returned_qty
+        return_qty = qty4(line_payload.quantity)
+        if return_qty > remaining_qty:
+            raise HTTPException(status_code=400, detail=error_detail("RETURN_EXCEEDS_SALE", "Return quantity exceeds the source sale quantity."))
+        final_price = price(line_payload.price_final if line_payload.price_final is not None else source_line.price_final)
+        return_lines.append(
+            SaleReturnLine(
+                source_sale_line_id=source_line.id,
+                product_id=source_line.product_id,
+                service_id=source_line.service_id,
+                product_uom_id=source_line.product_uom_id,
+                uom_id=source_line.uom_id,
+                quantity=return_qty,
+                price_final=final_price,
+                amount_tmt=money(return_qty * final_price),
+                avg_cost_tmt=source_line.avg_cost_tmt,
+            )
+        )
+
+    total = money(sum((line.amount_tmt for line in return_lines), Decimal("0.00")))
+    refund_cash, refund_transfer, receivable_correction = _sale_return_payment_split(payload, total)
+    if refund_cash > Decimal("0.00") and shift_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("SHIFT_NOT_OPEN", "Cash refund requires an open cash shift."))
+    if receivable_correction > Decimal("0.00") and sale.counterparty_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Receivable correction requires a counterparty."))
+
+    doc_number = payload.doc_number or generate_doc_number(session, SaleReturn, "SRT")
+    if session.query(SaleReturn).filter(SaleReturn.doc_number == doc_number).one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Sale return number already exists."))
+    sale_return = SaleReturn(
+        doc_number=doc_number,
+        doc_date=payload.doc_date or now_utc(),
+        sale_id=sale.id,
+        cash_register_id=register_id,
+        cash_shift_id=shift_id,
+        counterparty_id=sale.counterparty_id,
+        warehouse_id=sale.warehouse_id,
+        currency_id=sale.currency_id,
+        currency_rate=sale.currency_rate,
+        total_amount_tmt=total,
+        refund_method=payload.refund_method,
+        refund_cash_tmt=refund_cash,
+        refund_transfer_tmt=refund_transfer,
+        receivable_correction_tmt=receivable_correction,
+        note=payload.note,
+        created_by_user_id=current_user.id,
+    )
+    sale_return.lines.extend(return_lines)
+    session.add(sale_return)
+    session.commit()
+    return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return.id)))
+
+
+@router.post("/sale-returns/{sale_return_id}/post")
+def post_sale_return(
+    sale_return_id: int,
+    current_user: User = Depends(require_sale_return_post),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Post a sale return into stock and receivable ledgers."""
+
+    sale_return = _refresh_sale_return(session, sale_return_id)
+    if sale_return.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft sale returns can be posted."))
+    if sale_return.cash_shift_id is not None:
+        _validate_shift_for_register(session, sale_return.cash_shift_id, sale_return.cash_register_id)
+    try:
+        for line in sale_return.lines:
+            if line.product_id is None:
+                continue
+            post_stock_movement(
+                session,
+                warehouse_id=sale_return.warehouse_id,
+                product_id=line.product_id,
+                uom_id=line.uom_id,
+                movement_type="sale_return",
+                document_type="sale_return",
+                document_id=sale_return.id,
+                quantity_delta=line.quantity,
+                unit_cost_tmt=line.avg_cost_tmt,
+                user_id=current_user.id,
+            )
+    except WarehouseBusinessError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=error_detail(exc.code, str(exc), exc.details)) from exc
+
+    if money(sale_return.receivable_correction_tmt) > Decimal("0.00") and sale_return.counterparty_id is not None:
+        post_debt_entry(
+            session,
+            counterparty_id=sale_return.counterparty_id,
+            debt_type="receivable",
+            doc_type="sale_return",
+            doc_id=sale_return.id,
+            doc_number=sale_return.doc_number,
+            doc_date=sale_return.doc_date,
+            amount_tmt=-money(sale_return.receivable_correction_tmt),
+            currency_id=sale_return.currency_id,
+            amount_cur=-money(sale_return.receivable_correction_tmt),
+            note="Sale return posted",
+            user_id=current_user.id,
+        )
+    sale_return.status = "posted"
+    sale_return.posted_by_user_id = current_user.id
+    sale_return.posted_at = now_utc()
+    session.commit()
+    return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return.id)))
+
+
+@router.post("/sale-returns/{sale_return_id}/cancel")
+def cancel_sale_return(
+    sale_return_id: int,
+    current_user: User = Depends(require_sale_return_cancel),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Cancel a draft sale return or reverse a posted one."""
+
+    sale_return = _refresh_sale_return(session, sale_return_id)
+    if sale_return.status == "cancelled":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Sale return is already cancelled."))
+    if sale_return.status == "posted":
+        try:
+            for line in sale_return.lines:
+                if line.product_id is None:
+                    continue
+                post_stock_movement(
+                    session,
+                    warehouse_id=sale_return.warehouse_id,
+                    product_id=line.product_id,
+                    uom_id=line.uom_id,
+                    movement_type="sale_return_cancel",
+                    document_type="sale_return",
+                    document_id=sale_return.id,
+                    quantity_delta=-line.quantity,
+                    unit_cost_tmt=line.avg_cost_tmt,
+                    user_id=current_user.id,
+                )
+        except WarehouseBusinessError as exc:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=error_detail(exc.code, str(exc), exc.details)) from exc
+        if money(sale_return.receivable_correction_tmt) > Decimal("0.00") and sale_return.counterparty_id is not None:
+            post_debt_entry(
+                session,
+                counterparty_id=sale_return.counterparty_id,
+                debt_type="receivable",
+                doc_type="sale_return",
+                doc_id=sale_return.id,
+                doc_number=sale_return.doc_number,
+                doc_date=now_utc(),
+                amount_tmt=money(sale_return.receivable_correction_tmt),
+                currency_id=sale_return.currency_id,
+                amount_cur=money(sale_return.receivable_correction_tmt),
+                note="Sale return cancelled",
+                user_id=current_user.id,
+            )
+    sale_return.status = "cancelled"
+    sale_return.cancelled_by_user_id = current_user.id
+    sale_return.cancelled_at = now_utc()
+    session.commit()
+    return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return.id)))
+
+
 def _date_range_filter(query, column, date_from: datetime | None, date_to: datetime | None):
     """Apply optional inclusive datetime filters."""
 
@@ -652,6 +997,7 @@ def dashboard_report(
     receivable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "receivable").scalar() or 0
     payable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "payable").scalar() or 0
     sales_total = session.query(func.coalesce(func.sum(Sale.total_amount_tmt), 0)).filter(Sale.status == "posted").scalar() or 0
+    returns_total = session.query(func.coalesce(func.sum(SaleReturn.total_amount_tmt), 0)).filter(SaleReturn.status == "posted").scalar() or 0
     purchase_total = (
         session.query(func.coalesce(func.sum(PurchaseInvoice.total_amount_tmt), 0))
         .filter(PurchaseInvoice.status == "posted")
@@ -662,6 +1008,8 @@ def dashboard_report(
     return success_response(
         {
             "sales_total_tmt": _decimal(sales_total, "0.01"),
+            "returns_total_tmt": _decimal(returns_total, "0.01"),
+            "net_sales_tmt": _decimal(money(sales_total) - money(returns_total), "0.01"),
             "purchase_total_tmt": _decimal(purchase_total, "0.01"),
             "receivable_tmt": _decimal(receivable, "0.01"),
             "payable_tmt": _decimal(payable, "0.01"),
@@ -712,14 +1060,25 @@ def sales_report(
     query = session.query(Sale).filter(Sale.status == "posted")
     query = _date_range_filter(query, Sale.doc_date, date_from, date_to)
     rows = query.all()
+    return_query = session.query(SaleReturn).filter(SaleReturn.status == "posted")
+    return_query = _date_range_filter(return_query, SaleReturn.doc_date, date_from, date_to)
+    return_rows = return_query.all()
+    sales_total = sum((money(row.total_amount_tmt) for row in rows), Decimal("0.00"))
+    returns_total = sum((money(row.total_amount_tmt) for row in return_rows), Decimal("0.00"))
     return success_response(
         {
             "document_count": len(rows),
-            "sales_total_tmt": _decimal(sum((money(row.total_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
+            "sales_total_tmt": _decimal(sales_total, "0.01"),
+            "returns_count": len(return_rows),
+            "returns_amount_tmt": _decimal(returns_total, "0.01"),
+            "net_amount_tmt": _decimal(sales_total - returns_total, "0.01"),
             "cash_tmt": _decimal(sum((money(row.paid_cash_tmt) for row in rows), Decimal("0.00")), "0.01"),
             "transfer_tmt": _decimal(sum((money(row.paid_transfer_tmt) for row in rows), Decimal("0.00")), "0.01"),
             "bonus_tmt": _decimal(sum((money(row.paid_bonus_tmt) for row in rows), Decimal("0.00")), "0.01"),
             "debt_tmt": _decimal(sum((money(row.debt_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
+            "return_cash_tmt": _decimal(sum((money(row.refund_cash_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+            "return_transfer_tmt": _decimal(sum((money(row.refund_transfer_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+            "return_debt_correction_tmt": _decimal(sum((money(row.receivable_correction_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
         }
     )
 
@@ -800,19 +1159,25 @@ def cash_flow_report(
     payments = payment_query.all()
     operation_query = _date_range_filter(session.query(CashOperation), CashOperation.doc_date, date_from, date_to)
     operations = operation_query.all()
+    return_query = _date_range_filter(session.query(SaleReturn).filter(SaleReturn.status == "posted"), SaleReturn.doc_date, date_from, date_to)
+    sale_returns = return_query.all()
 
     sale_cash = sum((money(row.paid_cash_tmt) for row in sales), Decimal("0.00"))
     sale_transfer = sum((money(row.paid_transfer_tmt) for row in sales), Decimal("0.00"))
     incoming_payments = sum((money(row.amount_tmt) for row in payments if row.direction == "incoming"), Decimal("0.00"))
     outgoing_payments = sum((money(row.amount_tmt) for row in payments if row.direction == "outgoing"), Decimal("0.00"))
     collections = sum((money(row.amount_tmt) for row in operations if row.operation_type == "collection"), Decimal("0.00"))
+    return_cash = sum((money(row.refund_cash_tmt) for row in sale_returns), Decimal("0.00"))
+    return_transfer = sum((money(row.refund_transfer_tmt) for row in sale_returns), Decimal("0.00"))
     return success_response(
         {
             "sale_cash_tmt": _decimal(sale_cash, "0.01"),
             "sale_transfer_tmt": _decimal(sale_transfer, "0.01"),
+            "return_cash_tmt": _decimal(return_cash, "0.01"),
+            "return_transfer_tmt": _decimal(return_transfer, "0.01"),
             "incoming_payments_tmt": _decimal(incoming_payments, "0.01"),
             "outgoing_payments_tmt": _decimal(outgoing_payments, "0.01"),
             "collections_tmt": _decimal(collections, "0.01"),
-            "net_cash_flow_tmt": _decimal(sale_cash + incoming_payments - outgoing_payments - collections, "0.01"),
+            "net_cash_flow_tmt": _decimal(sale_cash + incoming_payments - outgoing_payments - collections - return_cash, "0.01"),
         }
     )
