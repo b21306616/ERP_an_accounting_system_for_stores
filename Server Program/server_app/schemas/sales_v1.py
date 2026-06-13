@@ -123,9 +123,10 @@ class SaleReturnCreate(BaseModel):
     sale_id: int
     cash_register_id: int | None = None
     cash_shift_id: int | None = None
-    refund_method: str = Field(pattern="^(cash|transfer|debt_correction|mixed)$")
+    refund_method: str = Field(pattern="^(cash|transfer|bonus|debt_correction|mixed)$")
     refund_cash_tmt: Decimal = Field(default=Decimal("0"), ge=0)
     refund_transfer_tmt: Decimal = Field(default=Decimal("0"), ge=0)
+    refund_bonus_tmt: Decimal = Field(default=Decimal("0"), ge=0)
     receivable_correction_tmt: Decimal = Field(default=Decimal("0"), ge=0)
     note: str | None = Field(default=None, max_length=200)
     lines: list[SaleReturnLineCreate] = Field(min_length=1)

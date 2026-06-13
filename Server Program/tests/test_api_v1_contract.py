@@ -995,6 +995,288 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(final_customer_debt.json()["data"]["receivable"], "0.00")
 
 
+    def test_promotions_loyalty_and_price_list_import_export(self) -> None:
+        """Promotions, XLSX-friendly price import/export, and loyalty postings should work together."""
+
+        token = self._login()
+        headers = {"X-Session-Token": token}
+
+        currencies = requests.get(f"{self.base_url}/currencies", headers=headers, timeout=2)
+        self.assertEqual(currencies.status_code, 200)
+        currency_id = next(row for row in currencies.json()["data"] if row["code"] == "TMT")["id"]
+
+        warehouse = requests.post(
+            f"{self.base_url}/warehouses",
+            json={"code": "WH-PROMO", "name": "Promo warehouse"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(warehouse.status_code, 201)
+        warehouse_id = warehouse.json()["data"]["id"]
+
+        register = requests.post(
+            f"{self.base_url}/cash-registers",
+            json={"name": "Promo Register", "warehouse_id": warehouse_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(register.status_code, 201)
+        register_id = register.json()["data"]["id"]
+
+        shift = requests.post(
+            f"{self.base_url}/cash-shifts/open",
+            json={"cash_register_id": register_id, "opening_amount": "0.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(shift.status_code, 201)
+        shift_id = shift.json()["data"]["id"]
+
+        product = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-PROMO-001", "name": "Promo Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product.status_code, 201)
+        product_id = product.json()["data"]["id"]
+
+        gift = requests.post(
+            f"{self.base_url}/products",
+            json={"sku": "P-GIFT-001", "name": "Gift Item"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(gift.status_code, 201)
+        gift_id = gift.json()["data"]["id"]
+
+        inventory = requests.post(
+            f"{self.base_url}/inventories",
+            json={
+                "warehouse_id": warehouse_id,
+                "lines": [
+                    {"product_id": product_id, "qty_actual": "10.000", "unit_cost_tmt": "5.00"},
+                    {"product_id": gift_id, "qty_actual": "10.000", "unit_cost_tmt": "1.00"},
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(inventory.status_code, 201)
+        posted_inventory = requests.post(
+            f"{self.base_url}/inventories/{inventory.json()['data']['id']}/post",
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(posted_inventory.status_code, 200)
+
+        price_list = requests.post(
+            f"{self.base_url}/price-lists",
+            json={"name_ru": "Promo Retail", "currency_id": currency_id, "is_default": True},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(price_list.status_code, 201)
+        price_list_id = price_list.json()["data"]["id"]
+
+        price_item = requests.post(
+            f"{self.base_url}/price-lists/{price_list_id}/items",
+            json={"product_id": product_id, "price_tmt": "10.0000", "valid_from": "2026-01-01"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(price_item.status_code, 201)
+
+        exported = requests.get(f"{self.base_url}/price-lists/{price_list_id}/export", headers=headers, timeout=2)
+        self.assertEqual(exported.status_code, 200)
+        self.assertTrue(exported.json()["data"]["xlsx_base64"])
+        self.assertEqual(len(exported.json()["data"]["rows"]), 1)
+
+        imported = requests.post(
+            f"{self.base_url}/price-lists/{price_list_id}/import",
+            json={
+                "duplicate_mode": "update",
+                "rows": [
+                    {"product_sku": "P-PROMO-001", "price_tmt": "12.0000", "valid_from": "2026-01-01"}
+                ],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(imported.json()["data"]["updated"], 1)
+
+        current_price = requests.get(
+            f"{self.base_url}/prices/current",
+            params={"product_id": product_id, "on_date": "2026-06-13"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(current_price.status_code, 200)
+        self.assertEqual(current_price.json()["data"]["price_tmt"], "12.0000")
+
+        discount = requests.post(
+            f"{self.base_url}/promotions",
+            json={
+                "name": "Ten percent off",
+                "promotion_type": "discount",
+                "target_type": "product",
+                "product_id": product_id,
+                "discount_type": "percent",
+                "discount_value": "10",
+                "min_quantity": "1",
+                "valid_from": "2026-01-01T00:00:00+00:00",
+                "valid_to": "2026-12-31T23:59:59+00:00",
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(discount.status_code, 201)
+
+        gift_promo = requests.post(
+            f"{self.base_url}/promotions",
+            json={
+                "name": "Buy two get gift",
+                "promotion_type": "gift",
+                "target_type": "product",
+                "product_id": product_id,
+                "min_quantity": "2",
+                "gift_product_id": gift_id,
+                "gift_quantity": "1",
+                "valid_from": "2026-01-01T00:00:00+00:00",
+                "valid_to": "2026-12-31T23:59:59+00:00",
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(gift_promo.status_code, 201)
+
+        settings = requests.put(
+            f"{self.base_url}/loyalty-settings",
+            json={"earn_rate_percent": "10", "redemption_limit_percent": "50", "is_active": True},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(settings.status_code, 200)
+
+        customer = requests.post(
+            f"{self.base_url}/counterparties",
+            json={"code": "CUS-PROMO", "name": "Promo Customer", "role_flags": 2, "counterparty_type": "customer"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(customer.status_code, 201)
+        customer_id = customer.json()["data"]["id"]
+
+        card = requests.post(
+            f"{self.base_url}/loyalty-cards",
+            json={"card_number": "LC-PROMO-001", "counterparty_id": customer_id, "balance_tmt": "20.00"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(card.status_code, 201)
+        card_id = card.json()["data"]["id"]
+        self.assertEqual(card.json()["data"]["balance_tmt"], "20.00")
+
+        sale = requests.post(
+            f"{self.base_url}/sales",
+            json={
+                "doc_date": "2026-06-13T12:00:00+00:00",
+                "sale_type": "retail",
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "counterparty_id": customer_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "payment_type": "mixed",
+                "paid_cash_tmt": "16.00",
+                "paid_bonus_tmt": "2.00",
+                "loyalty_card_id": card_id,
+                "lines": [{"product_id": product_id, "quantity": "2.0000", "price_final": "10.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale.status_code, 201)
+        self.assertEqual(sale.json()["data"]["total_amount_tmt"], "18.00")
+        sale_lines = sale.json()["data"]["lines"]
+        product_line = next(line for line in sale_lines if line["line_type"] == "product")
+        gift_line = next(line for line in sale_lines if line["line_type"] == "promo_gift")
+        self.assertEqual(product_line["price_final"], "9.0000")
+        self.assertEqual(product_line["amount_tmt"], "18.00")
+        self.assertEqual(gift_line["product_id"], gift_id)
+        self.assertEqual(gift_line["quantity"], "1.0000")
+        sale_id = sale.json()["data"]["id"]
+
+        posted_sale = requests.post(f"{self.base_url}/sales/{sale_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_sale.status_code, 200)
+        self.assertEqual(posted_sale.json()["data"]["status"], "posted")
+
+        product_balance = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        gift_balance = requests.get(
+            f"{self.base_url}/stock/balances",
+            params={"warehouse_id": warehouse_id, "product_id": gift_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(product_balance.json()["data"][0]["quantity"], "8.000")
+        self.assertEqual(gift_balance.json()["data"][0]["quantity"], "9.000")
+
+        card_after_sale = requests.get(f"{self.base_url}/loyalty-cards?search=LC-PROMO-001", headers=headers, timeout=2)
+        self.assertEqual(card_after_sale.status_code, 200)
+        self.assertEqual(card_after_sale.json()["data"][0]["balance_tmt"], "19.60")
+
+        sale_return = requests.post(
+            f"{self.base_url}/sale-returns",
+            json={
+                "sale_id": sale_id,
+                "cash_register_id": register_id,
+                "cash_shift_id": shift_id,
+                "refund_method": "bonus",
+                "refund_bonus_tmt": "9.00",
+                "lines": [{"source_sale_line_id": product_line["id"], "quantity": "1.0000"}],
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(sale_return.status_code, 201)
+        self.assertEqual(sale_return.json()["data"]["total_amount_tmt"], "9.00")
+        self.assertEqual(sale_return.json()["data"]["refund_bonus_tmt"], "9.00")
+        sale_return_id = sale_return.json()["data"]["id"]
+
+        posted_return = requests.post(f"{self.base_url}/sale-returns/{sale_return_id}/post", headers=headers, timeout=2)
+        self.assertEqual(posted_return.status_code, 200)
+        self.assertEqual(posted_return.json()["data"]["status"], "posted")
+
+        card_after_return = requests.get(f"{self.base_url}/loyalty-cards?search=LC-PROMO-001", headers=headers, timeout=2)
+        self.assertEqual(card_after_return.json()["data"][0]["balance_tmt"], "28.80")
+
+        sales_report = requests.get(f"{self.base_url}/reports/sales", headers=headers, timeout=2)
+        self.assertEqual(sales_report.status_code, 200)
+        self.assertEqual(sales_report.json()["data"]["bonus_tmt"], "2.00")
+        self.assertEqual(sales_report.json()["data"]["return_bonus_tmt"], "9.00")
+
+        cancelled_return = requests.post(f"{self.base_url}/sale-returns/{sale_return_id}/cancel", headers=headers, timeout=2)
+        self.assertEqual(cancelled_return.status_code, 200)
+        card_after_return_cancel = requests.get(f"{self.base_url}/loyalty-cards?search=LC-PROMO-001", headers=headers, timeout=2)
+        self.assertEqual(card_after_return_cancel.json()["data"][0]["balance_tmt"], "19.60")
+
+        cancelled_sale = requests.post(f"{self.base_url}/sales/{sale_id}/cancel", headers=headers, timeout=2)
+        self.assertEqual(cancelled_sale.status_code, 200)
+        card_after_sale_cancel = requests.get(f"{self.base_url}/loyalty-cards?search=LC-PROMO-001", headers=headers, timeout=2)
+        self.assertEqual(card_after_sale_cancel.json()["data"][0]["balance_tmt"], "20.00")
+
+        transactions = requests.get(f"{self.base_url}/loyalty-cards/{card_id}/transactions", headers=headers, timeout=2)
+        self.assertEqual(transactions.status_code, 200)
+        transaction_types = {row["transaction_type"] for row in transactions.json()["data"]}
+        self.assertTrue({"opening_balance", "redemption", "accrual", "return_refund", "return_redemption_reversal", "return_accrual_reversal", "return_cancellation", "cancellation"}.issubset(transaction_types))
+
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -268,6 +268,85 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/cash-operations", requested_paths[9])
         self.assertIn("/reports/sales", requested_paths[10])
 
+    def test_api_client_pricing_promotion_loyalty_helpers_use_envelopes(self) -> None:
+        """Stage 3 pricing, promotion, and loyalty helpers should target API v1 paths."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 4, "xlsx_base64": "UEs="},
+            "error": None,
+            "meta": None,
+        }
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        client.export_price_list(4)
+        client.import_price_list(4, {"rows": []})
+
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 6, "name": "Promo"}],
+            "error": None,
+            "meta": None,
+        }
+        client.get_promotions(active_only=True)
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 6},
+            "error": None,
+            "meta": None,
+        }
+        client.create_promotion({"name": "Promo"})
+        client.update_promotion(6, {"is_active": False})
+        client.get_loyalty_settings()
+        client.update_loyalty_settings({"earn_rate_percent": "1", "redemption_limit_percent": "50", "is_active": True})
+
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 8, "card_number": "LC-1"}],
+            "error": None,
+            "meta": None,
+        }
+        client.get_loyalty_cards("LC", active_only=True)
+
+        response.json.return_value = {
+            "success": True,
+            "data": {"id": 8, "card_number": "LC-1"},
+            "error": None,
+            "meta": None,
+        }
+        client.create_loyalty_card({"card_number": "LC-1"})
+        client.update_loyalty_card(8, {"owner_name": "Customer"})
+        client.adjust_loyalty_card(8, {"amount_tmt": "1.00"})
+
+        response.json.return_value = {
+            "success": True,
+            "data": [{"id": 9, "transaction_type": "manual_adjustment"}],
+            "error": None,
+            "meta": None,
+        }
+        transactions = client.get_loyalty_transactions(8)
+
+        self.assertEqual(transactions[0]["transaction_type"], "manual_adjustment")
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-13:]]
+        self.assertIn("/price-lists/4/export", requested_paths[0])
+        self.assertIn("/price-lists/4/import", requested_paths[1])
+        self.assertIn("/promotions?active_only=true", requested_paths[2])
+        self.assertIn("/promotions", requested_paths[3])
+        self.assertIn("/promotions/6", requested_paths[4])
+        self.assertIn("/loyalty-settings", requested_paths[5])
+        self.assertIn("/loyalty-settings", requested_paths[6])
+        self.assertIn("/loyalty-cards?search=LC&active_only=true", requested_paths[7])
+        self.assertIn("/loyalty-cards", requested_paths[8])
+        self.assertIn("/loyalty-cards/8", requested_paths[9])
+        self.assertIn("/loyalty-cards/8/adjust", requested_paths[10])
+        self.assertIn("/loyalty-cards/8/transactions", requested_paths[11])
+
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""
 

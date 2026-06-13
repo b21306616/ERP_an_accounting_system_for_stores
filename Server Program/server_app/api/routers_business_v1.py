@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
+
+from openpyxl import Workbook, load_workbook
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_
@@ -19,12 +23,17 @@ from server_app.db.models import (
     Currency,
     DebtLedger,
     ExpenseCategory,
+    LoyaltyCard,
+    LoyaltySetting,
+    LoyaltyTransaction,
     Payment,
     PaymentAllocation,
     PriceList,
     PriceListItem,
     Product,
+    ProductGroup,
     ProductUom,
+    Promotion,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseInvoice,
@@ -40,8 +49,16 @@ from server_app.schemas.business_v1 import (
     CounterpartyCreate,
     CounterpartyUpdate,
     PaymentCreate,
+    LoyaltyAdjustmentCreate,
+    LoyaltyCardCreate,
+    LoyaltyCardUpdate,
+    LoyaltySettingsUpdate,
     PriceListCreate,
+    PriceListImportPayload,
+    PriceListImportRow,
     PriceListItemCreate,
+    PromotionCreate,
+    PromotionUpdate,
     PurchaseInvoiceCreate,
     PurchaseOrderCreate,
     PurchaseOrderUpdate,
@@ -70,6 +87,11 @@ require_payment_cancel = require_v1_permission("counterparty.payment_cancel")
 require_pricing_view = require_v1_permission("pricing.view")
 require_pricing_create = require_v1_permission("pricing.price_list_create")
 require_pricing_edit = require_v1_permission("pricing.price_list_edit")
+require_price_list_import = require_v1_permission("pricing.price_list_import")
+require_price_list_export = require_v1_permission("pricing.price_list_export")
+require_promo_manage = require_v1_permission("pricing.promo_manage")
+require_loyalty_manage = require_v1_permission("pricing.loyalty_manage")
+require_loyalty_adjust = require_v1_permission("pricing.loyalty_adjust")
 require_purchase_view = require_v1_permission("purchase.view")
 require_purchase_order_create = require_v1_permission("purchase.order_create")
 require_purchase_order_edit = require_v1_permission("purchase.order_edit")
@@ -242,6 +264,205 @@ def _order_payload(order: PurchaseOrder) -> dict[str, Any]:
         "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
         "lines": [_order_line_payload(line) for line in order.lines],
     }
+
+
+def _promotion_payload(row: Promotion) -> dict[str, Any]:
+    """Return a promotion payload."""
+
+    return {
+        "id": row.id,
+        "name": row.name,
+        "promotion_type": row.promotion_type,
+        "target_type": row.target_type,
+        "product_id": row.product_id,
+        "product_sku": row.product.sku if row.product else None,
+        "product_group_id": row.product_group_id,
+        "product_group_name_ru": row.product_group.name_ru if row.product_group else None,
+        "discount_type": row.discount_type,
+        "discount_value": _decimal(row.discount_value, "0.0001"),
+        "min_quantity": _decimal(row.min_quantity, "0.0001"),
+        "gift_product_id": row.gift_product_id,
+        "gift_product_sku": row.gift_product.sku if row.gift_product else None,
+        "gift_quantity": _decimal(row.gift_quantity, "0.0001"),
+        "valid_from": row.valid_from.isoformat() if row.valid_from else None,
+        "valid_to": row.valid_to.isoformat() if row.valid_to else None,
+        "is_active": row.is_active,
+        "note": row.note,
+    }
+
+
+def _loyalty_setting_payload(row: LoyaltySetting) -> dict[str, Any]:
+    """Return loyalty settings payload."""
+
+    return {
+        "id": row.id,
+        "earn_rate_percent": _decimal(row.earn_rate_percent, "0.01"),
+        "redemption_limit_percent": _decimal(row.redemption_limit_percent, "0.01"),
+        "is_active": row.is_active,
+        "note": row.note,
+    }
+
+
+def _loyalty_card_payload(row: LoyaltyCard) -> dict[str, Any]:
+    """Return a loyalty card payload."""
+
+    return {
+        "id": row.id,
+        "card_number": row.card_number,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "owner_name": row.owner_name,
+        "phone": row.phone,
+        "balance_tmt": _decimal(row.balance_tmt, "0.01"),
+        "is_active": row.is_active,
+        "note": row.note,
+    }
+
+
+def _loyalty_transaction_payload(row: LoyaltyTransaction) -> dict[str, Any]:
+    """Return a loyalty transaction payload."""
+
+    return {
+        "id": row.id,
+        "loyalty_card_id": row.loyalty_card_id,
+        "card_number": row.loyalty_card.card_number if row.loyalty_card else None,
+        "transaction_type": row.transaction_type,
+        "doc_type": row.doc_type,
+        "doc_id": row.doc_id,
+        "amount_tmt": _decimal(row.amount_tmt, "0.01"),
+        "balance_after": _decimal(row.balance_after, "0.01"),
+        "note": row.note,
+        "created_by_user_id": row.created_by_user_id,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
+def _get_loyalty_settings(session: Session) -> LoyaltySetting:
+    """Return the singleton loyalty settings row, creating defaults when needed."""
+
+    row = session.query(LoyaltySetting).order_by(LoyaltySetting.id).first()
+    if row is None:
+        row = LoyaltySetting(earn_rate_percent=Decimal("0"), redemption_limit_percent=Decimal("100"), is_active=True)
+        session.add(row)
+        session.flush()
+    return row
+
+
+def _post_loyalty_transaction(
+    session: Session,
+    card: LoyaltyCard,
+    *,
+    transaction_type: str,
+    amount_tmt: Decimal,
+    doc_type: str | None,
+    doc_id: int | None,
+    note: str | None,
+    user_id: int | None,
+) -> LoyaltyTransaction:
+    """Update a loyalty-card balance and append a movement row."""
+
+    amount = money(amount_tmt)
+    new_balance = money(card.balance_tmt + amount)
+    if new_balance < Decimal("0.00"):
+        raise HTTPException(status_code=400, detail=error_detail("INSUFFICIENT_BONUS", "Loyalty card balance is insufficient."))
+    card.balance_tmt = new_balance
+    transaction = LoyaltyTransaction(
+        loyalty_card_id=card.id,
+        transaction_type=transaction_type,
+        doc_type=doc_type,
+        doc_id=doc_id,
+        amount_tmt=amount,
+        balance_after=new_balance,
+        note=note,
+        created_by_user_id=user_id,
+    )
+    session.add(transaction)
+    session.flush()
+    return transaction
+
+
+def _resolve_price_import_row(session: Session, row: PriceListImportRow) -> PriceListItemCreate:
+    """Resolve product/service codes in an import row to ids."""
+
+    product_id = row.product_id
+    service_id = row.service_id
+    if product_id is None and row.product_sku:
+        product = session.query(Product).filter(Product.sku == row.product_sku).one_or_none()
+        if product is None:
+            raise HTTPException(status_code=400, detail=error_detail("UNKNOWN_PRODUCT", f"Product not found: {row.product_sku}"))
+        product_id = product.id
+    if service_id is None and row.service_code:
+        service = session.query(Service).filter(Service.code == row.service_code).one_or_none()
+        if service is None:
+            raise HTTPException(status_code=400, detail=error_detail("UNKNOWN_SERVICE", f"Service not found: {row.service_code}"))
+        service_id = service.id
+    return PriceListItemCreate(
+        product_id=product_id,
+        service_id=service_id,
+        product_uom_id=row.product_uom_id,
+        uom_id=row.uom_id,
+        price_tmt=row.price_tmt,
+        valid_from=row.valid_from,
+        valid_to=row.valid_to,
+    )
+
+
+def _price_rows_from_xlsx(xlsx_base64: str) -> list[PriceListImportRow]:
+    """Parse a base64 XLSX workbook into import rows."""
+
+    try:
+        workbook = load_workbook(BytesIO(base64.b64decode(xlsx_base64)), data_only=True)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_XLSX", "Could not parse XLSX workbook.")) from exc
+    sheet = workbook.active
+    rows = list(sheet.iter_rows(values_only=True))
+    if not rows:
+        return []
+    headers = [str(value).strip() if value is not None else "" for value in rows[0]]
+    result: list[PriceListImportRow] = []
+    for raw in rows[1:]:
+        values = {headers[index]: raw[index] for index in range(min(len(headers), len(raw))) if headers[index]}
+        if not any(value is not None and value != "" for value in values.values()):
+            continue
+        result.append(
+            PriceListImportRow(
+                product_id=values.get("product_id"),
+                product_sku=values.get("product_sku"),
+                service_id=values.get("service_id"),
+                service_code=values.get("service_code"),
+                product_uom_id=values.get("product_uom_id"),
+                uom_id=values.get("uom_id"),
+                price_tmt=values.get("price_tmt"),
+                valid_from=values.get("valid_from"),
+                valid_to=values.get("valid_to"),
+            )
+        )
+    return result
+
+
+def _price_list_xlsx_base64(rows: list[dict[str, Any]]) -> str:
+    """Return a base64 XLSX workbook for price-list rows."""
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "prices"
+    headers = [
+        "product_id",
+        "product_sku",
+        "service_id",
+        "service_code",
+        "product_uom_id",
+        "uom_id",
+        "price_tmt",
+        "valid_from",
+        "valid_to",
+    ]
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([row.get(header) for header in headers])
+    stream = BytesIO()
+    workbook.save(stream)
+    return base64.b64encode(stream.getvalue()).decode("ascii")
 
 
 def _invoice_line_payload(line: PurchaseInvoiceLine) -> dict[str, Any]:
@@ -733,6 +954,313 @@ def add_price_list_item(
     session.add(item)
     session.commit()
     return success_response(_price_item_payload(item))
+
+
+@router.get("/price-lists/{price_list_id}/export")
+def export_price_list(
+    price_list_id: int,
+    _: User = Depends(require_price_list_export),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Export a price list as API rows plus a base64 XLSX workbook."""
+
+    price_list = _get_or_404(session, PriceList, price_list_id, "Price list")
+    rows = (
+        session.query(PriceListItem)
+        .options(selectinload(PriceListItem.product), selectinload(PriceListItem.service), selectinload(PriceListItem.uom))
+        .filter(PriceListItem.price_list_id == price_list.id)
+        .order_by(PriceListItem.product_id, PriceListItem.service_id, PriceListItem.valid_from.desc(), PriceListItem.id.desc())
+        .all()
+    )
+    payload_rows = [_price_item_payload(row) for row in rows]
+    return success_response(
+        {
+            "price_list": _price_list_payload(price_list),
+            "rows": payload_rows,
+            "format": "xlsx",
+            "filename": f"price-list-{price_list.id}.xlsx",
+            "xlsx_base64": _price_list_xlsx_base64(payload_rows),
+        }
+    )
+
+
+@router.post("/price-lists/{price_list_id}/import")
+def import_price_list(
+    price_list_id: int,
+    payload: PriceListImportPayload,
+    _: User = Depends(require_price_list_import),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Import price-list rows from JSON and/or a base64 XLSX workbook."""
+
+    price_list = _get_or_404(session, PriceList, price_list_id, "Price list")
+    raw_rows = list(payload.rows)
+    if payload.xlsx_base64:
+        raw_rows.extend(_price_rows_from_xlsx(payload.xlsx_base64))
+    if not raw_rows:
+        raise HTTPException(status_code=400, detail=error_detail("EMPTY_IMPORT", "No price rows were supplied."))
+
+    created = 0
+    updated = 0
+    skipped = 0
+    changed_items: list[PriceListItem] = []
+    for raw_row in raw_rows:
+        item_payload = _resolve_price_import_row(session, raw_row)
+        if item_payload.product_id is not None:
+            _get_or_404(session, Product, item_payload.product_id, "Product")
+        if item_payload.service_id is not None:
+            _get_or_404(session, Service, item_payload.service_id, "Service")
+        if item_payload.product_uom_id is not None:
+            _get_or_404(session, ProductUom, item_payload.product_uom_id, "Product UOM")
+        if item_payload.uom_id is not None:
+            _get_or_404(session, UnitOfMeasure, item_payload.uom_id, "Unit of measure")
+        existing = (
+            session.query(PriceListItem)
+            .filter(
+                PriceListItem.price_list_id == price_list.id,
+                PriceListItem.product_id == item_payload.product_id,
+                PriceListItem.service_id == item_payload.service_id,
+                PriceListItem.product_uom_id == item_payload.product_uom_id,
+                PriceListItem.uom_id == item_payload.uom_id,
+                PriceListItem.valid_from == item_payload.valid_from,
+            )
+            .order_by(PriceListItem.id.desc())
+            .first()
+        )
+        if existing is not None and payload.duplicate_mode == "skip":
+            skipped += 1
+            continue
+        if existing is not None and payload.duplicate_mode == "update":
+            existing.price_tmt = price(item_payload.price_tmt)
+            existing.valid_to = item_payload.valid_to
+            changed_items.append(existing)
+            updated += 1
+            continue
+        item = PriceListItem(price_list=price_list, **item_payload.model_dump())
+        session.add(item)
+        session.flush()
+        changed_items.append(item)
+        created += 1
+
+    session.commit()
+    return success_response(
+        {
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "rows": [_price_item_payload(row) for row in changed_items],
+        }
+    )
+
+
+def _validate_promotion_row(session: Session, row: Promotion) -> None:
+    """Validate promotion references and type-specific fields."""
+
+    if row.valid_to is not None and row.valid_to < row.valid_from:
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_DATES", "Promotion valid_to cannot be before valid_from."))
+    if row.target_type == "product":
+        if row.product_id is None:
+            raise HTTPException(status_code=400, detail=error_detail("PRODUCT_REQUIRED", "Product promotion requires product_id."))
+        _get_or_404(session, Product, row.product_id, "Product")
+    if row.target_type == "group":
+        if row.product_group_id is None:
+            raise HTTPException(status_code=400, detail=error_detail("PRODUCT_GROUP_REQUIRED", "Group promotion requires product_group_id."))
+        _get_or_404(session, ProductGroup, row.product_group_id, "Product group")
+    if row.promotion_type == "discount":
+        if row.discount_type is None:
+            raise HTTPException(status_code=400, detail=error_detail("DISCOUNT_TYPE_REQUIRED", "Discount promotion requires discount_type."))
+    if row.promotion_type == "gift":
+        if row.gift_product_id is None or qty4(row.gift_quantity) <= Decimal("0.0000"):
+            raise HTTPException(status_code=400, detail=error_detail("GIFT_REQUIRED", "Gift promotion requires gift_product_id and positive gift_quantity."))
+        _get_or_404(session, Product, row.gift_product_id, "Gift product")
+
+
+@router.get("/promotions")
+def list_promotions(
+    active_only: bool = Query(default=False),
+    _: User = Depends(require_pricing_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List promotion rules."""
+
+    query = session.query(Promotion).options(selectinload(Promotion.product), selectinload(Promotion.product_group), selectinload(Promotion.gift_product))
+    if active_only:
+        query = query.filter(Promotion.is_active.is_(True))
+    rows = query.order_by(Promotion.id.desc()).all()
+    return success_response([_promotion_payload(row) for row in rows])
+
+
+@router.post("/promotions", status_code=status.HTTP_201_CREATED)
+def create_promotion(
+    payload: PromotionCreate,
+    _: User = Depends(require_promo_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a sale promotion rule."""
+
+    row = Promotion(**payload.model_dump())
+    _validate_promotion_row(session, row)
+    session.add(row)
+    session.commit()
+    return success_response(_promotion_payload(row))
+
+
+@router.patch("/promotions/{promotion_id}")
+def update_promotion(
+    promotion_id: int,
+    payload: PromotionUpdate,
+    _: User = Depends(require_promo_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch a promotion rule."""
+
+    row = _get_or_404(session, Promotion, promotion_id, "Promotion")
+    for key, value in _updates(payload).items():
+        setattr(row, key, value)
+    _validate_promotion_row(session, row)
+    session.commit()
+    return success_response(_promotion_payload(row))
+
+
+@router.get("/loyalty-settings")
+def get_loyalty_settings_endpoint(
+    _: User = Depends(require_pricing_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return global loyalty settings."""
+
+    return success_response(_loyalty_setting_payload(_get_loyalty_settings(session)))
+
+
+@router.put("/loyalty-settings")
+def update_loyalty_settings(
+    payload: LoyaltySettingsUpdate,
+    _: User = Depends(require_loyalty_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Update global loyalty settings."""
+
+    row = _get_loyalty_settings(session)
+    for key, value in payload.model_dump().items():
+        setattr(row, key, value)
+    session.commit()
+    return success_response(_loyalty_setting_payload(row))
+
+
+@router.get("/loyalty-cards")
+def list_loyalty_cards(
+    search: str | None = Query(default=None),
+    active_only: bool = Query(default=False),
+    _: User = Depends(require_pricing_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List loyalty cards."""
+
+    query = session.query(LoyaltyCard).options(selectinload(LoyaltyCard.counterparty))
+    if active_only:
+        query = query.filter(LoyaltyCard.is_active.is_(True))
+    if search:
+        pattern = f"%{search}%"
+        query = query.join(Counterparty, LoyaltyCard.counterparty_id == Counterparty.id, isouter=True).filter(
+            or_(LoyaltyCard.card_number.ilike(pattern), LoyaltyCard.owner_name.ilike(pattern), LoyaltyCard.phone.ilike(pattern), Counterparty.name.ilike(pattern))
+        )
+    rows = query.order_by(LoyaltyCard.card_number).limit(500).all()
+    return success_response([_loyalty_card_payload(row) for row in rows])
+
+
+@router.post("/loyalty-cards", status_code=status.HTTP_201_CREATED)
+def create_loyalty_card(
+    payload: LoyaltyCardCreate,
+    current_user: User = Depends(require_loyalty_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a loyalty card and optional opening balance transaction."""
+
+    if session.query(LoyaltyCard).filter(LoyaltyCard.card_number == payload.card_number).one_or_none() is not None:
+        raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_CARD", "Loyalty card number already exists."))
+    if payload.counterparty_id is not None:
+        _get_or_404(session, Counterparty, payload.counterparty_id, "Counterparty")
+    values = payload.model_dump()
+    opening_balance = money(values.pop("balance_tmt"))
+    card = LoyaltyCard(balance_tmt=Decimal("0.00"), **values)
+    session.add(card)
+    session.flush()
+    if opening_balance > Decimal("0.00"):
+        _post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="opening_balance",
+            amount_tmt=opening_balance,
+            doc_type="loyalty_card",
+            doc_id=card.id,
+            note="Opening balance",
+            user_id=current_user.id,
+        )
+    session.commit()
+    return success_response(_loyalty_card_payload(card))
+
+
+@router.patch("/loyalty-cards/{card_id}")
+def update_loyalty_card(
+    card_id: int,
+    payload: LoyaltyCardUpdate,
+    _: User = Depends(require_loyalty_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch loyalty card metadata."""
+
+    card = _get_or_404(session, LoyaltyCard, card_id, "Loyalty card")
+    updates = _updates(payload)
+    if updates.get("counterparty_id") is not None:
+        _get_or_404(session, Counterparty, int(updates["counterparty_id"]), "Counterparty")
+    for key, value in updates.items():
+        setattr(card, key, value)
+    session.commit()
+    return success_response(_loyalty_card_payload(card))
+
+
+@router.get("/loyalty-cards/{card_id}/transactions")
+def list_loyalty_transactions(
+    card_id: int,
+    _: User = Depends(require_pricing_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List loyalty movements for one card."""
+
+    _get_or_404(session, LoyaltyCard, card_id, "Loyalty card")
+    rows = (
+        session.query(LoyaltyTransaction)
+        .options(selectinload(LoyaltyTransaction.loyalty_card))
+        .filter(LoyaltyTransaction.loyalty_card_id == card_id)
+        .order_by(LoyaltyTransaction.id.desc())
+        .limit(500)
+        .all()
+    )
+    return success_response([_loyalty_transaction_payload(row) for row in rows])
+
+
+@router.post("/loyalty-cards/{card_id}/adjust", status_code=status.HTTP_201_CREATED)
+def adjust_loyalty_card(
+    card_id: int,
+    payload: LoyaltyAdjustmentCreate,
+    current_user: User = Depends(require_loyalty_adjust),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Post a manual loyalty-card balance adjustment."""
+
+    card = _get_or_404(session, LoyaltyCard, card_id, "Loyalty card")
+    transaction = _post_loyalty_transaction(
+        session,
+        card,
+        transaction_type="manual_adjustment",
+        amount_tmt=money(payload.amount_tmt),
+        doc_type="loyalty_card",
+        doc_id=card.id,
+        note=payload.note or "Manual adjustment",
+        user_id=current_user.id,
+    )
+    session.commit()
+    return success_response(_loyalty_transaction_payload(transaction))
 
 
 @router.get("/prices/current")

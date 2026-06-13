@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from server_app.api.dependencies import get_db
@@ -19,8 +19,10 @@ from server_app.db.models import (
     Counterparty,
     Currency,
     DebtLedger,
+    LoyaltyCard,
     Payment,
     Product,
+    Promotion,
     ProductUom,
     PurchaseInvoice,
     Sale,
@@ -49,6 +51,13 @@ from server_app.services.settlements import (
     post_debt_entry,
     price,
     qty4,
+)
+from server_app.services.loyalty import (
+    LoyaltyBusinessError,
+    get_loyalty_settings,
+    loyalty_transaction_total,
+    post_loyalty_transaction,
+    reverse_loyalty_document,
 )
 from server_app.services.warehouse import WarehouseBusinessError, get_or_create_balance, post_stock_movement
 
@@ -171,6 +180,9 @@ def _sale_line_payload(line: SaleLine) -> dict[str, Any]:
         "discount_amount": _decimal(line.discount_amount, "0.01"),
         "amount_tmt": _decimal(line.amount_tmt, "0.01"),
         "avg_cost_tmt": _decimal(line.avg_cost_tmt, "0.0001"),
+        "promo_id": line.promo_id,
+        "promotion_name": line.promotion.name if line.promotion else None,
+        "parent_line_id": line.parent_line_id,
         "price_override": line.price_override,
     }
 
@@ -194,6 +206,8 @@ def _sale_payload(row: Sale) -> dict[str, Any]:
         "currency_id": row.currency_id,
         "currency_code": row.currency.code if row.currency else None,
         "currency_rate": _decimal(row.currency_rate, "0.000001"),
+        "loyalty_card_id": row.loyalty_card_id,
+        "loyalty_card_number": row.loyalty_card.card_number if row.loyalty_card else None,
         "discount_percent": _decimal(row.discount_percent, "0.01"),
         "discount_amount_tmt": _decimal(row.discount_amount_tmt, "0.01"),
         "total_amount_tmt": _decimal(row.total_amount_tmt, "0.01"),
@@ -252,6 +266,7 @@ def _sale_return_payload(row: SaleReturn) -> dict[str, Any]:
         "refund_method": row.refund_method,
         "refund_cash_tmt": _decimal(row.refund_cash_tmt, "0.01"),
         "refund_transfer_tmt": _decimal(row.refund_transfer_tmt, "0.01"),
+        "refund_bonus_tmt": _decimal(row.refund_bonus_tmt, "0.01"),
         "receivable_correction_tmt": _decimal(row.receivable_correction_tmt, "0.01"),
         "status": row.status,
         "note": row.note,
@@ -269,9 +284,11 @@ def _sale_query(session: Session):
         selectinload(Sale.counterparty),
         selectinload(Sale.warehouse),
         selectinload(Sale.currency),
+        selectinload(Sale.loyalty_card),
         selectinload(Sale.lines).selectinload(SaleLine.product),
         selectinload(Sale.lines).selectinload(SaleLine.service),
         selectinload(Sale.lines).selectinload(SaleLine.uom),
+        selectinload(Sale.lines).selectinload(SaleLine.promotion),
     )
 
 
@@ -322,32 +339,38 @@ def _returned_quantity_for_sale_line(session: Session, sale_line_id: int) -> Dec
     return qty4(value)
 
 
-def _sale_return_payment_split(payload: SaleReturnCreate, total: Decimal) -> tuple[Decimal, Decimal, Decimal]:
-    """Return normalized cash, transfer, and receivable-correction amounts."""
+def _sale_return_payment_split(payload: SaleReturnCreate, total: Decimal) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Return normalized cash, transfer, bonus, and receivable-correction amounts."""
 
     zero = Decimal("0.00")
     if payload.refund_method == "cash":
         supplied = money(payload.refund_cash_tmt)
         if supplied not in (zero, total):
             raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Cash refund must equal return total."))
-        return total, zero, zero
+        return total, zero, zero, zero
     if payload.refund_method == "transfer":
         supplied = money(payload.refund_transfer_tmt)
         if supplied not in (zero, total):
             raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Transfer refund must equal return total."))
-        return zero, total, zero
+        return zero, total, zero, zero
+    if payload.refund_method == "bonus":
+        supplied = money(payload.refund_bonus_tmt)
+        if supplied not in (zero, total):
+            raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Bonus refund must equal return total."))
+        return zero, zero, total, zero
     if payload.refund_method == "debt_correction":
         supplied = money(payload.receivable_correction_tmt)
         if supplied not in (zero, total):
             raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Receivable correction must equal return total."))
-        return zero, zero, total
+        return zero, zero, zero, total
 
     cash = money(payload.refund_cash_tmt)
     transfer = money(payload.refund_transfer_tmt)
+    bonus = money(payload.refund_bonus_tmt)
     receivable = money(payload.receivable_correction_tmt)
-    if money(cash + transfer + receivable) != total:
+    if money(cash + transfer + bonus + receivable) != total:
         raise HTTPException(status_code=400, detail=error_detail("REFUND_TOTAL_MISMATCH", "Mixed refund parts must equal return total."))
-    return cash, transfer, receivable
+    return cash, transfer, bonus, receivable
 
 
 def _validate_shift_for_register(session: Session, shift_id: int | None, register_id: int | None) -> CashShift | None:
@@ -369,30 +392,278 @@ def _build_sale_line(session: Session, payload: SaleLineCreate) -> SaleLine:
     quantity = qty4(payload.quantity)
     final_price = price(payload.price_final)
     list_price = price(payload.price_list_price if payload.price_list_price is not None else payload.price_final)
-    amount = money(quantity * final_price)
+    gross_amount = money(quantity * final_price)
+    manual_discount = money((gross_amount * Decimal(payload.discount_percent) / Decimal("100")) + payload.discount_amount)
+    if manual_discount > gross_amount:
+        raise HTTPException(status_code=400, detail=error_detail("DISCOUNT_EXCEEDS_LINE", "Line discount exceeds line amount."))
+    line_amount = money(gross_amount - manual_discount)
+    effective_price = price(line_amount / quantity)
+
+    product: Product | None = None
+    service: Service | None = None
+    resolved_uom_id = payload.uom_id
     if payload.product_id is not None:
-        _get_or_404(session, Product, payload.product_id, "Product")
+        product = _get_or_404(session, Product, payload.product_id, "Product")
+        if not product.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_PRODUCT", "Product is inactive."))
         if payload.product_uom_id is not None:
-            _get_or_404(session, ProductUom, payload.product_uom_id, "Product UOM")
+            product_uom = _get_or_404(session, ProductUom, payload.product_uom_id, "Product UOM")
+            resolved_uom_id = product_uom.uom_id
+        elif resolved_uom_id is None:
+            resolved_uom_id = product.base_uom_id
         line_type = payload.line_type or "product"
     else:
-        _get_or_404(session, Service, payload.service_id, "Service")
+        service = _get_or_404(session, Service, payload.service_id, "Service")
+        if not service.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_SERVICE", "Service is inactive."))
         line_type = payload.line_type or "service"
+
     return SaleLine(
         line_type=line_type,
         product_id=payload.product_id,
+        product=product,
         service_id=payload.service_id,
+        service=service,
         product_uom_id=payload.product_uom_id,
-        uom_id=payload.uom_id,
+        uom_id=resolved_uom_id,
         quantity=quantity,
         price_list_price=list_price,
-        price_final=final_price,
+        price_final=effective_price,
         discount_percent=payload.discount_percent,
-        discount_amount=money(payload.discount_amount),
-        amount_tmt=amount,
+        discount_amount=manual_discount,
+        amount_tmt=line_amount,
         avg_cost_tmt=Decimal("0.0000"),
         price_override=payload.price_override,
     )
+
+
+def _promotion_matches_product(promotion: Promotion, product: Product | None) -> bool:
+    """Return whether a promotion targets the product on a sale line."""
+
+    if product is None:
+        return False
+    if promotion.target_type == "all":
+        return True
+    if promotion.target_type == "product":
+        return promotion.product_id == product.id
+    if promotion.target_type == "group":
+        return promotion.product_group_id == product.group_id
+    return False
+
+
+def _promotion_discount_amount(promotion: Promotion, line: SaleLine) -> Decimal:
+    """Calculate the discount amount a promotion gives to one line."""
+
+    current_amount = money(line.amount_tmt)
+    if current_amount <= Decimal("0.00"):
+        return Decimal("0.00")
+    if promotion.discount_type == "percent":
+        return min(current_amount, money(current_amount * Decimal(promotion.discount_value) / Decimal("100")))
+    if promotion.discount_type == "fixed_amount":
+        return min(current_amount, money(promotion.discount_value))
+    if promotion.discount_type == "fixed_price":
+        target_amount = money(line.quantity * price(promotion.discount_value))
+        return max(Decimal("0.00"), money(current_amount - target_amount))
+    return Decimal("0.00")
+
+
+def _apply_promotions_to_lines(session: Session, lines: list[SaleLine], sale_date: datetime) -> list[SaleLine]:
+    """Apply active discount and gift promotions to sale lines."""
+
+    promotions = (
+        session.query(Promotion)
+        .filter(
+            Promotion.is_active.is_(True),
+            Promotion.valid_from <= sale_date,
+            or_(Promotion.valid_to.is_(None), Promotion.valid_to >= sale_date),
+        )
+        .order_by(Promotion.id)
+        .all()
+    )
+    if not promotions:
+        return lines
+
+    gift_lines: list[SaleLine] = []
+    for line in lines:
+        if line.product_id is None or line.line_type == "promo_gift":
+            continue
+        product = line.product or session.get(Product, line.product_id)
+        matching = [row for row in promotions if qty4(line.quantity) >= qty4(row.min_quantity) and _promotion_matches_product(row, product)]
+
+        best_discount: tuple[Decimal, Promotion] | None = None
+        for promotion in matching:
+            if promotion.promotion_type != "discount":
+                continue
+            discount_amount = _promotion_discount_amount(promotion, line)
+            if discount_amount > Decimal("0.00") and (best_discount is None or discount_amount > best_discount[0]):
+                best_discount = (discount_amount, promotion)
+        if best_discount is not None:
+            discount_amount, promotion = best_discount
+            line.discount_amount = money(line.discount_amount + discount_amount)
+            line.amount_tmt = money(line.amount_tmt - discount_amount)
+            line.price_final = price(line.amount_tmt / line.quantity)
+            line.promo_id = promotion.id
+            if promotion.discount_type == "percent":
+                line.discount_percent = min(Decimal("100"), Decimal(line.discount_percent) + Decimal(promotion.discount_value))
+
+        for promotion in matching:
+            if promotion.promotion_type != "gift" or promotion.gift_product_id is None:
+                continue
+            multiplier = int(qty4(line.quantity) // qty4(promotion.min_quantity))
+            if multiplier <= 0:
+                continue
+            gift_product = session.get(Product, promotion.gift_product_id)
+            if gift_product is None or not gift_product.is_active:
+                continue
+            gift_lines.append(
+                SaleLine(
+                    line_type="promo_gift",
+                    product_id=gift_product.id,
+                    product=gift_product,
+                    uom_id=gift_product.base_uom_id,
+                    quantity=qty4(promotion.gift_quantity * multiplier),
+                    price_list_price=Decimal("0.0000"),
+                    price_final=Decimal("0.0000"),
+                    discount_percent=Decimal("0.00"),
+                    discount_amount=Decimal("0.00"),
+                    amount_tmt=Decimal("0.00"),
+                    avg_cost_tmt=Decimal("0.0000"),
+                    promo_id=promotion.id,
+                    parent_line=line,
+                    price_override=False,
+                )
+            )
+    return [*lines, *gift_lines]
+
+
+def _loyalty_http_error(exc: LoyaltyBusinessError) -> HTTPException:
+    """Convert a loyalty business error into an API v1 envelope error."""
+
+    return HTTPException(status_code=400, detail=error_detail(exc.code, exc.message))
+
+
+def _validate_loyalty_payment(
+    session: Session,
+    payload: SaleCreate,
+    counterparty: Counterparty | None,
+    total: Decimal,
+    paid_bonus: Decimal,
+) -> LoyaltyCard | None:
+    """Validate bonus redemption limits and selected loyalty card."""
+
+    card: LoyaltyCard | None = None
+    if payload.loyalty_card_id is not None:
+        card = _get_or_404(session, LoyaltyCard, payload.loyalty_card_id, "Loyalty card")
+        if not card.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_LOYALTY_CARD", "Loyalty card is inactive."))
+        if card.counterparty_id is not None and counterparty is not None and card.counterparty_id != counterparty.id:
+            raise HTTPException(status_code=400, detail=error_detail("LOYALTY_COUNTERPARTY_MISMATCH", "Loyalty card belongs to another customer."))
+    if paid_bonus <= Decimal("0.00"):
+        return card
+    if card is None:
+        raise HTTPException(status_code=400, detail=error_detail("LOYALTY_CARD_REQUIRED", "Bonus payment requires a loyalty card."))
+    settings = get_loyalty_settings(session)
+    if not settings.is_active:
+        raise HTTPException(status_code=400, detail=error_detail("LOYALTY_DISABLED", "Loyalty program is disabled."))
+    if money(card.balance_tmt) < paid_bonus:
+        raise HTTPException(status_code=400, detail=error_detail("INSUFFICIENT_BONUS", "Loyalty card balance is insufficient."))
+    redemption_limit = money(total * Decimal(settings.redemption_limit_percent) / Decimal("100"))
+    if paid_bonus > redemption_limit:
+        raise HTTPException(status_code=400, detail=error_detail("BONUS_LIMIT_EXCEEDED", "Bonus payment exceeds the loyalty redemption limit."))
+    return card
+
+
+def _post_sale_loyalty(session: Session, sale: Sale, user_id: int | None) -> None:
+    """Post loyalty redemption and accrual for a sale."""
+
+    if sale.loyalty_card_id is None:
+        return
+    card = sale.loyalty_card or session.get(LoyaltyCard, sale.loyalty_card_id)
+    if card is None:
+        return
+    settings = get_loyalty_settings(session)
+    paid_bonus = money(sale.paid_bonus_tmt)
+    if paid_bonus > Decimal("0.00") and not settings.is_active:
+        raise LoyaltyBusinessError("LOYALTY_DISABLED", "Loyalty program is disabled.")
+    if paid_bonus > Decimal("0.00"):
+        post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="redemption",
+            amount_tmt=-paid_bonus,
+            doc_type="sale",
+            doc_id=sale.id,
+            note="Sale bonus redemption",
+            user_id=user_id,
+        )
+    if not settings.is_active:
+        return
+    earn_base = money(sale.total_amount_tmt - paid_bonus)
+    accrual = money(earn_base * Decimal(settings.earn_rate_percent) / Decimal("100"))
+    if accrual > Decimal("0.00"):
+        post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="accrual",
+            amount_tmt=accrual,
+            doc_type="sale",
+            doc_id=sale.id,
+            note="Sale bonus accrual",
+            user_id=user_id,
+        )
+
+
+def _post_sale_return_loyalty(session: Session, sale_return: SaleReturn, user_id: int | None) -> None:
+    """Post loyalty reversals and optional bonus refund for a sale return."""
+
+    sale = sale_return.sale
+    if sale is None or sale.loyalty_card_id is None:
+        return
+    card = sale.loyalty_card or session.get(LoyaltyCard, sale.loyalty_card_id)
+    if card is None:
+        return
+    refund_bonus = money(sale_return.refund_bonus_tmt)
+    if refund_bonus > Decimal("0.00"):
+        post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="return_refund",
+            amount_tmt=refund_bonus,
+            doc_type="sale_return",
+            doc_id=sale_return.id,
+            note="Sale return bonus refund",
+            user_id=user_id,
+        )
+    sale_total = money(sale.total_amount_tmt)
+    if sale_total <= Decimal("0.00"):
+        return
+    ratio = money(sale_return.total_amount_tmt) / sale_total
+    redeemed = -loyalty_transaction_total(session, doc_type="sale", doc_id=sale.id, transaction_type="redemption")
+    redeemed_reversal = money(redeemed * ratio)
+    if redeemed_reversal > Decimal("0.00"):
+        post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="return_redemption_reversal",
+            amount_tmt=redeemed_reversal,
+            doc_type="sale_return",
+            doc_id=sale_return.id,
+            note="Sale return bonus redemption reversal",
+            user_id=user_id,
+        )
+    accrued = loyalty_transaction_total(session, doc_type="sale", doc_id=sale.id, transaction_type="accrual")
+    accrual_reversal = money(accrued * ratio)
+    if accrual_reversal > Decimal("0.00"):
+        post_loyalty_transaction(
+            session,
+            card,
+            transaction_type="return_accrual_reversal",
+            amount_tmt=-accrual_reversal,
+            doc_type="sale_return",
+            doc_id=sale_return.id,
+            note="Sale return bonus accrual reversal",
+            user_id=user_id,
+        )
 
 
 def _payment_split(payload: SaleCreate, total: Decimal) -> tuple[Decimal, Decimal, Decimal, Decimal]:
@@ -607,7 +878,9 @@ def create_sale(
     if session.query(Sale).filter(Sale.doc_number == doc_number).one_or_none() is not None:
         raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Sale number already exists."))
 
+    sale_date = payload.doc_date or now_utc()
     lines = [_build_sale_line(session, item) for item in payload.lines]
+    lines = _apply_promotions_to_lines(session, lines, sale_date)
     subtotal = money(sum((line.amount_tmt for line in lines), Decimal("0")))
     doc_discount = money((subtotal * money(payload.discount_percent) / Decimal("100")) + payload.discount_amount_tmt)
     if doc_discount > subtotal:
@@ -616,10 +889,11 @@ def create_sale(
     paid_cash, paid_transfer, paid_bonus, debt = _payment_split(payload, total)
     if debt > Decimal("0.00") and counterparty is None:
         raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Counterparty is required for debt amount."))
+    loyalty_card = _validate_loyalty_payment(session, payload, counterparty, total, paid_bonus)
 
     sale = Sale(
         doc_number=doc_number,
-        doc_date=payload.doc_date or now_utc(),
+        doc_date=sale_date,
         sale_type=payload.sale_type,
         cash_register_id=payload.cash_register_id,
         cash_shift_id=payload.cash_shift_id,
@@ -636,7 +910,7 @@ def create_sale(
         paid_transfer_tmt=paid_transfer,
         paid_bonus_tmt=paid_bonus,
         debt_amount_tmt=debt,
-        loyalty_card_id=payload.loyalty_card_id,
+        loyalty_card_id=loyalty_card.id if loyalty_card is not None else None,
         status="draft",
         created_by_user_id=current_user.id,
     )
@@ -697,6 +971,12 @@ def post_sale(
             note="Sale posted",
             user_id=current_user.id,
         )
+    try:
+        _post_sale_loyalty(session, sale, current_user.id)
+    except LoyaltyBusinessError as exc:
+        session.rollback()
+        raise _loyalty_http_error(exc) from exc
+
     sale.status = "posted"
     sale.posted_by_user_id = current_user.id
     sale.posted_at = now_utc()
@@ -752,6 +1032,22 @@ def cancel_sale(
                 note="Sale cancelled",
                 user_id=current_user.id,
             )
+        if sale.loyalty_card_id is not None:
+            card = sale.loyalty_card or session.get(LoyaltyCard, sale.loyalty_card_id)
+            if card is not None:
+                try:
+                    reverse_loyalty_document(
+                        session,
+                        card,
+                        doc_type="sale",
+                        doc_id=sale.id,
+                        transaction_type="cancellation",
+                        note="Sale cancelled",
+                        user_id=current_user.id,
+                    )
+                except LoyaltyBusinessError as exc:
+                    session.rollback()
+                    raise _loyalty_http_error(exc) from exc
     sale.status = "cancelled"
     sale.cancelled_by_user_id = current_user.id
     sale.cancelled_at = now_utc()
@@ -836,9 +1132,11 @@ def create_sale_return(
         )
 
     total = money(sum((line.amount_tmt for line in return_lines), Decimal("0.00")))
-    refund_cash, refund_transfer, receivable_correction = _sale_return_payment_split(payload, total)
+    refund_cash, refund_transfer, refund_bonus, receivable_correction = _sale_return_payment_split(payload, total)
     if refund_cash > Decimal("0.00") and shift_id is None:
         raise HTTPException(status_code=400, detail=error_detail("SHIFT_NOT_OPEN", "Cash refund requires an open cash shift."))
+    if refund_bonus > Decimal("0.00") and sale.loyalty_card_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("LOYALTY_CARD_REQUIRED", "Bonus refund requires the source sale to have a loyalty card."))
     if receivable_correction > Decimal("0.00") and sale.counterparty_id is None:
         raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Receivable correction requires a counterparty."))
 
@@ -859,6 +1157,7 @@ def create_sale_return(
         refund_method=payload.refund_method,
         refund_cash_tmt=refund_cash,
         refund_transfer_tmt=refund_transfer,
+        refund_bonus_tmt=refund_bonus,
         receivable_correction_tmt=receivable_correction,
         note=payload.note,
         created_by_user_id=current_user.id,
@@ -917,6 +1216,12 @@ def post_sale_return(
             note="Sale return posted",
             user_id=current_user.id,
         )
+    try:
+        _post_sale_return_loyalty(session, sale_return, current_user.id)
+    except LoyaltyBusinessError as exc:
+        session.rollback()
+        raise _loyalty_http_error(exc) from exc
+
     sale_return.status = "posted"
     sale_return.posted_by_user_id = current_user.id
     sale_return.posted_at = now_utc()
@@ -970,6 +1275,23 @@ def cancel_sale_return(
                 note="Sale return cancelled",
                 user_id=current_user.id,
             )
+        sale = sale_return.sale
+        if sale is not None and sale.loyalty_card_id is not None:
+            card = sale.loyalty_card or session.get(LoyaltyCard, sale.loyalty_card_id)
+            if card is not None:
+                try:
+                    reverse_loyalty_document(
+                        session,
+                        card,
+                        doc_type="sale_return",
+                        doc_id=sale_return.id,
+                        transaction_type="return_cancellation",
+                        note="Sale return cancelled",
+                        user_id=current_user.id,
+                    )
+                except LoyaltyBusinessError as exc:
+                    session.rollback()
+                    raise _loyalty_http_error(exc) from exc
     sale_return.status = "cancelled"
     sale_return.cancelled_by_user_id = current_user.id
     sale_return.cancelled_at = now_utc()
@@ -1078,6 +1400,7 @@ def sales_report(
             "debt_tmt": _decimal(sum((money(row.debt_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
             "return_cash_tmt": _decimal(sum((money(row.refund_cash_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
             "return_transfer_tmt": _decimal(sum((money(row.refund_transfer_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+            "return_bonus_tmt": _decimal(sum((money(row.refund_bonus_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
             "return_debt_correction_tmt": _decimal(sum((money(row.receivable_correction_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
         }
     )

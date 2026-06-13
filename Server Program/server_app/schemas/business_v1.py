@@ -83,6 +83,118 @@ class PriceListItemCreate(BaseModel):
         return self
 
 
+class PriceListImportRow(BaseModel):
+    """Import row for price-list prices."""
+
+    product_id: int | None = None
+    product_sku: str | None = Field(default=None, max_length=80)
+    service_id: int | None = None
+    service_code: str | None = Field(default=None, max_length=80)
+    product_uom_id: int | None = None
+    uom_id: int | None = None
+    price_tmt: Decimal = Field(gt=0)
+    valid_from: date
+    valid_to: date | None = None
+
+
+class PriceListImportPayload(BaseModel):
+    """Import payload for price-list rows or a base64 XLSX workbook."""
+
+    rows: list[PriceListImportRow] = Field(default_factory=list)
+    xlsx_base64: str | None = None
+    duplicate_mode: str = Field(default="add_version", pattern="^(add_version|skip|update)$")
+
+
+class PromotionCreate(BaseModel):
+    """Create payload for a sale promotion."""
+
+    name: str = Field(min_length=1, max_length=160)
+    promotion_type: str = Field(pattern="^(discount|gift)$")
+    target_type: str = Field(default="product", pattern="^(product|group|all)$")
+    product_id: int | None = None
+    product_group_id: int | None = None
+    discount_type: str | None = Field(default=None, pattern="^(percent|fixed_amount|fixed_price)$")
+    discount_value: Decimal = Field(default=Decimal("0"), ge=0)
+    min_quantity: Decimal = Field(default=Decimal("1"), gt=0)
+    gift_product_id: int | None = None
+    gift_quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    valid_from: datetime
+    valid_to: datetime | None = None
+    is_active: bool = True
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def validate_rule(self) -> "PromotionCreate":
+        """Require fields that match the promotion type and target."""
+
+        if self.target_type == "product" and self.product_id is None:
+            raise ValueError("product_id is required for product promotions.")
+        if self.target_type == "group" and self.product_group_id is None:
+            raise ValueError("product_group_id is required for group promotions.")
+        if self.promotion_type == "discount" and self.discount_type is None:
+            raise ValueError("discount_type is required for discount promotions.")
+        if self.promotion_type == "gift" and (self.gift_product_id is None or self.gift_quantity <= 0):
+            raise ValueError("gift_product_id and positive gift_quantity are required for gift promotions.")
+        return self
+
+
+class PromotionUpdate(BaseModel):
+    """Patch payload for a sale promotion."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=160)
+    promotion_type: str | None = Field(default=None, pattern="^(discount|gift)$")
+    target_type: str | None = Field(default=None, pattern="^(product|group|all)$")
+    product_id: int | None = None
+    product_group_id: int | None = None
+    discount_type: str | None = Field(default=None, pattern="^(percent|fixed_amount|fixed_price)$")
+    discount_value: Decimal | None = Field(default=None, ge=0)
+    min_quantity: Decimal | None = Field(default=None, gt=0)
+    gift_product_id: int | None = None
+    gift_quantity: Decimal | None = Field(default=None, ge=0)
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    is_active: bool | None = None
+    note: str | None = None
+
+
+class LoyaltySettingsUpdate(BaseModel):
+    """Update global loyalty settings."""
+
+    earn_rate_percent: Decimal = Field(ge=0, le=100)
+    redemption_limit_percent: Decimal = Field(ge=0, le=100)
+    is_active: bool = True
+    note: str | None = None
+
+
+class LoyaltyCardCreate(BaseModel):
+    """Create payload for a loyalty card."""
+
+    card_number: str = Field(min_length=1, max_length=80)
+    counterparty_id: int | None = None
+    owner_name: str | None = Field(default=None, max_length=180)
+    phone: str | None = Field(default=None, max_length=80)
+    balance_tmt: Decimal = Field(default=Decimal("0"), ge=0)
+    is_active: bool = True
+    note: str | None = None
+
+
+class LoyaltyCardUpdate(BaseModel):
+    """Patch payload for a loyalty card."""
+
+    counterparty_id: int | None = None
+    owner_name: str | None = Field(default=None, max_length=180)
+    phone: str | None = Field(default=None, max_length=80)
+    is_active: bool | None = None
+    note: str | None = None
+
+
+class LoyaltyAdjustmentCreate(BaseModel):
+    """Manual loyalty balance adjustment."""
+
+    amount_tmt: Decimal
+    note: str | None = Field(default=None, max_length=200)
+
+
 class PurchaseOrderLineCreate(BaseModel):
     """Create payload for a purchase order line."""
 

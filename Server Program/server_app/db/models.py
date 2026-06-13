@@ -412,6 +412,7 @@ class Counterparty(Base, ReprMixin, TimestampMixin):
     purchase_invoices: Mapped[list["PurchaseInvoice"]] = relationship(back_populates="counterparty")
     sales: Mapped[list["Sale"]] = relationship(back_populates="counterparty")
     sale_returns: Mapped[list["SaleReturn"]] = relationship(back_populates="counterparty")
+    loyalty_cards: Mapped[list["LoyaltyCard"]] = relationship(back_populates="counterparty")
     debt_entries: Mapped[list["DebtLedger"]] = relationship(back_populates="counterparty")
     payments: Mapped[list["Payment"]] = relationship(back_populates="counterparty")
 
@@ -729,6 +730,86 @@ class PriceListItem(Base, ReprMixin, TimestampMixin):
     uom: Mapped[UnitOfMeasure | None] = relationship()
 
 
+class Promotion(Base, ReprMixin, TimestampMixin):
+    """Promotion rule that can discount sale lines or add a gift line."""
+
+    __tablename__ = "promotions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    promotion_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(20), default="product", nullable=False)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    product_group_id: Mapped[int | None] = mapped_column(ForeignKey("product_groups.id"), nullable=True)
+    discount_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    discount_value: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    min_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=1, nullable=False)
+    gift_product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), nullable=True)
+    gift_quantity: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
+    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    product: Mapped[Product | None] = relationship(foreign_keys=[product_id])
+    product_group: Mapped[ProductGroup | None] = relationship()
+    gift_product: Mapped[Product | None] = relationship(foreign_keys=[gift_product_id])
+
+
+class LoyaltySetting(Base, ReprMixin, TimestampMixin):
+    """Global loyalty-program settings."""
+
+    __tablename__ = "loyalty_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    earn_rate_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=0, nullable=False)
+    redemption_limit_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), default=100, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class LoyaltyCard(Base, ReprMixin, TimestampMixin):
+    """Customer loyalty card with a TMT-denominated bonus balance."""
+
+    __tablename__ = "loyalty_cards"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    card_number: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    counterparty_id: Mapped[int | None] = mapped_column(ForeignKey("counterparties.id"), nullable=True)
+    owner_name: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    balance_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    counterparty: Mapped[Counterparty | None] = relationship(back_populates="loyalty_cards")
+    transactions: Mapped[list["LoyaltyTransaction"]] = relationship(
+        back_populates="loyalty_card",
+        cascade="all, delete-orphan",
+    )
+    sales: Mapped[list["Sale"]] = relationship(back_populates="loyalty_card")
+
+
+class LoyaltyTransaction(Base, ReprMixin):
+    """Append-only bonus movement journal."""
+
+    __tablename__ = "loyalty_transactions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    loyalty_card_id: Mapped[int] = mapped_column(ForeignKey("loyalty_cards.id"), nullable=False, index=True)
+    transaction_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    doc_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    doc_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    balance_after: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    loyalty_card: Mapped[LoyaltyCard] = relationship(back_populates="transactions")
+    created_by_user: Mapped[User | None] = relationship()
+
+
 class PurchaseOrder(Base, ReprMixin, TimestampMixin):
     """Supplier purchase order tracked through invoice receiving."""
 
@@ -882,7 +963,7 @@ class Sale(Base, ReprMixin, TimestampMixin):
     paid_transfer_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     paid_bonus_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     debt_amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
-    loyalty_card_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    loyalty_card_id: Mapped[int | None] = mapped_column(ForeignKey("loyalty_cards.id"), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     admin_override_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -897,6 +978,7 @@ class Sale(Base, ReprMixin, TimestampMixin):
     warehouse: Mapped[Warehouse] = relationship()
     price_list: Mapped[PriceList | None] = relationship(back_populates="sales")
     currency: Mapped[Currency] = relationship()
+    loyalty_card: Mapped[LoyaltyCard | None] = relationship(back_populates="sales")
     admin_override_by_user: Mapped[User | None] = relationship(foreign_keys=[admin_override_by_user_id])
     created_by_user: Mapped[User | None] = relationship(foreign_keys=[created_by_user_id])
     posted_by_user: Mapped[User | None] = relationship(foreign_keys=[posted_by_user_id])
@@ -927,7 +1009,7 @@ class SaleLine(Base, ReprMixin):
     discount_amount: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     amount_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), nullable=False)
     avg_cost_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=0, nullable=False)
-    promo_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    promo_id: Mapped[int | None] = mapped_column(ForeignKey("promotions.id"), nullable=True)
     parent_line_id: Mapped[int | None] = mapped_column(ForeignKey("sale_lines.id"), nullable=True)
     price_override: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -936,6 +1018,7 @@ class SaleLine(Base, ReprMixin):
     service: Mapped[Service | None] = relationship()
     product_uom: Mapped[ProductUom | None] = relationship()
     uom: Mapped[UnitOfMeasure | None] = relationship()
+    promotion: Mapped[Promotion | None] = relationship()
     parent_line: Mapped["SaleLine | None"] = relationship(remote_side="SaleLine.id")
     return_lines: Mapped[list["SaleReturnLine"]] = relationship(back_populates="source_sale_line")
 
@@ -959,6 +1042,7 @@ class SaleReturn(Base, ReprMixin, TimestampMixin):
     refund_method: Mapped[str] = mapped_column(String(20), nullable=False)
     refund_cash_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     refund_transfer_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
+    refund_bonus_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     receivable_correction_tmt: Mapped[Decimal] = mapped_column(Numeric(18, 2), default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="draft", nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)

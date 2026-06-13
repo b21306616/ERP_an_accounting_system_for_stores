@@ -316,6 +316,66 @@ class ApiClient:
 
         return dict(self._request("POST", f"/price-lists/{price_list_id}/items", json=payload))
 
+    def export_price_list(self, price_list_id: int) -> dict[str, Any]:
+        """Export a price list as rows and base64 XLSX data."""
+
+        return dict(self._request("GET", f"/price-lists/{price_list_id}/export"))
+
+    def import_price_list(self, price_list_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Import price rows into a price list."""
+
+        return dict(self._request("POST", f"/price-lists/{price_list_id}/import", json=payload))
+
+    def get_promotions(self, active_only: bool = False) -> list[dict[str, Any]]:
+        """Return sale promotion rules."""
+
+        return list(self._request("GET", self._path_with_params("/promotions", {"active_only": str(active_only).lower()})))
+
+    def create_promotion(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a sale promotion rule."""
+
+        return dict(self._request("POST", "/promotions", json=payload))
+
+    def update_promotion(self, promotion_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a sale promotion rule."""
+
+        return dict(self._request("PATCH", f"/promotions/{promotion_id}", json=payload))
+
+    def get_loyalty_settings(self) -> dict[str, Any]:
+        """Return global loyalty settings."""
+
+        return dict(self._request("GET", "/loyalty-settings"))
+
+    def update_loyalty_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Update global loyalty settings."""
+
+        return dict(self._request("PUT", "/loyalty-settings", json=payload))
+
+    def get_loyalty_cards(self, search: str | None = None, active_only: bool = False) -> list[dict[str, Any]]:
+        """Return loyalty cards."""
+
+        return list(self._request("GET", self._path_with_params("/loyalty-cards", {"search": search, "active_only": str(active_only).lower()})))
+
+    def create_loyalty_card(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a loyalty card."""
+
+        return dict(self._request("POST", "/loyalty-cards", json=payload))
+
+    def update_loyalty_card(self, card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch loyalty card metadata."""
+
+        return dict(self._request("PATCH", f"/loyalty-cards/{card_id}", json=payload))
+
+    def get_loyalty_transactions(self, card_id: int) -> list[dict[str, Any]]:
+        """Return loyalty movements for one card."""
+
+        return list(self._request("GET", f"/loyalty-cards/{card_id}/transactions"))
+
+    def adjust_loyalty_card(self, card_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Post a manual loyalty-card adjustment."""
+
+        return dict(self._request("POST", f"/loyalty-cards/{card_id}/adjust", json=payload))
+
     def get_current_price(self, product_id: int, price_list_id: int | None = None) -> dict[str, Any]:
         """Return the current product price."""
 
