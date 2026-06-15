@@ -64,6 +64,20 @@ Options: `--db-only`, `--config-only`, `--cache-only`.
 
 After a full reset, run `python server.py` again to launch first-run setup.
 
+## Fresh seed demo data
+
+To recreate the configured database schema and seed realistic fake ERP data:
+
+```powershell
+cd "Server Program"
+python fresh_seed.py --yes --super-admin-password "your-password"
+```
+
+The default mode drops/recreates all app tables inside the configured database,
+then runs Alembic migrations and seeds demo data. Use `--mode database` for a
+full configured database drop/recreate, `--dry-run` to preview the target, and
+`--scale small|medium|large` to control fake-data volume.
+
 ## User Program Install
 
 From the `User Program` directory:
