@@ -331,6 +331,102 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/cash-operations", requested_paths[11])
         self.assertIn("/reports/sales", requested_paths[12])
 
+    def test_api_client_stage6_report_helpers_build_filter_and_export_paths(self) -> None:
+        """Filtered reports, exports, and saved filter helpers should target API v1 paths."""
+
+        client = ApiClient("server:8000")
+        client.session_token = "token"
+        response = Mock()
+        response.ok = True
+        response.status_code = 200
+
+        def set_data(data: object) -> None:
+            response.json.return_value = {"success": True, "data": data, "error": None, "meta": None}
+
+        client.session.request = Mock(return_value=response)  # type: ignore[method-assign]
+
+        set_data({"sales_total_tmt": "30.00"})
+        client.get_sales_report({"warehouse_id": 2, "date_from": "2026-01-01"})
+        client.get_purchases_report({"counterparty_id": 3})
+        client.get_debts_report({"debt_type": "receivable"})
+        client.get_cash_flow_report({"cash_shift_id": 5})
+        client.get_profit_loss_report({"product_id": 4})
+
+        set_data([{"product_id": 4}])
+        client.get_stock_report({"product_id": 4})
+        client.get_report_filters("sales")
+
+        set_data({"report_code": "sales", "xlsx_base64": "UEs="})
+        client.export_report("sales", {"warehouse_id": 2})
+        client.create_report_filter({"report_code": "sales", "name": "By warehouse", "filters": {}})
+        client.update_report_filter(8, {"name": "Updated"})
+        client.delete_report_filter(8)
+
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-11:]]
+        self.assertIn("/reports/sales?warehouse_id=2&date_from=2026-01-01", requested_paths[0])
+        self.assertIn("/reports/purchases?counterparty_id=3", requested_paths[1])
+        self.assertIn("/reports/debts?debt_type=receivable", requested_paths[2])
+        self.assertIn("/reports/cash-flow?cash_shift_id=5", requested_paths[3])
+        self.assertIn("/reports/profit-loss?product_id=4", requested_paths[4])
+        self.assertIn("/reports/stock?product_id=4", requested_paths[5])
+        self.assertIn("/report-filters?report_code=sales", requested_paths[6])
+        self.assertIn("/reports/sales/export?warehouse_id=2", requested_paths[7])
+        self.assertIn("/report-filters", requested_paths[8])
+        self.assertIn("/report-filters/8", requested_paths[9])
+        self.assertIn("/report-filters/8", requested_paths[10])
+
+    def test_reports_page_filters_export_and_save_offscreen(self) -> None:
+        """The PyQt reports page should pass filters to report, export, and save helpers."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Reporter", role_name="Manager", permissions=["reports.view", "reports.export", "reports.filters_manage"])
+                self.report_filters: dict[str, str] | None = None
+                self.export_filters: dict[str, str] | None = None
+                self.saved_filter: dict[str, object] | None = None
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_report_filters(self, report_code: str | None = None) -> list[dict[str, object]]:
+                return [{"id": 1, "report_code": report_code, "name": "Saved"}]
+
+            def get_sales_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                self.report_filters = filters
+                return {"sales_total_tmt": "30.00", "rows": []}
+
+            def export_report(self, report_code: str, filters: dict[str, str] | None = None) -> dict[str, object]:
+                self.export_filters = filters
+                return {"report_code": report_code, "filename": "sales.xlsx", "xlsx_base64": "UEs="}
+
+            def create_report_filter(self, payload: dict[str, object]) -> dict[str, object]:
+                self.saved_filter = payload
+                return {"id": 2, **payload}
+
+        app = QApplication.instance() or QApplication([])
+        api_client = FakeApiClient()
+        window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
+        window.report_code.setCurrentText("sales")
+        window.report_warehouse_id.setText("2")
+        window.report_product_id.setText("4")
+        window.report_filter_name.setText("Warehouse product")
+
+        window.refresh_reports()
+        window.export_current_report()
+        self.assertIn("sales.xlsx", window.reports_text.toPlainText())
+        window.save_current_report_filter()
+
+        self.assertEqual(api_client.report_filters, {"warehouse_id": "2", "product_id": "4"})
+        self.assertEqual(api_client.export_filters, {"warehouse_id": "2", "product_id": "4"})
+        self.assertEqual(api_client.saved_filter["report_code"], "sales")
+        self.assertEqual(api_client.saved_filter["filters"], {"warehouse_id": "2", "product_id": "4"})
+        window.close()
+        app.processEvents()
+
     def test_api_client_pricing_promotion_loyalty_helpers_use_envelopes(self) -> None:
         """Stage 3 pricing, promotion, and loyalty helpers should target API v1 paths."""
 

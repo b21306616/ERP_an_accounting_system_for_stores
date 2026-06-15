@@ -946,6 +946,92 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(sales_report.json()["data"]["sales_total_tmt"], "30.00")
         self.assertEqual(sales_report.json()["data"]["cash_tmt"], "10.00")
         self.assertEqual(sales_report.json()["data"]["debt_tmt"], "20.00")
+        self.assertEqual(len(sales_report.json()["data"]["rows"]), 1)
+        self.assertEqual(sales_report.json()["data"]["rows"][0]["signed_amount_tmt"], "30.00")
+
+        filtered_sales = requests.get(
+            f"{self.base_url}/reports/sales",
+            params={"warehouse_id": warehouse_id, "counterparty_id": customer_id, "product_id": product_id, "cash_shift_id": shift_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(filtered_sales.status_code, 200)
+        self.assertEqual(filtered_sales.json()["data"]["document_count"], 1)
+        self.assertEqual(filtered_sales.json()["data"]["rows"][0]["warehouse_id"], warehouse_id)
+
+        stock_report = requests.get(
+            f"{self.base_url}/reports/stock",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(stock_report.status_code, 200)
+        self.assertEqual(stock_report.json()["data"][0]["quantity"], "3.000")
+
+        purchases_report = requests.get(
+            f"{self.base_url}/reports/purchases",
+            params={"warehouse_id": warehouse_id, "counterparty_id": supplier_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(purchases_report.status_code, 200)
+        self.assertEqual(purchases_report.json()["data"]["purchase_total_tmt"], "50.00")
+        self.assertEqual(purchases_report.json()["data"]["net_purchase_tmt"], "50.00")
+        self.assertEqual(len(purchases_report.json()["data"]["rows"]), 1)
+
+        profit_loss = requests.get(
+            f"{self.base_url}/reports/profit-loss",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(profit_loss.status_code, 200)
+        self.assertEqual(profit_loss.json()["data"]["net_revenue_tmt"], "30.00")
+        self.assertEqual(profit_loss.json()["data"]["net_cogs_tmt"], "20.00")
+        self.assertEqual(profit_loss.json()["data"]["gross_profit_tmt"], "10.00")
+
+        exported_sales = requests.get(
+            f"{self.base_url}/reports/sales/export",
+            params={"warehouse_id": warehouse_id, "product_id": product_id},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(exported_sales.status_code, 200)
+        self.assertEqual(exported_sales.json()["data"]["report_code"], "sales")
+        self.assertEqual(exported_sales.json()["data"]["row_count"], 1)
+        self.assertTrue(exported_sales.json()["data"]["xlsx_base64"].startswith("UEs"))
+
+        saved_filter = requests.post(
+            f"{self.base_url}/report-filters",
+            json={
+                "report_code": "sales",
+                "name": "Sale warehouse product",
+                "filters": {"warehouse_id": warehouse_id, "product_id": product_id},
+                "is_shared": True,
+            },
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(saved_filter.status_code, 201)
+        filter_id = saved_filter.json()["data"]["id"]
+        self.assertEqual(saved_filter.json()["data"]["filters"]["product_id"], product_id)
+
+        listed_filters = requests.get(f"{self.base_url}/report-filters", params={"report_code": "sales"}, headers=headers, timeout=2)
+        self.assertEqual(listed_filters.status_code, 200)
+        self.assertTrue(any(row["id"] == filter_id for row in listed_filters.json()["data"]))
+
+        patched_filter = requests.patch(
+            f"{self.base_url}/report-filters/{filter_id}",
+            json={"name": "Sale product export"},
+            headers=headers,
+            timeout=2,
+        )
+        self.assertEqual(patched_filter.status_code, 200)
+        self.assertEqual(patched_filter.json()["data"]["name"], "Sale product export")
+
+        deleted_filter = requests.delete(f"{self.base_url}/report-filters/{filter_id}", headers=headers, timeout=2)
+        self.assertEqual(deleted_filter.status_code, 200)
+        self.assertTrue(deleted_filter.json()["data"]["deleted"])
 
         debts_report = requests.get(f"{self.base_url}/reports/debts", headers=headers, timeout=2)
         self.assertEqual(debts_report.status_code, 200)

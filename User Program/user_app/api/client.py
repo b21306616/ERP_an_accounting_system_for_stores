@@ -596,35 +596,65 @@ class ApiClient:
 
         return dict(self._request("POST", f"/sale-returns/{sale_return_id}/cancel"))
 
-    def get_dashboard_report(self) -> dict[str, Any]:
+    def get_dashboard_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return dashboard report totals."""
 
-        return dict(self._request("GET", "/reports/dashboard"))
+        return dict(self._request("GET", self._path_with_params("/reports/dashboard", filters or {})))
 
-    def get_stock_report(self) -> list[dict[str, Any]]:
+    def get_stock_report(self, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         """Return stock report rows."""
 
-        return list(self._request("GET", "/reports/stock"))
+        return list(self._request("GET", self._path_with_params("/reports/stock", filters or {})))
 
-    def get_sales_report(self) -> dict[str, Any]:
-        """Return sales report totals."""
+    def get_sales_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return sales report totals and rows."""
 
-        return dict(self._request("GET", "/reports/sales"))
+        return dict(self._request("GET", self._path_with_params("/reports/sales", filters or {})))
 
-    def get_purchases_report(self) -> dict[str, Any]:
-        """Return purchases report totals."""
+    def get_purchases_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return purchases report totals and rows."""
 
-        return dict(self._request("GET", "/reports/purchases"))
+        return dict(self._request("GET", self._path_with_params("/reports/purchases", filters or {})))
 
-    def get_debts_report(self) -> dict[str, Any]:
-        """Return debt report totals."""
+    def get_debts_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return debt report totals and rows."""
 
-        return dict(self._request("GET", "/reports/debts"))
+        return dict(self._request("GET", self._path_with_params("/reports/debts", filters or {})))
 
-    def get_cash_flow_report(self) -> dict[str, Any]:
-        """Return cash-flow report totals."""
+    def get_cash_flow_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return cash-flow report totals and rows."""
 
-        return dict(self._request("GET", "/reports/cash-flow"))
+        return dict(self._request("GET", self._path_with_params("/reports/cash-flow", filters or {})))
+
+    def get_profit_loss_report(self, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Return profit/loss report totals and rows."""
+
+        return dict(self._request("GET", self._path_with_params("/reports/profit-loss", filters or {})))
+
+    def export_report(self, report_code: str, filters: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Export a report as rows and base64 XLSX data."""
+
+        return dict(self._request("GET", self._path_with_params(f"/reports/{report_code}/export", filters or {})))
+
+    def get_report_filters(self, report_code: str | None = None) -> list[dict[str, Any]]:
+        """Return saved report filter presets."""
+
+        return list(self._request("GET", self._path_with_params("/report-filters", {"report_code": report_code})))
+
+    def create_report_filter(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a saved report filter preset."""
+
+        return dict(self._request("POST", "/report-filters", json=payload))
+
+    def update_report_filter(self, filter_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a saved report filter preset."""
+
+        return dict(self._request("PATCH", f"/report-filters/{filter_id}", json=payload))
+
+    def delete_report_filter(self, filter_id: int) -> dict[str, Any]:
+        """Delete a saved report filter preset."""
+
+        return dict(self._request("DELETE", f"/report-filters/{filter_id}"))
 
     def _path_with_params(self, path: str, params: dict[str, Any]) -> str:
         """Append URL query parameters, skipping empty values."""

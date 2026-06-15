@@ -99,6 +99,7 @@ class User(Base, ReprMixin, TimestampMixin):
     workplace: Mapped[Workplace | None] = relationship(back_populates="users")
     audit_logs: Mapped[list["AuditLog"]] = relationship(back_populates="user")
     sessions: Mapped[list["UserSession"]] = relationship(back_populates="user")
+    report_filters: Mapped[list["ReportFilter"]] = relationship(back_populates="created_by_user")
 
 
 class UserSession(Base, ReprMixin, TimestampMixin):
@@ -151,6 +152,22 @@ class Setting(Base, ReprMixin, TimestampMixin):
     key: Mapped[str] = mapped_column(String(120), unique=True, nullable=False, index=True)
     value_json: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class ReportFilter(Base, ReprMixin, TimestampMixin):
+    """Saved report filter preset visible to the owner or shared with all users."""
+
+    __tablename__ = "report_filters"
+    __table_args__ = (UniqueConstraint("report_code", "name", "created_by_user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    filters_json: Mapped[str] = mapped_column(Text, default="{}", nullable=False)
+    is_shared: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+
+    created_by_user: Mapped[User | None] = relationship(back_populates="report_filters")
 
 
 class Currency(Base, ReprMixin, TimestampMixin):

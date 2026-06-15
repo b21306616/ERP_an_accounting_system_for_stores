@@ -599,12 +599,63 @@ class MainWindow(QWidget):
         """Build reports summary page."""
 
         page, layout, _title = self._page("reports.title")
+        self.report_code = QComboBox()
+        for code in ("dashboard", "stock", "sales", "purchases", "debts", "cash-flow", "profit-loss"):
+            self.report_code.addItem(code, code)
+        self.report_date_from = QLineEdit()
+        self.report_date_to = QLineEdit()
+        self.report_warehouse_id = QLineEdit()
+        self.report_counterparty_id = QLineEdit()
+        self.report_product_id = QLineEdit()
+        self.report_cash_register_id = QLineEdit()
+        self.report_cash_shift_id = QLineEdit()
+        self.report_filter_name = QLineEdit()
+        for key, widget in (
+            ("reports.date_from", self.report_date_from),
+            ("reports.date_to", self.report_date_to),
+            ("reports.warehouse_id", self.report_warehouse_id),
+            ("reports.counterparty_id", self.report_counterparty_id),
+            ("reports.product_id", self.report_product_id),
+            ("reports.cash_register_id", self.report_cash_register_id),
+            ("reports.cash_shift_id", self.report_cash_shift_id),
+            ("reports.filter_name", self.report_filter_name),
+        ):
+            widget.setProperty("placeholderKey", key)
+        self.report_debt_type = QComboBox()
+        self.report_debt_type.addItem("", None)
+        self.report_debt_type.addItem("receivable", "receivable")
+        self.report_debt_type.addItem("payable", "payable")
+
+        filters = QFormLayout()
+        filters.addRow(self.translator.text("reports.report_code"), self.report_code)
+        filters.addRow(self.translator.text("reports.date_from"), self.report_date_from)
+        filters.addRow(self.translator.text("reports.date_to"), self.report_date_to)
+        filters.addRow(self.translator.text("reports.warehouse_id"), self.report_warehouse_id)
+        filters.addRow(self.translator.text("reports.counterparty_id"), self.report_counterparty_id)
+        filters.addRow(self.translator.text("reports.product_id"), self.report_product_id)
+        filters.addRow(self.translator.text("reports.cash_register_id"), self.report_cash_register_id)
+        filters.addRow(self.translator.text("reports.cash_shift_id"), self.report_cash_shift_id)
+        filters.addRow(self.translator.text("reports.debt_type"), self.report_debt_type)
+        filters.addRow(self.translator.text("reports.filter_name"), self.report_filter_name)
+
+        actions = QHBoxLayout()
         refresh = QPushButton()
         refresh.setProperty("textKey", "reports.refresh")
         refresh.clicked.connect(self.refresh_reports)
+        export = QPushButton()
+        export.setProperty("textKey", "reports.export")
+        export.clicked.connect(self.export_current_report)
+        save_filter = QPushButton()
+        save_filter.setProperty("textKey", "reports.save_filter")
+        save_filter.clicked.connect(self.save_current_report_filter)
+        for button in (refresh, export, save_filter):
+            actions.addWidget(button)
+        actions.addStretch(1)
+
         self.reports_text = QPlainTextEdit()
         self.reports_text.setReadOnly(True)
-        layout.addWidget(refresh)
+        layout.addLayout(filters)
+        layout.addLayout(actions)
         layout.addWidget(self.reports_text, 1)
         return page
 
@@ -814,19 +865,91 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
+    def _current_report_filters(self) -> dict[str, str]:
+        """Return active report filters from the compact report toolbar."""
+
+        pairs = {
+            "date_from": self.report_date_from.text().strip(),
+            "date_to": self.report_date_to.text().strip(),
+            "warehouse_id": self.report_warehouse_id.text().strip(),
+            "counterparty_id": self.report_counterparty_id.text().strip(),
+            "product_id": self.report_product_id.text().strip(),
+            "cash_register_id": self.report_cash_register_id.text().strip(),
+            "cash_shift_id": self.report_cash_shift_id.text().strip(),
+        }
+        debt_type = self.report_debt_type.currentData()
+        if debt_type:
+            pairs["debt_type"] = str(debt_type)
+        return {key: value for key, value in pairs.items() if value}
+
+    def _selected_report_code(self) -> str:
+        """Return selected report code."""
+
+        return str(self.report_code.currentData() or "dashboard")
+
+    def _fetch_selected_report(self, code: str, filters: dict[str, str]) -> object:
+        """Fetch one report through the matching API helper."""
+
+        if code == "dashboard":
+            return self.api_client.get_dashboard_report(filters)
+        if code == "stock":
+            return self.api_client.get_stock_report(filters)
+        if code == "sales":
+            return self.api_client.get_sales_report(filters)
+        if code == "purchases":
+            return self.api_client.get_purchases_report(filters)
+        if code == "debts":
+            return self.api_client.get_debts_report(filters)
+        if code == "cash-flow":
+            return self.api_client.get_cash_flow_report(filters)
+        return self.api_client.get_profit_loss_report(filters)
+
     def refresh_reports(self) -> None:
-        """Refresh summary reports."""
+        """Refresh the selected filtered report."""
 
         def action() -> None:
-            reports = {
-                "dashboard": self.api_client.get_dashboard_report(),
-                "sales": self.api_client.get_sales_report(),
-                "purchases": self.api_client.get_purchases_report(),
-                "debts": self.api_client.get_debts_report(),
-                "cash_flow": self.api_client.get_cash_flow_report(),
-                "stock": self.api_client.get_stock_report(),
-            }
-            self.reports_text.setPlainText(json.dumps(reports, indent=2, ensure_ascii=False))
+            code = self._selected_report_code()
+            filters = self._current_report_filters()
+            report = self._fetch_selected_report(code, filters)
+            saved_filters = self.api_client.get_report_filters(code)
+            self.reports_text.setPlainText(
+                json.dumps(
+                    {"report_code": code, "filters": filters, "saved_filters": saved_filters, "report": report},
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
+
+        self._run_api(action)
+
+    def export_current_report(self) -> None:
+        """Export the selected report and show the export payload metadata."""
+
+        def action() -> None:
+            code = self._selected_report_code()
+            payload = self.api_client.export_report(code, self._current_report_filters())
+            self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
+
+        self._run_api(action)
+
+    def save_current_report_filter(self) -> None:
+        """Save the current report filters as a server-side preset."""
+
+        name = self.report_filter_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("reports.filter_name"))
+            return
+
+        def action() -> None:
+            payload = self.api_client.create_report_filter(
+                {
+                    "report_code": self._selected_report_code(),
+                    "name": name,
+                    "filters": self._current_report_filters(),
+                    "is_shared": False,
+                }
+            )
+            self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
 
         self._run_api(action)
 

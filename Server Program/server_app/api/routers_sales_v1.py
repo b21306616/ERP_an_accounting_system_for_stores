@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import base64
+import json
 from datetime import datetime, time, timezone
 from decimal import Decimal
+from io import BytesIO
 from typing import Any
+
+from openpyxl import Workbook
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, or_
@@ -26,6 +31,8 @@ from server_app.db.models import (
     Promotion,
     ProductUom,
     PurchaseInvoice,
+    PurchaseInvoiceLine,
+    ReportFilter,
     Sale,
     SaleLine,
     SaleReturn,
@@ -41,6 +48,8 @@ from server_app.schemas.sales_v1 import (
     CashShiftClose,
     CashShiftOpen,
     CashShiftZReportCreate,
+    ReportFilterCreate,
+    ReportFilterUpdate,
     SaleCreate,
     SaleLineCreate,
     SaleReturnCreate,
@@ -79,6 +88,8 @@ require_sale_return_create = require_v1_permission("sale_return.create")
 require_sale_return_post = require_v1_permission("sale_return.post")
 require_sale_return_cancel = require_v1_permission("sale_return.cancel")
 require_reports_view = require_v1_permission("reports.view")
+require_reports_export = require_v1_permission("reports.export")
+require_reports_filters_manage = require_v1_permission("reports.filters_manage")
 
 
 def _decimal(value: Decimal | int | str | None, places: str) -> str:
@@ -1492,180 +1503,420 @@ def _date_range_filter(query, column, date_from: datetime | None, date_to: datet
     return query
 
 
-@router.get("/reports/dashboard")
-def dashboard_report(
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return dashboard totals for the main screen."""
+_REPORT_CODES = {"dashboard", "stock", "sales", "purchases", "debts", "cash-flow", "profit-loss"}
 
-    receivable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "receivable").scalar() or 0
-    payable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "payable").scalar() or 0
-    sales_total = session.query(func.coalesce(func.sum(Sale.total_amount_tmt), 0)).filter(Sale.status == "posted").scalar() or 0
-    returns_total = session.query(func.coalesce(func.sum(SaleReturn.total_amount_tmt), 0)).filter(SaleReturn.status == "posted").scalar() or 0
-    purchase_total = (
-        session.query(func.coalesce(func.sum(PurchaseInvoice.total_amount_tmt), 0))
-        .filter(PurchaseInvoice.status == "posted")
-        .scalar()
-        or 0
+
+def _clean_report_code(report_code: str) -> str:
+    """Normalize and validate a report code from API input."""
+
+    code = report_code.strip().lower().replace("_", "-")
+    if code not in _REPORT_CODES:
+        raise HTTPException(status_code=404, detail=error_detail("REPORT_NOT_FOUND", "Report code is not supported."))
+    return code
+
+
+def _report_filter_payload(row: ReportFilter) -> dict[str, Any]:
+    """Return a saved report-filter payload."""
+
+    try:
+        filters = json.loads(row.filters_json or "{}")
+    except ValueError:
+        filters = {}
+    return {
+        "id": row.id,
+        "report_code": row.report_code,
+        "name": row.name,
+        "filters": filters,
+        "is_shared": row.is_shared,
+        "created_by_user_id": row.created_by_user_id,
+        "created_by_user": row.created_by_user.full_name if row.created_by_user else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _xlsx_base64(sheet_title: str, rows: list[dict[str, Any]]) -> str:
+    """Return a base64 XLSX workbook for report rows."""
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = (sheet_title.replace("-", "_") or "report")[:31]
+    headers: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in headers:
+                headers.append(key)
+    if not headers:
+        headers = ["message"]
+        rows = [{"message": "No rows"}]
+    sheet.append(headers)
+    for row in rows:
+        values: list[Any] = []
+        for header in headers:
+            value = row.get(header)
+            if isinstance(value, Decimal):
+                value = str(value)
+            values.append(value)
+        sheet.append(values)
+    for column in sheet.columns:
+        first_cell = column[0]
+        max_len = max(len(str(cell.value or "")) for cell in column)
+        sheet.column_dimensions[first_cell.column_letter].width = min(max(max_len + 2, 10), 42)
+    stream = BytesIO()
+    workbook.save(stream)
+    return base64.b64encode(stream.getvalue()).decode("ascii")
+
+
+def _summary_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert a summary dict into exportable metric rows."""
+
+    rows: list[dict[str, Any]] = []
+    for key, value in payload.items():
+        if key == "rows":
+            continue
+        rows.append({"metric": key, "value": value})
+    return rows
+
+
+def _stock_report_payload(
+    session: Session,
+    warehouse_id: int | None = None,
+    product_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return current stock balances with optional filters."""
+
+    query = session.query(StockBalance).options(
+        selectinload(StockBalance.warehouse),
+        selectinload(StockBalance.product),
+        selectinload(StockBalance.uom),
     )
-    open_shifts = session.query(func.count(CashShift.id)).filter(CashShift.status == "open").scalar() or 0
-    return success_response(
+    if warehouse_id is not None:
+        query = query.filter(StockBalance.warehouse_id == warehouse_id)
+    if product_id is not None:
+        query = query.filter(StockBalance.product_id == product_id)
+    rows = query.order_by(StockBalance.warehouse_id, StockBalance.product_id).all()
+    return [
         {
-            "sales_total_tmt": _decimal(sales_total, "0.01"),
-            "returns_total_tmt": _decimal(returns_total, "0.01"),
-            "net_sales_tmt": _decimal(money(sales_total) - money(returns_total), "0.01"),
-            "purchase_total_tmt": _decimal(purchase_total, "0.01"),
-            "receivable_tmt": _decimal(receivable, "0.01"),
-            "payable_tmt": _decimal(payable, "0.01"),
-            "open_shift_count": int(open_shifts),
+            "warehouse_id": row.warehouse_id,
+            "warehouse_name": row.warehouse.name if row.warehouse else None,
+            "product_id": row.product_id,
+            "product_sku": row.product.sku if row.product else None,
+            "product_name": row.product.name if row.product else None,
+            "uom_id": row.uom_id,
+            "uom_code": row.uom.code if row.uom else None,
+            "quantity": _decimal(row.quantity, "0.001"),
+            "avg_cost_tmt": _decimal(row.avg_cost_tmt, "0.01"),
+            "stock_value_tmt": _decimal(money(row.quantity * row.avg_cost_tmt), "0.01"),
         }
-    )
+        for row in rows
+    ]
 
 
-@router.get("/reports/stock")
-def stock_report(
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return current stock balances."""
+def _filtered_sales(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
+    cash_register_id: int | None = None,
+    cash_shift_id: int | None = None,
+) -> list[Sale]:
+    """Return posted sale documents matching report filters."""
 
-    rows = (
-        session.query(StockBalance)
-        .options(selectinload(StockBalance.warehouse), selectinload(StockBalance.product), selectinload(StockBalance.uom))
-        .order_by(StockBalance.warehouse_id, StockBalance.product_id)
-        .all()
-    )
-    return success_response(
-        [
-            {
-                "warehouse_id": row.warehouse_id,
-                "warehouse_name": row.warehouse.name if row.warehouse else None,
-                "product_id": row.product_id,
-                "product_sku": row.product.sku if row.product else None,
-                "product_name": row.product.name if row.product else None,
-                "quantity": _decimal(row.quantity, "0.001"),
-                "avg_cost_tmt": _decimal(row.avg_cost_tmt, "0.01"),
-                "stock_value_tmt": _decimal(money(row.quantity * row.avg_cost_tmt), "0.01"),
-            }
-            for row in rows
-        ]
-    )
-
-
-@router.get("/reports/sales")
-def sales_report(
-    date_from: datetime | None = Query(default=None),
-    date_to: datetime | None = Query(default=None),
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return sales totals for a date range."""
-
-    query = session.query(Sale).filter(Sale.status == "posted")
+    query = _sale_query(session).filter(Sale.status == "posted")
     query = _date_range_filter(query, Sale.doc_date, date_from, date_to)
-    rows = query.all()
-    return_query = session.query(SaleReturn).filter(SaleReturn.status == "posted")
-    return_query = _date_range_filter(return_query, SaleReturn.doc_date, date_from, date_to)
-    return_rows = return_query.all()
+    if warehouse_id is not None:
+        query = query.filter(Sale.warehouse_id == warehouse_id)
+    if counterparty_id is not None:
+        query = query.filter(Sale.counterparty_id == counterparty_id)
+    if product_id is not None:
+        query = query.filter(Sale.lines.any(SaleLine.product_id == product_id))
+    if cash_register_id is not None:
+        query = query.filter(Sale.cash_register_id == cash_register_id)
+    if cash_shift_id is not None:
+        query = query.filter(Sale.cash_shift_id == cash_shift_id)
+    return query.order_by(Sale.doc_date, Sale.id).all()
+
+
+def _filtered_sale_returns(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
+    cash_register_id: int | None = None,
+    cash_shift_id: int | None = None,
+) -> list[SaleReturn]:
+    """Return posted sale-return documents matching report filters."""
+
+    query = _sale_return_query(session).filter(SaleReturn.status == "posted")
+    query = _date_range_filter(query, SaleReturn.doc_date, date_from, date_to)
+    if warehouse_id is not None:
+        query = query.filter(SaleReturn.warehouse_id == warehouse_id)
+    if counterparty_id is not None:
+        query = query.filter(SaleReturn.counterparty_id == counterparty_id)
+    if product_id is not None:
+        query = query.filter(SaleReturn.lines.any(SaleReturnLine.product_id == product_id))
+    if cash_register_id is not None:
+        query = query.filter(SaleReturn.cash_register_id == cash_register_id)
+    if cash_shift_id is not None:
+        query = query.filter(SaleReturn.cash_shift_id == cash_shift_id)
+    return query.order_by(SaleReturn.doc_date, SaleReturn.id).all()
+
+
+def _sale_report_row(row: Sale) -> dict[str, Any]:
+    """Return a compact report row for one sale document."""
+
+    quantity = sum((qty4(line.quantity) for line in row.lines), Decimal("0.0000"))
+    return {
+        "document_type": "sale",
+        "id": row.id,
+        "doc_number": row.doc_number,
+        "doc_date": row.doc_date.isoformat() if row.doc_date else None,
+        "warehouse_id": row.warehouse_id,
+        "warehouse_name": row.warehouse.name if row.warehouse else None,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "cash_register_id": row.cash_register_id,
+        "cash_register_name": row.cash_register.name if row.cash_register else None,
+        "cash_shift_id": row.cash_shift_id,
+        "line_count": len(row.lines),
+        "quantity": _decimal(quantity, "0.0001"),
+        "gross_amount_tmt": _decimal(row.total_amount_tmt, "0.01"),
+        "returns_amount_tmt": "0.00",
+        "signed_amount_tmt": _decimal(row.total_amount_tmt, "0.01"),
+        "cash_tmt": _decimal(row.paid_cash_tmt, "0.01"),
+        "transfer_tmt": _decimal(row.paid_transfer_tmt, "0.01"),
+        "bonus_tmt": _decimal(row.paid_bonus_tmt, "0.01"),
+        "debt_tmt": _decimal(row.debt_amount_tmt, "0.01"),
+        "status": row.status,
+    }
+
+
+def _sale_return_report_row(row: SaleReturn) -> dict[str, Any]:
+    """Return a compact report row for one sale-return document."""
+
+    quantity = sum((qty4(line.quantity) for line in row.lines), Decimal("0.0000"))
+    amount = money(row.total_amount_tmt)
+    return {
+        "document_type": "sale_return",
+        "id": row.id,
+        "doc_number": row.doc_number,
+        "doc_date": row.doc_date.isoformat() if row.doc_date else None,
+        "source_sale_id": row.sale_id,
+        "warehouse_id": row.warehouse_id,
+        "warehouse_name": row.warehouse.name if row.warehouse else None,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "cash_register_id": row.cash_register_id,
+        "cash_register_name": row.cash_register.name if row.cash_register else None,
+        "cash_shift_id": row.cash_shift_id,
+        "line_count": len(row.lines),
+        "quantity": _decimal(quantity, "0.0001"),
+        "gross_amount_tmt": "0.00",
+        "returns_amount_tmt": _decimal(amount, "0.01"),
+        "signed_amount_tmt": _decimal(-amount, "0.01"),
+        "cash_tmt": _decimal(-money(row.refund_cash_tmt), "0.01"),
+        "transfer_tmt": _decimal(-money(row.refund_transfer_tmt), "0.01"),
+        "bonus_tmt": _decimal(-money(row.refund_bonus_tmt), "0.01"),
+        "debt_tmt": _decimal(-money(row.receivable_correction_tmt), "0.01"),
+        "status": row.status,
+    }
+
+
+def _sales_report_payload(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
+    cash_register_id: int | None = None,
+    cash_shift_id: int | None = None,
+) -> dict[str, Any]:
+    """Return sales totals, return totals, and document rows."""
+
+    rows = _filtered_sales(session, date_from, date_to, warehouse_id, counterparty_id, product_id, cash_register_id, cash_shift_id)
+    return_rows = _filtered_sale_returns(session, date_from, date_to, warehouse_id, counterparty_id, product_id, cash_register_id, cash_shift_id)
     sales_total = sum((money(row.total_amount_tmt) for row in rows), Decimal("0.00"))
     returns_total = sum((money(row.total_amount_tmt) for row in return_rows), Decimal("0.00"))
-    return success_response(
-        {
-            "document_count": len(rows),
-            "sales_total_tmt": _decimal(sales_total, "0.01"),
-            "returns_count": len(return_rows),
-            "returns_amount_tmt": _decimal(returns_total, "0.01"),
-            "net_amount_tmt": _decimal(sales_total - returns_total, "0.01"),
-            "cash_tmt": _decimal(sum((money(row.paid_cash_tmt) for row in rows), Decimal("0.00")), "0.01"),
-            "transfer_tmt": _decimal(sum((money(row.paid_transfer_tmt) for row in rows), Decimal("0.00")), "0.01"),
-            "bonus_tmt": _decimal(sum((money(row.paid_bonus_tmt) for row in rows), Decimal("0.00")), "0.01"),
-            "debt_tmt": _decimal(sum((money(row.debt_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
-            "return_cash_tmt": _decimal(sum((money(row.refund_cash_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
-            "return_transfer_tmt": _decimal(sum((money(row.refund_transfer_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
-            "return_bonus_tmt": _decimal(sum((money(row.refund_bonus_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
-            "return_debt_correction_tmt": _decimal(sum((money(row.receivable_correction_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
-        }
-    )
+    report_rows = [_sale_report_row(row) for row in rows] + [_sale_return_report_row(row) for row in return_rows]
+    report_rows.sort(key=lambda item: (str(item.get("doc_date") or ""), str(item.get("document_type") or ""), int(item.get("id") or 0)))
+    return {
+        "document_count": len(rows),
+        "sales_total_tmt": _decimal(sales_total, "0.01"),
+        "returns_count": len(return_rows),
+        "returns_amount_tmt": _decimal(returns_total, "0.01"),
+        "net_amount_tmt": _decimal(sales_total - returns_total, "0.01"),
+        "cash_tmt": _decimal(sum((money(row.paid_cash_tmt) for row in rows), Decimal("0.00")), "0.01"),
+        "transfer_tmt": _decimal(sum((money(row.paid_transfer_tmt) for row in rows), Decimal("0.00")), "0.01"),
+        "bonus_tmt": _decimal(sum((money(row.paid_bonus_tmt) for row in rows), Decimal("0.00")), "0.01"),
+        "debt_tmt": _decimal(sum((money(row.debt_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
+        "return_cash_tmt": _decimal(sum((money(row.refund_cash_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+        "return_transfer_tmt": _decimal(sum((money(row.refund_transfer_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+        "return_bonus_tmt": _decimal(sum((money(row.refund_bonus_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+        "return_debt_correction_tmt": _decimal(sum((money(row.receivable_correction_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+        "rows": report_rows,
+    }
 
 
-@router.get("/reports/purchases")
-def purchases_report(
-    date_from: datetime | None = Query(default=None),
-    date_to: datetime | None = Query(default=None),
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
-) -> dict[str, Any]:
-    """Return purchase totals for a date range."""
+def _filtered_purchase_invoices(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
+) -> list[PurchaseInvoice]:
+    """Return posted purchase invoices and supplier returns matching filters."""
 
-    query = session.query(PurchaseInvoice).filter(PurchaseInvoice.status == "posted")
+    query = session.query(PurchaseInvoice).options(
+        selectinload(PurchaseInvoice.counterparty),
+        selectinload(PurchaseInvoice.contract),
+        selectinload(PurchaseInvoice.purchase_order),
+        selectinload(PurchaseInvoice.warehouse),
+        selectinload(PurchaseInvoice.currency),
+        selectinload(PurchaseInvoice.lines).selectinload(PurchaseInvoiceLine.product),
+        selectinload(PurchaseInvoice.lines).selectinload(PurchaseInvoiceLine.service),
+        selectinload(PurchaseInvoice.lines).selectinload(PurchaseInvoiceLine.uom),
+    ).filter(PurchaseInvoice.status == "posted")
     if date_from is not None:
         query = query.filter(PurchaseInvoice.doc_date >= date_from.date())
     if date_to is not None:
         query = query.filter(PurchaseInvoice.doc_date <= date_to.date())
-    rows = query.all()
-    return success_response(
-        {
-            "document_count": len(rows),
-            "purchase_total_tmt": _decimal(sum((money(row.total_amount_tmt) for row in rows), Decimal("0.00")), "0.01"),
-            "unpaid_count": sum(1 for row in rows if row.payment_status == "unpaid"),
-            "partial_count": sum(1 for row in rows if row.payment_status == "partial"),
-            "paid_count": sum(1 for row in rows if row.payment_status == "paid"),
-        }
-    )
+    if warehouse_id is not None:
+        query = query.filter(PurchaseInvoice.warehouse_id == warehouse_id)
+    if counterparty_id is not None:
+        query = query.filter(PurchaseInvoice.counterparty_id == counterparty_id)
+    if product_id is not None:
+        query = query.filter(PurchaseInvoice.lines.any(PurchaseInvoiceLine.product_id == product_id))
+    return query.order_by(PurchaseInvoice.doc_date, PurchaseInvoice.id).all()
 
 
-@router.get("/reports/debts")
-def debts_report(
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
+def _purchase_report_row(row: PurchaseInvoice) -> dict[str, Any]:
+    """Return a compact report row for one purchase invoice."""
+
+    quantity = sum((qty4(line.quantity) for line in row.lines), Decimal("0.0000"))
+    amount = money(row.total_amount_tmt)
+    sign = Decimal("-1") if row.is_return else Decimal("1")
+    return {
+        "document_type": "purchase_return" if row.is_return else "purchase_invoice",
+        "id": row.id,
+        "doc_number": row.doc_number,
+        "doc_date": row.doc_date.isoformat() if row.doc_date else None,
+        "counterparty_id": row.counterparty_id,
+        "counterparty_name": row.counterparty.name if row.counterparty else None,
+        "contract_id": row.contract_id,
+        "contract_number": row.contract.number if row.contract else None,
+        "warehouse_id": row.warehouse_id,
+        "warehouse_name": row.warehouse.name if row.warehouse else None,
+        "purchase_order_id": row.purchase_order_id,
+        "line_count": len(row.lines),
+        "quantity": _decimal(quantity, "0.0001"),
+        "gross_amount_tmt": _decimal(amount, "0.01"),
+        "signed_amount_tmt": _decimal(sign * amount, "0.01"),
+        "payment_status": row.payment_status,
+        "status": row.status,
+    }
+
+
+def _purchases_report_payload(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
 ) -> dict[str, Any]:
-    """Return current receivable/payable balances."""
+    """Return purchase totals and rows."""
 
-    counterparties = session.query(Counterparty).order_by(Counterparty.name).all()
+    rows = _filtered_purchase_invoices(session, date_from, date_to, warehouse_id, counterparty_id, product_id)
+    purchases = [row for row in rows if not row.is_return]
+    returns = [row for row in rows if row.is_return]
+    purchase_total = sum((money(row.total_amount_tmt) for row in purchases), Decimal("0.00"))
+    return_total = sum((money(row.total_amount_tmt) for row in returns), Decimal("0.00"))
+    return {
+        "document_count": len(purchases),
+        "purchase_total_tmt": _decimal(purchase_total, "0.01"),
+        "return_count": len(returns),
+        "return_total_tmt": _decimal(return_total, "0.01"),
+        "net_purchase_tmt": _decimal(purchase_total - return_total, "0.01"),
+        "unpaid_count": sum(1 for row in purchases if row.payment_status == "unpaid"),
+        "partial_count": sum(1 for row in purchases if row.payment_status == "partial"),
+        "paid_count": sum(1 for row in purchases if row.payment_status == "paid"),
+        "rows": [_purchase_report_row(row) for row in rows],
+    }
+
+
+def _debts_report_payload(
+    session: Session,
+    counterparty_id: int | None = None,
+    debt_type: str | None = None,
+) -> dict[str, Any]:
+    """Return current receivable/payable balances with optional filters."""
+
+    query = session.query(Counterparty)
+    if counterparty_id is not None:
+        query = query.filter(Counterparty.id == counterparty_id)
+    counterparties = query.order_by(Counterparty.name).all()
     rows = []
     total_receivable = Decimal("0.00")
     total_payable = Decimal("0.00")
     for counterparty in counterparties:
         receivable = current_debt_balance(session, counterparty.id, "receivable")
         payable = current_debt_balance(session, counterparty.id, "payable")
-        if receivable == Decimal("0.00") and payable == Decimal("0.00"):
+        if debt_type == "receivable" and receivable == Decimal("0.00"):
+            continue
+        if debt_type == "payable" and payable == Decimal("0.00"):
+            continue
+        if debt_type is None and receivable == Decimal("0.00") and payable == Decimal("0.00"):
             continue
         total_receivable += receivable
         total_payable += payable
         rows.append(
             {
                 "counterparty_id": counterparty.id,
+                "counterparty_code": counterparty.code,
                 "counterparty_name": counterparty.name,
                 "receivable_tmt": _decimal(receivable, "0.01"),
                 "payable_tmt": _decimal(payable, "0.01"),
             }
         )
-    return success_response(
-        {
-            "total_receivable_tmt": _decimal(total_receivable, "0.01"),
-            "total_payable_tmt": _decimal(total_payable, "0.01"),
-            "rows": rows,
-        }
-    )
+    return {
+        "total_receivable_tmt": _decimal(total_receivable, "0.01"),
+        "total_payable_tmt": _decimal(total_payable, "0.01"),
+        "rows": rows,
+    }
 
 
-@router.get("/reports/cash-flow")
-def cash_flow_report(
-    date_from: datetime | None = Query(default=None),
-    date_to: datetime | None = Query(default=None),
-    _: User = Depends(require_reports_view),
-    session: Session = Depends(get_db),
+def _cash_flow_report_payload(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    cash_shift_id: int | None = None,
+    cash_register_id: int | None = None,
 ) -> dict[str, Any]:
-    """Return simple cash-flow totals."""
+    """Return cash-flow totals and metric rows."""
 
     sales_query = _date_range_filter(session.query(Sale).filter(Sale.status == "posted"), Sale.doc_date, date_from, date_to)
-    sales = sales_query.all()
     payment_query = _date_range_filter(session.query(Payment).filter(Payment.status == "posted"), Payment.doc_date, date_from, date_to)
-    payments = payment_query.all()
     operation_query = _date_range_filter(session.query(CashOperation), CashOperation.doc_date, date_from, date_to)
-    operations = operation_query.all()
     return_query = _date_range_filter(session.query(SaleReturn).filter(SaleReturn.status == "posted"), SaleReturn.doc_date, date_from, date_to)
+    if cash_shift_id is not None:
+        sales_query = sales_query.filter(Sale.cash_shift_id == cash_shift_id)
+        payment_query = payment_query.filter(Payment.cash_shift_id == cash_shift_id)
+        operation_query = operation_query.filter(CashOperation.cash_shift_id == cash_shift_id)
+        return_query = return_query.filter(SaleReturn.cash_shift_id == cash_shift_id)
+    if cash_register_id is not None:
+        sales_query = sales_query.filter(Sale.cash_register_id == cash_register_id)
+        payment_query = payment_query.filter(Payment.cash_shift.has(CashShift.cash_register_id == cash_register_id))
+        operation_query = operation_query.filter(or_(CashOperation.cash_register_from_id == cash_register_id, CashOperation.cash_register_to_id == cash_register_id))
+        return_query = return_query.filter(SaleReturn.cash_register_id == cash_register_id)
+    sales = sales_query.all()
+    payments = payment_query.all()
+    operations = operation_query.all()
     sale_returns = return_query.all()
 
     sale_cash = sum((money(row.paid_cash_tmt) for row in sales), Decimal("0.00"))
@@ -1675,15 +1926,380 @@ def cash_flow_report(
     collections = sum((money(row.amount_tmt) for row in operations if row.operation_type == "collection"), Decimal("0.00"))
     return_cash = sum((money(row.refund_cash_tmt) for row in sale_returns), Decimal("0.00"))
     return_transfer = sum((money(row.refund_transfer_tmt) for row in sale_returns), Decimal("0.00"))
+    rows = [
+        {"flow_type": "sale_cash", "amount_tmt": _decimal(sale_cash, "0.01")},
+        {"flow_type": "sale_transfer", "amount_tmt": _decimal(sale_transfer, "0.01")},
+        {"flow_type": "return_cash", "amount_tmt": _decimal(-return_cash, "0.01")},
+        {"flow_type": "return_transfer", "amount_tmt": _decimal(-return_transfer, "0.01")},
+        {"flow_type": "incoming_payments", "amount_tmt": _decimal(incoming_payments, "0.01")},
+        {"flow_type": "outgoing_payments", "amount_tmt": _decimal(-outgoing_payments, "0.01")},
+        {"flow_type": "collections", "amount_tmt": _decimal(-collections, "0.01")},
+    ]
+    net_cash_flow = sale_cash + sale_transfer + incoming_payments - outgoing_payments - collections - return_cash - return_transfer
+    return {
+        "sale_cash_tmt": _decimal(sale_cash, "0.01"),
+        "sale_transfer_tmt": _decimal(sale_transfer, "0.01"),
+        "return_cash_tmt": _decimal(return_cash, "0.01"),
+        "return_transfer_tmt": _decimal(return_transfer, "0.01"),
+        "incoming_payments_tmt": _decimal(incoming_payments, "0.01"),
+        "outgoing_payments_tmt": _decimal(outgoing_payments, "0.01"),
+        "collections_tmt": _decimal(collections, "0.01"),
+        "net_cash_flow_tmt": _decimal(net_cash_flow, "0.01"),
+        "rows": rows,
+    }
+
+
+def _line_profit(lines: list[Any], product_id: int | None = None) -> tuple[Decimal, Decimal]:
+    """Return revenue and COGS for sale-like lines."""
+
+    revenue = Decimal("0.00")
+    cogs = Decimal("0.00")
+    for line in lines:
+        if product_id is not None and line.product_id != product_id:
+            continue
+        revenue += money(line.amount_tmt)
+        if line.product_id is not None:
+            cogs += money(qty4(line.quantity) * price(line.avg_cost_tmt))
+    return revenue, cogs
+
+
+def _profit_loss_report_payload(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    product_id: int | None = None,
+) -> dict[str, Any]:
+    """Return P&L gross profit based on posted sales and sale returns."""
+
+    sales = _filtered_sales(session, date_from, date_to, warehouse_id, None, product_id)
+    sale_returns = _filtered_sale_returns(session, date_from, date_to, warehouse_id, None, product_id)
+    sales_revenue = Decimal("0.00")
+    sales_cogs = Decimal("0.00")
+    return_revenue = Decimal("0.00")
+    return_cogs = Decimal("0.00")
+    rows: list[dict[str, Any]] = []
+    for sale in sales:
+        revenue, cogs = _line_profit(sale.lines, product_id)
+        sales_revenue += revenue
+        sales_cogs += cogs
+        rows.append(
+            {
+                "document_type": "sale",
+                "id": sale.id,
+                "doc_number": sale.doc_number,
+                "doc_date": sale.doc_date.isoformat() if sale.doc_date else None,
+                "warehouse_id": sale.warehouse_id,
+                "revenue_tmt": _decimal(revenue, "0.01"),
+                "cogs_tmt": _decimal(cogs, "0.01"),
+                "gross_profit_tmt": _decimal(revenue - cogs, "0.01"),
+            }
+        )
+    for sale_return in sale_returns:
+        revenue, cogs = _line_profit(sale_return.lines, product_id)
+        return_revenue += revenue
+        return_cogs += cogs
+        rows.append(
+            {
+                "document_type": "sale_return",
+                "id": sale_return.id,
+                "doc_number": sale_return.doc_number,
+                "doc_date": sale_return.doc_date.isoformat() if sale_return.doc_date else None,
+                "warehouse_id": sale_return.warehouse_id,
+                "revenue_tmt": _decimal(-revenue, "0.01"),
+                "cogs_tmt": _decimal(-cogs, "0.01"),
+                "gross_profit_tmt": _decimal(-(revenue - cogs), "0.01"),
+            }
+        )
+    net_revenue = sales_revenue - return_revenue
+    net_cogs = sales_cogs - return_cogs
+    return {
+        "sales_revenue_tmt": _decimal(sales_revenue, "0.01"),
+        "return_revenue_tmt": _decimal(return_revenue, "0.01"),
+        "net_revenue_tmt": _decimal(net_revenue, "0.01"),
+        "sales_cogs_tmt": _decimal(sales_cogs, "0.01"),
+        "return_cogs_tmt": _decimal(return_cogs, "0.01"),
+        "net_cogs_tmt": _decimal(net_cogs, "0.01"),
+        "gross_profit_tmt": _decimal(net_revenue - net_cogs, "0.01"),
+        "rows": rows,
+    }
+
+
+def _dashboard_report_payload(
+    session: Session,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+) -> dict[str, Any]:
+    """Return dashboard totals for the main screen."""
+
+    receivable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "receivable").scalar() or 0
+    payable = session.query(func.coalesce(func.sum(DebtLedger.amount_tmt), 0)).filter(DebtLedger.debt_type == "payable").scalar() or 0
+    sales_query = _date_range_filter(session.query(Sale).filter(Sale.status == "posted"), Sale.doc_date, date_from, date_to)
+    returns_query = _date_range_filter(session.query(SaleReturn).filter(SaleReturn.status == "posted"), SaleReturn.doc_date, date_from, date_to)
+    purchase_query = session.query(PurchaseInvoice).filter(PurchaseInvoice.status == "posted", PurchaseInvoice.is_return == False)  # noqa: E712
+    if date_from is not None:
+        purchase_query = purchase_query.filter(PurchaseInvoice.doc_date >= date_from.date())
+    if date_to is not None:
+        purchase_query = purchase_query.filter(PurchaseInvoice.doc_date <= date_to.date())
+    sales_total = sales_query.with_entities(func.coalesce(func.sum(Sale.total_amount_tmt), 0)).scalar() or 0
+    returns_total = returns_query.with_entities(func.coalesce(func.sum(SaleReturn.total_amount_tmt), 0)).scalar() or 0
+    purchase_total = purchase_query.with_entities(func.coalesce(func.sum(PurchaseInvoice.total_amount_tmt), 0)).scalar() or 0
+    open_shifts = session.query(func.count(CashShift.id)).filter(CashShift.status == "open").scalar() or 0
+    return {
+        "sales_total_tmt": _decimal(sales_total, "0.01"),
+        "returns_total_tmt": _decimal(returns_total, "0.01"),
+        "net_sales_tmt": _decimal(money(sales_total) - money(returns_total), "0.01"),
+        "purchase_total_tmt": _decimal(purchase_total, "0.01"),
+        "receivable_tmt": _decimal(receivable, "0.01"),
+        "payable_tmt": _decimal(payable, "0.01"),
+        "open_shift_count": int(open_shifts),
+    }
+
+
+def _report_payload_by_code(
+    session: Session,
+    report_code: str,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
+    warehouse_id: int | None = None,
+    counterparty_id: int | None = None,
+    product_id: int | None = None,
+    cash_register_id: int | None = None,
+    cash_shift_id: int | None = None,
+    debt_type: str | None = None,
+) -> Any:
+    """Build one report payload by normalized report code."""
+
+    code = _clean_report_code(report_code)
+    if code == "dashboard":
+        return _dashboard_report_payload(session, date_from, date_to)
+    if code == "stock":
+        return _stock_report_payload(session, warehouse_id, product_id)
+    if code == "sales":
+        return _sales_report_payload(session, date_from, date_to, warehouse_id, counterparty_id, product_id, cash_register_id, cash_shift_id)
+    if code == "purchases":
+        return _purchases_report_payload(session, date_from, date_to, warehouse_id, counterparty_id, product_id)
+    if code == "debts":
+        return _debts_report_payload(session, counterparty_id, debt_type)
+    if code == "cash-flow":
+        return _cash_flow_report_payload(session, date_from, date_to, cash_shift_id, cash_register_id)
+    return _profit_loss_report_payload(session, date_from, date_to, warehouse_id, product_id)
+
+
+def _export_rows(report_code: str, payload: Any) -> list[dict[str, Any]]:
+    """Extract a report table suitable for XLSX export."""
+
+    if isinstance(payload, list):
+        return payload
+    if not isinstance(payload, dict):
+        return [{"value": payload}]
+    if "rows" in payload and isinstance(payload["rows"], list):
+        return list(payload["rows"])
+    return _summary_rows(payload)
+
+
+@router.get("/report-filters")
+def list_report_filters(
+    report_code: str | None = Query(default=None),
+    current_user: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List saved report filters owned by the user or shared globally."""
+
+    query = session.query(ReportFilter).options(selectinload(ReportFilter.created_by_user)).filter(
+        or_(ReportFilter.is_shared == True, ReportFilter.created_by_user_id == current_user.id)  # noqa: E712
+    )
+    if report_code is not None:
+        query = query.filter(ReportFilter.report_code == _clean_report_code(report_code))
+    rows = query.order_by(ReportFilter.report_code, ReportFilter.name).all()
+    return success_response([_report_filter_payload(row) for row in rows])
+
+
+@router.post("/report-filters", status_code=status.HTTP_201_CREATED)
+def create_report_filter(
+    payload: ReportFilterCreate,
+    current_user: User = Depends(require_reports_filters_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a saved report filter preset."""
+
+    report_code = _clean_report_code(payload.report_code)
+    existing = (
+        session.query(ReportFilter)
+        .filter(ReportFilter.report_code == report_code, ReportFilter.name == payload.name, ReportFilter.created_by_user_id == current_user.id)
+        .one_or_none()
+    )
+    if existing is not None:
+        raise HTTPException(status_code=400, detail=error_detail("DUPLICATE_REPORT_FILTER", "A report filter with this name already exists."))
+    row = ReportFilter(
+        report_code=report_code,
+        name=payload.name,
+        filters_json=json.dumps(payload.filters, ensure_ascii=False, sort_keys=True, default=str),
+        is_shared=payload.is_shared,
+        created_by_user_id=current_user.id,
+    )
+    session.add(row)
+    session.commit()
+    return success_response(_report_filter_payload(row))
+
+
+@router.patch("/report-filters/{filter_id}")
+def update_report_filter(
+    filter_id: int,
+    payload: ReportFilterUpdate,
+    _: User = Depends(require_reports_filters_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch a saved report filter preset."""
+
+    row = _get_or_404(session, ReportFilter, filter_id, "Report filter")
+    if payload.name is not None:
+        row.name = payload.name
+    if payload.filters is not None:
+        row.filters_json = json.dumps(payload.filters, ensure_ascii=False, sort_keys=True, default=str)
+    if payload.is_shared is not None:
+        row.is_shared = payload.is_shared
+    session.commit()
+    return success_response(_report_filter_payload(row))
+
+
+@router.delete("/report-filters/{filter_id}")
+def delete_report_filter(
+    filter_id: int,
+    _: User = Depends(require_reports_filters_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Delete a saved report filter preset."""
+
+    row = _get_or_404(session, ReportFilter, filter_id, "Report filter")
+    session.delete(row)
+    session.commit()
+    return success_response({"deleted": True, "id": filter_id})
+
+
+@router.get("/reports/dashboard")
+def dashboard_report(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return dashboard totals for the main screen."""
+
+    return success_response(_dashboard_report_payload(session, date_from, date_to))
+
+
+@router.get("/reports/stock")
+def stock_report(
+    warehouse_id: int | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return current stock balances."""
+
+    return success_response(_stock_report_payload(session, warehouse_id, product_id))
+
+
+@router.get("/reports/sales")
+def sales_report(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    warehouse_id: int | None = Query(default=None),
+    counterparty_id: int | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+    cash_register_id: int | None = Query(default=None),
+    cash_shift_id: int | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return sales totals for a date range and optional business filters."""
+
+    return success_response(_sales_report_payload(session, date_from, date_to, warehouse_id, counterparty_id, product_id, cash_register_id, cash_shift_id))
+
+
+@router.get("/reports/purchases")
+def purchases_report(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    warehouse_id: int | None = Query(default=None),
+    counterparty_id: int | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return purchase totals for a date range and optional business filters."""
+
+    return success_response(_purchases_report_payload(session, date_from, date_to, warehouse_id, counterparty_id, product_id))
+
+
+@router.get("/reports/debts")
+def debts_report(
+    counterparty_id: int | None = Query(default=None),
+    debt_type: str | None = Query(default=None, pattern="^(receivable|payable)$"),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return current receivable/payable balances."""
+
+    return success_response(_debts_report_payload(session, counterparty_id, debt_type))
+
+
+@router.get("/reports/cash-flow")
+def cash_flow_report(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    cash_shift_id: int | None = Query(default=None),
+    cash_register_id: int | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return simple cash-flow totals."""
+
+    return success_response(_cash_flow_report_payload(session, date_from, date_to, cash_shift_id, cash_register_id))
+
+
+@router.get("/reports/profit-loss")
+def profit_loss_report(
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    warehouse_id: int | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+    _: User = Depends(require_reports_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return gross-profit totals from sales and sale returns."""
+
+    return success_response(_profit_loss_report_payload(session, date_from, date_to, warehouse_id, product_id))
+
+
+@router.get("/reports/{report_code}/export")
+def export_report(
+    report_code: str,
+    date_from: datetime | None = Query(default=None),
+    date_to: datetime | None = Query(default=None),
+    warehouse_id: int | None = Query(default=None),
+    counterparty_id: int | None = Query(default=None),
+    product_id: int | None = Query(default=None),
+    cash_register_id: int | None = Query(default=None),
+    cash_shift_id: int | None = Query(default=None),
+    debt_type: str | None = Query(default=None, pattern="^(receivable|payable)$"),
+    _: User = Depends(require_reports_export),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Export a report table as rows and a base64 XLSX workbook."""
+
+    code = _clean_report_code(report_code)
+    report = _report_payload_by_code(session, code, date_from, date_to, warehouse_id, counterparty_id, product_id, cash_register_id, cash_shift_id, debt_type)
+    rows = _export_rows(code, report)
+    filename = f"{code.replace('-', '_')}_{now_utc().strftime('%Y%m%d_%H%M%S')}.xlsx"
     return success_response(
         {
-            "sale_cash_tmt": _decimal(sale_cash, "0.01"),
-            "sale_transfer_tmt": _decimal(sale_transfer, "0.01"),
-            "return_cash_tmt": _decimal(return_cash, "0.01"),
-            "return_transfer_tmt": _decimal(return_transfer, "0.01"),
-            "incoming_payments_tmt": _decimal(incoming_payments, "0.01"),
-            "outgoing_payments_tmt": _decimal(outgoing_payments, "0.01"),
-            "collections_tmt": _decimal(collections, "0.01"),
-            "net_cash_flow_tmt": _decimal(sale_cash + incoming_payments - outgoing_payments - collections - return_cash, "0.01"),
+            "report_code": code,
+            "filename": filename,
+            "row_count": len(rows),
+            "rows": rows,
+            "report": report,
+            "xlsx_base64": _xlsx_base64(code, rows),
         }
     )

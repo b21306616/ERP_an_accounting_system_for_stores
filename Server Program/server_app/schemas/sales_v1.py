@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -34,6 +35,23 @@ class CashShiftZReportCreate(BaseModel):
 
     closing_amount: Decimal | None = Field(default=None, ge=0)
     close_shift: bool = True
+
+
+class ReportFilterCreate(BaseModel):
+    """Create payload for a saved report filter."""
+
+    report_code: str = Field(min_length=1, max_length=50, pattern="^[a-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=120)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    is_shared: bool = False
+
+
+class ReportFilterUpdate(BaseModel):
+    """Patch payload for a saved report filter."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    filters: dict[str, Any] | None = None
+    is_shared: bool | None = None
 
 
 class CashOperationCreate(BaseModel):

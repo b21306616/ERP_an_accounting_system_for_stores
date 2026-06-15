@@ -37,7 +37,7 @@ class MSSQLMigrationSmokeTests(unittest.TestCase):
         try:
             with engine.connect() as connection:
                 result = connection.execute(text("SELECT version_num FROM alembic_version"))
-                self.assertEqual(result.scalar_one(), "0009_counterparty_finance")
+                self.assertEqual(result.scalar_one(), "0010_report_filters")
         finally:
             engine.dispose()
 
