@@ -79,6 +79,19 @@ class ClientCoreTests(unittest.TestCase):
         self.assertEqual(translator.language, "en")
         self.assertEqual(translator.text("common.error"), "Error")
 
+    def test_refreshed_ui_translation_keys_match_all_languages(self) -> None:
+        """New admin UI translation keys should exist for every supported language."""
+
+        prefixes = ("ui.", "field.", "report_code.", "debt_type.", "cashier.error.", "error.")
+        for prefix in prefixes:
+            grouped = {
+                language: {key for key in values if key.startswith(prefix)}
+                for language, values in TRANSLATIONS.items()
+            }
+            expected = set().union(*grouped.values())
+            for language, keys in grouped.items():
+                self.assertEqual(keys, expected, f"{language} is missing {prefix} keys")
+
     def test_translation_key_parity_across_languages(self) -> None:
         """All supported languages should define the same translation keys."""
 
@@ -506,7 +519,7 @@ class ClientCoreTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         api_client = FakeApiClient()
         window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
-        window.report_code.setCurrentText("sales")
+        window.report_code.setCurrentIndex(window.report_code.findData("sales"))
         window.report_warehouse_id.setText("2")
         window.report_product_id.setText("4")
         window.report_filter_name.setText("Warehouse product")

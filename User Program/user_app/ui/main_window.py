@@ -295,7 +295,7 @@ class MainWindow(QWidget):
         layout.addWidget(title)
         return page, layout, title
 
-    def _make_card(self, title: str | None = None) -> tuple[QFrame, QVBoxLayout]:
+    def _make_card(self, title: str | None = None, *, title_key: str | None = None) -> tuple[QFrame, QVBoxLayout]:
         """Create one reusable content card."""
 
         card = QFrame()
@@ -303,9 +303,12 @@ class MainWindow(QWidget):
         card_layout = QVBoxLayout(card)
         card_layout.setContentsMargins(14, 14, 14, 14)
         card_layout.setSpacing(10)
-        if title:
-            label = QLabel(title)
+        label_text = self.translator.text(title_key) if title_key else title
+        if label_text:
+            label = QLabel(label_text)
             label.setObjectName("SectionTitle")
+            if title_key:
+                label.setProperty("titleKey", title_key)
             card_layout.addWidget(label)
         return card, card_layout
 
@@ -317,6 +320,21 @@ class MainWindow(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         return area, layout
+
+    def _ui(self, key: str) -> str:
+        """Return a localized label for the refreshed UI."""
+
+        return self.translator.text(f"ui.{key}")
+
+    def _report_code_text(self, code: str) -> str:
+        """Return a localized display label for one report code."""
+
+        return self.translator.text(f"report_code.{code}")
+
+    def _debt_type_text(self, code: str | None) -> str:
+        """Return a localized display label for one report debt type."""
+
+        return "" if code is None else self.translator.text(f"debt_type.{code}")
 
     def _clear_layout(self, layout: QLayout) -> None:
         """Remove all child widgets/layouts from a layout."""
@@ -380,20 +398,24 @@ class MainWindow(QWidget):
         if value is None or value == "":
             return "-"
         if isinstance(value, bool):
-            return "Yes" if value else "No"
+            return self._ui("yes") if value else self._ui("no")
         if isinstance(value, list):
             if not value:
                 return "-"
             if all(not isinstance(item, (dict, list, tuple)) for item in value):
                 return ", ".join(str(item) for item in value)
-            return f"{len(value)} items"
+            return f"{len(value)} {self._ui('items')}"
         if isinstance(value, dict):
-            return f"{len(value)} fields" if value else "-"
+            return f"{len(value)} {self._ui('fields')}" if value else "-"
         return str(value)
 
     def _humanize_key(self, key: str) -> str:
         """Convert snake-case API keys into compact labels."""
 
+        translation_key = f"field.{key}"
+        translated = self.translator.text(translation_key)
+        if translated != translation_key:
+            return translated
         return key.replace("_", " ").replace("-", " ").strip().title() or key
 
     def _safe_decimal(self, value: object) -> Decimal:
@@ -414,7 +436,7 @@ class MainWindow(QWidget):
 
         self._clear_layout(layout)
         if not metrics:
-            muted = QLabel("No summary")
+            muted = QLabel(self._ui("no_summary"))
             muted.setObjectName("MutedLabel")
             layout.addWidget(muted)
             layout.addStretch(1)
@@ -492,7 +514,7 @@ class MainWindow(QWidget):
             self.translator.text("catalog.title"),
             lambda: self.api_client.get_products(),
             target,
-            [("id", "ID"), ("sku", "SKU"), ("name", "Name"), ("retail_price", "Price")],
+            [("id", "ID"), ("sku", self._ui("sku")), ("name", self._ui("name")), ("retail_price", self._ui("price"))],
             display_target=name_target,
             display_fields=("sku", "name"),
             price_target=price_target,
@@ -500,33 +522,33 @@ class MainWindow(QWidget):
         )
 
     def _select_warehouse_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("warehouse.title"), lambda: self.api_client.get_warehouses(), target, [("id", "ID"), ("code", "Code"), ("name", "Name")])
+        self._select_reference(self.translator.text("warehouse.title"), lambda: self.api_client.get_warehouses(), target, [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))])
 
     def _select_counterparty_id(self, target: QLineEdit) -> None:
         self._select_reference(
             self.translator.text("counterparties.title"),
             lambda: self.api_client.get_counterparties(include_debt=True),
             target,
-            [("id", "ID"), ("code", "Code"), ("name", "Name"), ("counterparty_type", "Type"), ("debt_balance_tmt", "Debt")],
+            [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name")), ("counterparty_type", self._ui("type")), ("debt_balance_tmt", self._ui("debt"))],
         )
 
     def _select_currency_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("pricing.form.currency_id"), lambda: self.api_client.get_currencies(), target, [("id", "ID"), ("code", "Code"), ("name", "Name")])
+        self._select_reference(self.translator.text("pricing.form.currency_id"), lambda: self.api_client.get_currencies(), target, [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))])
 
     def _select_price_list_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("pricing.create_price_list"), lambda: self.api_client.get_price_lists(), target, [("id", "ID"), ("name_ru", "Name"), ("currency_code", "Currency"), ("is_default", "Default")])
+        self._select_reference(self.translator.text("pricing.create_price_list"), lambda: self.api_client.get_price_lists(), target, [("id", "ID"), ("name_ru", self._ui("name")), ("currency_code", self._ui("currency")), ("is_default", self._ui("default"))])
 
     def _select_cash_register_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("cashier.create_register"), lambda: self.api_client.get_cash_registers(), target, [("id", "ID"), ("name", "Name"), ("warehouse_id", "Warehouse"), ("is_active", "Active")])
+        self._select_reference(self.translator.text("cashier.create_register"), lambda: self.api_client.get_cash_registers(), target, [("id", "ID"), ("name", self._ui("name")), ("warehouse_id", self._ui("warehouse")), ("is_active", self._ui("active"))])
 
     def _select_cash_shift_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("cashier.form.shift_id"), lambda: self.api_client.get_cash_shifts(), target, [("id", "ID"), ("cash_register_name", "Register"), ("opened_at", "Opened"), ("status", "Status")])
+        self._select_reference(self.translator.text("cashier.form.shift_id"), lambda: self.api_client.get_cash_shifts(), target, [("id", "ID"), ("cash_register_name", self._ui("register")), ("opened_at", self._ui("opened")), ("status", self._ui("status"))])
 
     def _select_purchase_invoice_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("purchase.create_invoice"), lambda: self.api_client.get_purchase_invoices(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Supplier"), ("total_amount_tmt", "Total"), ("status", "Status")])
+        self._select_reference(self.translator.text("purchase.create_invoice"), lambda: self.api_client.get_purchase_invoices(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("supplier")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
 
     def _select_purchase_order_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("purchase.create_order"), lambda: self.api_client.get_purchase_orders(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Supplier"), ("total_amount_tmt", "Total"), ("status", "Status")])
+        self._select_reference(self.translator.text("purchase.create_order"), lambda: self.api_client.get_purchase_orders(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("supplier")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
 
     def _select_purchase_order_line_id(self, target: QLineEdit, order_id: QLineEdit) -> None:
         """Select a line from the selected purchase order."""
@@ -548,11 +570,11 @@ class MainWindow(QWidget):
             self.translator.text("purchase.form.order_line_id"),
             lambda: lines,
             target,
-            [("id", "ID"), ("product_name", "Product"), ("quantity_ordered", "Qty"), ("amount_tmt", "Amount")],
+            [("id", "ID"), ("product_name", self._ui("product")), ("quantity_ordered", self._ui("quantity_short")), ("amount_tmt", self._ui("amount"))],
         )
 
     def _select_sale_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("sales.create_sale"), lambda: self.api_client.get_sales(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Customer"), ("total_amount_tmt", "Total"), ("status", "Status")])
+        self._select_reference(self.translator.text("sales.create_sale"), lambda: self.api_client.get_sales(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("customer")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
 
     def _select_sale_line_id(self, target: QLineEdit, sale_id: QLineEdit) -> None:
         """Select a line from the selected sale document."""
@@ -574,11 +596,11 @@ class MainWindow(QWidget):
             self.translator.text("sales.form.sale_line_id"),
             lambda: lines,
             target,
-            [("id", "ID"), ("product_name", "Product"), ("quantity", "Qty"), ("amount_tmt", "Amount")],
+            [("id", "ID"), ("product_name", self._ui("product")), ("quantity", self._ui("quantity_short")), ("amount_tmt", self._ui("amount"))],
         )
 
     def _select_role_name(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("roles.title"), lambda: self.api_client.get_roles(), target, [("name", "Role"), ("description", "Description")], id_field="name")
+        self._select_reference(self.translator.text("roles.title"), lambda: self.api_client.get_roles(), target, [("name", self._ui("role")), ("description", self._ui("description"))], id_field="name")
 
     def _build_dashboard_page(self) -> QWidget:
         """Build dashboard page."""
@@ -862,14 +884,15 @@ class MainWindow(QWidget):
         refresh.clicked.connect(self.refresh_roles)
         self.roles_table = QTableWidget(0, 3)
         self._configure_table(self.roles_table)
-        self.roles_table.setHorizontalHeaderLabels(["Role", "Description", "Permissions"])
+        self._set_roles_table_headers()
         self.roles_table.itemSelectionChanged.connect(self._render_selected_role_permissions)
         self.role_permissions_table = QTableWidget(0, 2)
         self._configure_table(self.role_permissions_table)
-        self.role_permissions_table.setHorizontalHeaderLabels(["Module", "Permission"])
+        self._set_role_permissions_table_headers()
         layout.addWidget(refresh)
         layout.addWidget(self.roles_table, 1)
-        permissions_label = QLabel("Permissions")
+        permissions_label = QLabel(self._ui("permissions"))
+        permissions_label.setProperty("titleKey", "ui.permissions")
         permissions_label.setObjectName("SectionTitle")
         layout.addWidget(permissions_label)
         layout.addWidget(self.role_permissions_table, 1)
@@ -1155,7 +1178,8 @@ class MainWindow(QWidget):
         self.cashier_text = QPlainTextEdit()
         self.cashier_text.setReadOnly(True)
         self.cashier_text.hide()
-        self.cashier_report_status = QLabel("Cash-flow snapshot")
+        self.cashier_report_status = QLabel(self._ui("cash_flow_snapshot"))
+        self.cashier_report_status.setProperty("titleKey", "ui.cash_flow_snapshot")
         self.cashier_report_status.setObjectName("SectionTitle")
         self.cashier_report_metrics, self.cashier_report_metrics_layout = self._metric_area()
         self.cashier_report_table = QTableWidget(0, 3)
@@ -1299,7 +1323,7 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("reports.title")
         self.report_code = QComboBox()
         for code in ("dashboard", "stock", "sales", "purchases", "debts", "cash-flow", "profit-loss"):
-            self.report_code.addItem(code, code)
+            self.report_code.addItem(self._report_code_text(code), code)
         self.report_date_from = QLineEdit()
         self.report_date_to = QLineEdit()
         self.report_warehouse_id = QLineEdit()
@@ -1321,8 +1345,8 @@ class MainWindow(QWidget):
             widget.setProperty("placeholderKey", key)
         self.report_debt_type = QComboBox()
         self.report_debt_type.addItem("", None)
-        self.report_debt_type.addItem("receivable", "receivable")
-        self.report_debt_type.addItem("payable", "payable")
+        self.report_debt_type.addItem(self._debt_type_text("receivable"), "receivable")
+        self.report_debt_type.addItem(self._debt_type_text("payable"), "payable")
 
         filters = QFormLayout()
         filters.addRow(self.translator.text("reports.report_code"), self.report_code)
@@ -1353,22 +1377,24 @@ class MainWindow(QWidget):
         self.reports_text = QPlainTextEdit()
         self.reports_text.setReadOnly(True)
         self.reports_text.hide()
-        filter_card, filter_layout = self._make_card("Filters")
+        filter_card, filter_layout = self._make_card(title_key="ui.filters")
         filter_layout.addLayout(filters)
-        self.report_status_label = QLabel("Run a report to view results.")
+        self.report_status_label = QLabel(self._ui("report_ready_prompt"))
+        self.report_status_label.setProperty("bodyKey", "ui.report_ready_prompt")
         self.report_status_label.setObjectName("MutedLabel")
         self.report_metrics, self.report_metrics_layout = self._metric_area()
         self.report_rows_table = QTableWidget(0, 1)
         self._configure_table(self.report_rows_table)
         self.report_saved_filters_table = QTableWidget(0, 4)
         self._configure_table(self.report_saved_filters_table)
-        self.report_saved_filters_table.setHorizontalHeaderLabels(["Name", "Report", "Scope", "Updated"])
+        self._set_report_saved_filters_table_headers()
         layout.addWidget(filter_card)
         layout.addLayout(actions)
         layout.addWidget(self.report_status_label)
         layout.addWidget(self.report_metrics)
         layout.addWidget(self.report_rows_table, 1)
-        saved_label = QLabel("Saved filters")
+        saved_label = QLabel(self._ui("saved_filters"))
+        saved_label.setProperty("titleKey", "ui.saved_filters")
         saved_label.setObjectName("SectionTitle")
         layout.addWidget(saved_label)
         layout.addWidget(self.report_saved_filters_table, 1)
@@ -1420,7 +1446,7 @@ class MainWindow(QWidget):
         self._populate_table(
             self.role_permissions_table,
             rows,
-            [("module", "Module"), ("permission", "Permission")],
+            [("module", self._ui("module")), ("permission", self._ui("permission"))],
         )
 
     def _render_settings_forms(self, settings: dict[str, object]) -> None:
@@ -1429,7 +1455,7 @@ class MainWindow(QWidget):
         self.settings_fields = {}
         self._clear_layout(self.settings_forms_layout)
         if not settings:
-            empty = QLabel("No settings are available.")
+            empty = QLabel(self._ui("no_settings"))
             empty.setObjectName("MutedLabel")
             self.settings_forms_layout.addWidget(empty)
             self.settings_forms_layout.addStretch(1)
@@ -1505,14 +1531,14 @@ class MainWindow(QWidget):
             table,
             rows,
             [
-                ("doc_date", "Date"),
-                ("doc_number", "Document"),
-                ("doc_type", "Type"),
-                ("debt_type", "Debt"),
-                ("debit_tmt", "Debit"),
-                ("credit_tmt", "Credit"),
-                ("running_balance_tmt", "Balance"),
-                ("note", "Note"),
+                ("doc_date", self._ui("date")),
+                ("doc_number", self._ui("document")),
+                ("doc_type", self._ui("type")),
+                ("debt_type", self._ui("debt")),
+                ("debit_tmt", self._ui("debit")),
+                ("credit_tmt", self._ui("credit")),
+                ("running_balance_tmt", self._ui("balance")),
+                ("note", self._ui("note")),
             ],
         )
         balance = rows[0].get("running_balance_tmt") if rows else "0.00"
@@ -1520,27 +1546,27 @@ class MainWindow(QWidget):
             metrics_layout,
             [
                 (title, len(rows)),
-                ("Debit TMT", f"{self._sum_rows(rows, 'debit_tmt')}"),
-                ("Credit TMT", f"{self._sum_rows(rows, 'credit_tmt')}"),
-                ("Current balance", balance),
+                (self._ui("debit_tmt"), f"{self._sum_rows(rows, 'debit_tmt')}"),
+                (self._ui("credit_tmt"), f"{self._sum_rows(rows, 'credit_tmt')}"),
+                (self._ui("current_balance"), balance),
             ],
         )
 
-    def _render_cash_report(self, report: dict[str, object], *, title: str = "Cash-flow snapshot") -> None:
+    def _render_cash_report(self, report: dict[str, object], *, title: str | None = None) -> None:
         """Render cashier cash-flow or shift report data."""
 
-        self.cashier_report_status.setText(title)
+        self.cashier_report_status.setText(title or self._ui("cash_flow_snapshot"))
         metric_keys = [key for key, value in report.items() if key != "rows" and not isinstance(value, (dict, list, tuple))]
         metrics = [(self._humanize_key(key), report.get(key)) for key in metric_keys[:6]]
         self._render_metric_cards(self.cashier_report_metrics_layout, metrics)
         rows = report.get("rows")
         if isinstance(rows, list) and all(isinstance(row, dict) for row in rows):
             typed_rows = [dict(row) for row in rows]
-            columns = self._columns_from_rows(typed_rows, ("metric", "label", "amount_tmt", "value")) or [("message", "Message")]
+            columns = self._columns_from_rows(typed_rows, ("metric", "label", "amount_tmt", "value")) or [("message", self._ui("message"))]
             self._populate_table(self.cashier_report_table, typed_rows, columns)
         else:
             summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
-            self._populate_table(self.cashier_report_table, summary_rows, [("metric", "Metric"), ("value", "Value")])
+            self._populate_table(self.cashier_report_table, summary_rows, [("metric", self._ui("metric")), ("value", self._ui("value"))])
 
     def _render_report_view(
         self,
@@ -1552,23 +1578,23 @@ class MainWindow(QWidget):
     ) -> None:
         """Render report data as metrics, rows, and saved-filter tables."""
 
-        filter_text = ", ".join(f"{self._humanize_key(key)}={value}" for key, value in filters.items()) or "No filters"
-        self.report_status_label.setText(f"{code} report · {filter_text}")
+        filter_text = ", ".join(f"{self._humanize_key(key)}={value}" for key, value in filters.items()) or self._ui("no_filters")
+        self.report_status_label.setText(f"{self._report_code_text(code)} {self._ui('report_suffix')} - {filter_text}")
         self._populate_table(
             self.report_saved_filters_table,
             saved_filters,
             [
-                ("name", "Name"),
-                ("report_code", "Report"),
-                (lambda row: "Shared" if row.get("is_shared") else "Private", "Scope"),
-                ("updated_at", "Updated"),
+                ("name", self._ui("name")),
+                ("report_code", self._ui("report")),
+                (lambda row: self._ui("shared") if row.get("is_shared") else self._ui("private"), self._ui("scope")),
+                ("updated_at", self._ui("updated")),
             ],
         )
 
         if isinstance(report, list):
             rows = [dict(row) for row in report if isinstance(row, dict)]
-            self._render_metric_cards(self.report_metrics_layout, [("Rows", len(rows))])
-            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows) or [("message", "Message")])
+            self._render_metric_cards(self.report_metrics_layout, [(self._ui("rows"), len(rows))])
+            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows) or [("message", self._ui("message"))])
             return
 
         if isinstance(report, dict):
@@ -1577,17 +1603,17 @@ class MainWindow(QWidget):
             rows_payload = report.get("rows")
             rows = [dict(row) for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
             if not metrics:
-                metrics = [("Rows", len(rows))]
+                metrics = [(self._ui("rows"), len(rows))]
             self._render_metric_cards(self.report_metrics_layout, metrics)
             if rows:
                 self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows))
             else:
                 summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
-                self._populate_table(self.report_rows_table, summary_rows, [("metric", "Metric"), ("value", "Value")])
+                self._populate_table(self.report_rows_table, summary_rows, [("metric", self._ui("metric")), ("value", self._ui("value"))])
             return
 
-        self._render_metric_cards(self.report_metrics_layout, [("Result", self._format_value(report))])
-        self._populate_table(self.report_rows_table, [], [("message", "Message")])
+        self._render_metric_cards(self.report_metrics_layout, [(self._ui("result"), self._format_value(report))])
+        self._populate_table(self.report_rows_table, [], [("message", self._ui("message"))])
 
     def _render_report_result(self, payload: dict[str, object], *, title: str) -> None:
         """Render export/save responses without showing JSON."""
@@ -1603,7 +1629,7 @@ class MainWindow(QWidget):
             self._populate_table(
                 self.report_rows_table,
                 [{"field": self._humanize_key(key), "value": payload.get(key)} for key in metric_keys],
-                [("field", "Field"), ("value", "Value")],
+                [("field", self._ui("field")), ("value", self._ui("value"))],
             )
 
     def refresh_dashboard(self) -> None:
@@ -1825,14 +1851,14 @@ class MainWindow(QWidget):
                 self.warehouse_movements_table,
                 movements,
                 [
-                    ("movement_date", "Date"),
-                    ("warehouse_name", "Warehouse"),
-                    ("product_name", "Product"),
-                    ("movement_type", "Type"),
-                    (lambda row: f"{row.get('document_type') or '-'} #{row.get('document_id') or '-'}", "Document"),
-                    ("quantity", "Qty"),
-                    ("unit_cost_tmt", "Unit cost"),
-                    ("amount_tmt", "Amount"),
+                    ("movement_date", self._ui("date")),
+                    ("warehouse_name", self._ui("warehouse")),
+                    ("product_name", self._ui("product")),
+                    ("movement_type", self._ui("type")),
+                    (lambda row: f"{row.get('document_type') or '-'} #{row.get('document_id') or '-'}", self._ui("document")),
+                    ("quantity", self._ui("quantity_short")),
+                    ("unit_cost_tmt", self._ui("unit_cost")),
+                    ("amount_tmt", self._ui("amount")),
                 ],
             )
 
@@ -1896,7 +1922,7 @@ class MainWindow(QWidget):
                     self.purchase_table.setItem(row, col, self._table_item(value))
             ledger = self.api_client.get_debt_ledger(debt_type="payable")
             self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
-            self._render_debt_ledger(ledger, self.purchase_debt_table, self.purchase_debt_metrics_layout, title="Payable entries")
+            self._render_debt_ledger(ledger, self.purchase_debt_table, self.purchase_debt_metrics_layout, title=self._ui("payable_entries"))
 
         self._run_api(action)
 
@@ -1920,7 +1946,7 @@ class MainWindow(QWidget):
                     self.sales_table.setItem(row, col, self._table_item(value))
             ledger = self.api_client.get_debt_ledger(debt_type="receivable")
             self.sales_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
-            self._render_debt_ledger(ledger, self.sales_debt_table, self.sales_debt_metrics_layout, title="Receivable entries")
+            self._render_debt_ledger(ledger, self.sales_debt_table, self.sales_debt_metrics_layout, title=self._ui("receivable_entries"))
 
         self._run_api(action)
 
@@ -2014,7 +2040,7 @@ class MainWindow(QWidget):
             payload = self.api_client.export_report(code, self._current_report_filters())
             self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
             filename = payload.get("filename") or self.translator.text("reports.export")
-            self._render_report_result(payload, title=f"Export ready: {filename}")
+            self._render_report_result(payload, title=f"{self._ui('export_ready')}: {filename}")
 
         self._run_api(action)
 
@@ -2036,7 +2062,7 @@ class MainWindow(QWidget):
                 }
             )
             self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
-            self._render_report_result(payload, title=f"Filter saved: {payload.get('name', name)}")
+            self._render_report_result(payload, title=f"{self._ui('filter_saved')}: {payload.get('name', name)}")
 
         self._run_api(action)
 
@@ -2048,7 +2074,7 @@ class MainWindow(QWidget):
             if currency.get("code") == "TMT":
                 return int(currency["id"])
         if not currencies:
-            raise ValueError("No currencies are configured.")
+            raise ValueError(self.translator.text("error.no_currencies"))
         return int(currencies[0]["id"])
 
     def create_product_group_dialog(self) -> None:
@@ -2192,16 +2218,16 @@ class MainWindow(QWidget):
         self._render_metric_cards(
             summary_layout,
             [
-                ("SKU", product.get("sku") or product.get("code")),
-                ("Retail price", product.get("retail_price") or product.get("default_price")),
-                ("Active", product.get("is_active")),
+                (self._ui("sku"), product.get("sku") or product.get("code")),
+                (self._ui("retail_price"), product.get("retail_price") or product.get("default_price")),
+                (self._ui("active"), product.get("is_active")),
             ],
         )
         layout.addWidget(summary)
         rows = [{"field": self._humanize_key(key), "value": value} for key, value in product.items() if key != "barcodes"]
         table = QTableWidget(0, 2)
         self._configure_table(table)
-        self._populate_table(table, rows, [("field", "Field"), ("value", "Value")])
+        self._populate_table(table, rows, [("field", self._ui("field")), ("value", self._ui("value"))])
         layout.addWidget(table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dialog.accept)
@@ -2797,7 +2823,7 @@ class MainWindow(QWidget):
 
         def action() -> None:
             if not self.cashier_cart:
-                raise ValueError("Cashier cart is empty.")
+                raise ValueError(self.translator.text("cashier.error.cart_empty"))
             total = self._cashier_cart_total()
             payment_type = self.cashier_payment_type_combo.currentText() or "cash"
             paid_cash = Decimal("0.00")
@@ -2817,15 +2843,15 @@ class MainWindow(QWidget):
                 paid_transfer = self._cashier_decimal_text(self.cashier_paid_transfer_input.text())
                 debt_amount = self._cashier_decimal_text(self.cashier_debt_amount_input.text())
                 if (paid_cash + paid_transfer + debt_amount).quantize(Decimal("0.01")) != total:
-                    raise ValueError("Mixed payment parts must equal cart total.")
+                    raise ValueError(self.translator.text("cashier.error.mixed_payment_total"))
             customer_id = self._cashier_optional_int(self.cashier_customer_id_input)
             if debt_amount > Decimal("0.00") and customer_id is None:
-                raise ValueError("Customer ID is required for debt sales.")
+                raise ValueError(self.translator.text("cashier.error.customer_required"))
             cash_register_id = self._cashier_optional_int(self.cashier_register_id_input)
             cash_shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
             warehouse_id = self._cashier_optional_int(self.cashier_warehouse_id_input)
             if warehouse_id is None:
-                raise ValueError("Warehouse ID is required.")
+                raise ValueError(self.translator.text("cashier.error.warehouse_required"))
             currency_id = self._cashier_optional_int(self.cashier_currency_id_input) or self._default_currency_id()
             payload: dict[str, object] = {
                 "sale_type": "retail",
@@ -2880,7 +2906,7 @@ class MainWindow(QWidget):
         def action() -> None:
             shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
             if shift_id is None:
-                raise ValueError("Shift ID is required.")
+                raise ValueError(self.translator.text("cashier.error.shift_required"))
             report = self.api_client.get_cash_shift_x_report(shift_id)
             self._show_cashier_report(report)
 
@@ -2892,7 +2918,7 @@ class MainWindow(QWidget):
         def action() -> None:
             shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
             if shift_id is None:
-                raise ValueError("Shift ID is required.")
+                raise ValueError(self.translator.text("cashier.error.shift_required"))
             payload: dict[str, object] = {}
             closing_amount = self.cashier_closing_amount_input.text().strip()
             if closing_amount:
@@ -2907,7 +2933,7 @@ class MainWindow(QWidget):
         """Render an X/Z report into the cashier text and receipt preview panes."""
 
         self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
-        title = f"{self._format_value(report.get('report_type'))} report"
+        title = f"{self._format_value(report.get('report_type'))} {self._ui('report_suffix')}"
         self._render_cash_report(report, title=title)
         self.cashier_receipt_preview.setPlainText("\n".join(self._cashier_report_lines(report)))
 
@@ -2923,19 +2949,19 @@ class MainWindow(QWidget):
 
         product_id = self._cashier_optional_int(self.cashier_product_id_input)
         if product_id is None:
-            raise ValueError("Product ID is required.")
+            raise ValueError(self.translator.text("cashier.error.product_required"))
         quantity = self._cashier_decimal_text(self.cashier_quantity_input.text(), Decimal("1.0000"))
         price_final = self._cashier_decimal_text(self.cashier_price_input.text())
         discount_percent = self._cashier_decimal_text(self.cashier_discount_input.text())
         if quantity <= Decimal("0.00"):
-            raise ValueError("Quantity must be greater than zero.")
+            raise ValueError(self.translator.text("cashier.error.quantity_positive"))
         if price_final < Decimal("0.00"):
-            raise ValueError("Price cannot be negative.")
+            raise ValueError(self.translator.text("cashier.error.price_non_negative"))
         if discount_percent < Decimal("0.00") or discount_percent > Decimal("100.00"):
-            raise ValueError("Discount percent must be between 0 and 100.")
+            raise ValueError(self.translator.text("cashier.error.discount_range"))
         return {
             "product_id": product_id,
-            "product_name": self.cashier_product_name_input.text().strip() or f"Product {product_id}",
+            "product_name": self.cashier_product_name_input.text().strip() or f"{self._ui('product')} {product_id}",
             "quantity": quantity,
             "price_final": price_final,
             "discount_percent": discount_percent,
@@ -2946,7 +2972,7 @@ class MainWindow(QWidget):
 
         row = self.cashier_cart_table.currentRow()
         if row < 0 or row >= len(self.cashier_cart):
-            raise ValueError("Select a cart row first.")
+            raise ValueError(self.translator.text("cashier.error.select_cart_row"))
         return row
 
     def _cashier_optional_int(self, widget: QLineEdit) -> int | None:
@@ -3305,9 +3331,9 @@ class MainWindow(QWidget):
                 self.roles_table,
                 roles,
                 [
-                    ("name", "Role"),
-                    ("description", "Description"),
-                    (lambda row: len(row.get("permissions") or []), "Permissions"),
+                    ("name", self._ui("role")),
+                    ("description", self._ui("description")),
+                    (lambda row: len(row.get("permissions") or []), self._ui("permissions")),
                 ],
             )
             if roles:
@@ -3463,6 +3489,35 @@ class MainWindow(QWidget):
 
         self.cashier_cart_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_CART_HEADER_KEYS])
 
+    def _set_roles_table_headers(self) -> None:
+        """Apply translated column headers to the roles table."""
+
+        self.roles_table.setHorizontalHeaderLabels([self._ui("role"), self._ui("description"), self._ui("permissions")])
+
+    def _set_role_permissions_table_headers(self) -> None:
+        """Apply translated column headers to the selected-role permissions table."""
+
+        self.role_permissions_table.setHorizontalHeaderLabels([self._ui("module"), self._ui("permission")])
+
+    def _set_report_saved_filters_table_headers(self) -> None:
+        """Apply translated column headers to the saved report filters table."""
+
+        self.report_saved_filters_table.setHorizontalHeaderLabels(
+            [self._ui("name"), self._ui("report"), self._ui("scope"), self._ui("updated")]
+        )
+
+    def _set_report_combo_labels(self) -> None:
+        """Apply translated labels to report filter comboboxes."""
+
+        if hasattr(self, "report_code"):
+            for index in range(self.report_code.count()):
+                code = str(self.report_code.itemData(index))
+                self.report_code.setItemText(index, self._report_code_text(code))
+        if hasattr(self, "report_debt_type"):
+            for index in range(self.report_debt_type.count()):
+                value = self.report_debt_type.itemData(index)
+                self.report_debt_type.setItemText(index, self._debt_type_text(str(value) if value else None))
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
@@ -3475,6 +3530,13 @@ class MainWindow(QWidget):
         self._set_purchase_table_headers()
         self._set_sales_table_headers()
         self._set_cashier_table_headers()
+        if hasattr(self, "roles_table"):
+            self._set_roles_table_headers()
+        if hasattr(self, "role_permissions_table"):
+            self._set_role_permissions_table_headers()
+        if hasattr(self, "report_saved_filters_table"):
+            self._set_report_saved_filters_table_headers()
+        self._set_report_combo_labels()
         if hasattr(self, "cashier_cart_table"):
             self._set_cashier_cart_table_headers()
             self._refresh_cashier_cart_table()
@@ -3504,6 +3566,8 @@ class MainWindow(QWidget):
             text_key = button.property("textKey")
             if text_key:
                 button.setText(self.translator.text(str(text_key)))
+        if hasattr(self, "settings_values") and self.settings_values:
+            self._render_settings_forms(self.settings_values)
 
     def _apply_permissions(self) -> None:
         """Hide unavailable pages and disable actions blocked by role permissions."""
