@@ -8,11 +8,15 @@ import json
 from typing import Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -21,6 +25,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -346,13 +351,248 @@ class MainWindow(QWidget):
         """Build dashboard page."""
 
         page, layout, _title = self._page("dashboard.title")
+        
+        # Define self.dashboard_text as a hidden/dummy variable to prevent any attribute error
         self.dashboard_text = QPlainTextEdit()
         self.dashboard_text.setReadOnly(True)
-        refresh = QPushButton()
-        refresh.setProperty("textKey", "dashboard.refresh")
-        refresh.clicked.connect(self.refresh_dashboard)
-        layout.addWidget(refresh)
-        layout.addWidget(self.dashboard_text, 1)
+        self.dashboard_text.hide()
+        
+        # Responsive Scroll Area container
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet("background: transparent;")
+        
+        container = QWidget()
+        container.setStyleSheet("background: transparent;")
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 16, 0)
+        container_layout.setSpacing(16)
+        
+        # Header Status Banner
+        self.status_banner = QFrame()
+        self.status_banner.setObjectName("DashboardStatusBanner")
+        self.status_banner.setStyleSheet("""
+            QFrame#DashboardStatusBanner {
+                background-color: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+                padding: 16px;
+            }
+        """)
+        banner_shadow = QGraphicsDropShadowEffect(self.status_banner)
+        banner_shadow.setBlurRadius(15)
+        banner_shadow.setColor(QColor(0, 0, 0, 15))
+        banner_shadow.setOffset(0, 4)
+        self.status_banner.setGraphicsEffect(banner_shadow)
+        
+        banner_layout = QHBoxLayout(self.status_banner)
+        banner_layout.setContentsMargins(16, 16, 16, 16)
+        
+        banner_text_layout = QVBoxLayout()
+        self.banner_app_name = QLabel("ERP Accounting Server")
+        self.banner_app_name.setStyleSheet("font-size: 20px; font-weight: bold; color: #0f172a;")
+        
+        status_sub_layout = QHBoxLayout()
+        status_sub_layout.setSpacing(8)
+        self.banner_status_label = QLabel()
+        self.banner_status_label.setProperty("titleKey", "sales.table.status")
+        self.banner_status_label.setStyleSheet("font-size: 13px; color: #64748b;")
+        
+        self.banner_status_badge = QLabel("RUNNING")
+        self.banner_status_badge.setObjectName("StatusBadge")
+        self.banner_status_badge.setStyleSheet("""
+            QLabel#StatusBadge {
+                background-color: #dcfce7;
+                color: #15803d;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 6px;
+            }
+        """)
+        status_sub_layout.addWidget(self.banner_status_label)
+        status_sub_layout.addWidget(self.banner_status_badge)
+        status_sub_layout.addStretch(1)
+        
+        banner_text_layout.addWidget(self.banner_app_name)
+        banner_text_layout.addLayout(status_sub_layout)
+        
+        self.dashboard_refresh_btn = QPushButton()
+        self.dashboard_refresh_btn.setObjectName("DashboardRefreshBtn")
+        self.dashboard_refresh_btn.setProperty("textKey", "dashboard.refresh")
+        self.dashboard_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dashboard_refresh_btn.clicked.connect(self.refresh_dashboard)
+        self.dashboard_refresh_btn.setStyleSheet("""
+            QPushButton#DashboardRefreshBtn {
+                background-color: #2563eb;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 10px 20px;
+            }
+            QPushButton#DashboardRefreshBtn:hover {
+                background-color: #1d4ed8;
+            }
+            QPushButton#DashboardRefreshBtn:pressed {
+                background-color: #1e3a8a;
+            }
+        """)
+        
+        banner_layout.addLayout(banner_text_layout, 1)
+        banner_layout.addWidget(self.dashboard_refresh_btn)
+        
+        container_layout.addWidget(self.status_banner)
+        
+        # Grid of cards
+        grid_layout = QGridLayout()
+        grid_layout.setSpacing(16)
+        
+        def create_card(title_prop_key: str) -> tuple[QFrame, QLabel, QVBoxLayout]:
+            card = QFrame()
+            card.setObjectName("DashboardCard")
+            card.setStyleSheet("""
+                QFrame#DashboardCard {
+                    background-color: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 16px;
+                }
+            """)
+            card_shadow = QGraphicsDropShadowEffect(card)
+            card_shadow.setBlurRadius(12)
+            card_shadow.setColor(QColor(0, 0, 0, 10))
+            card_shadow.setOffset(0, 4)
+            card.setGraphicsEffect(card_shadow)
+            
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(16, 16, 16, 16)
+            card_layout.setSpacing(8)
+            
+            card_title = QLabel()
+            card_title.setProperty("titleKey", title_prop_key)
+            card_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;")
+            card_layout.addWidget(card_title)
+            
+            return card, card_title, card_layout
+            
+        # Card 1: User Card
+        self.user_card, self.user_card_title, user_layout = create_card("dashboard.current_user")
+        user_info_layout = QHBoxLayout()
+        user_info_layout.setSpacing(12)
+        
+        self.user_avatar = QLabel("U")
+        self.user_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.user_avatar.setStyleSheet("""
+            background-color: #3b82f6;
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 20px;
+            min-width: 40px;
+            max-width: 40px;
+            min-height: 40px;
+            max-height: 40px;
+        """)
+        
+        user_text_layout = QVBoxLayout()
+        self.user_name_val = QLabel("Unknown User")
+        self.user_name_val.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        self.user_id_val = QLabel("ID: -")
+        self.user_id_val.setStyleSheet("font-size: 12px; color: #64748b;")
+        
+        user_text_layout.addWidget(self.user_name_val)
+        user_text_layout.addWidget(self.user_id_val)
+        
+        user_info_layout.addWidget(self.user_avatar)
+        user_info_layout.addLayout(user_text_layout, 1)
+        user_layout.addLayout(user_info_layout)
+        user_layout.addStretch(1)
+        
+        # Card 2: Server Time Card
+        self.time_card, self.time_card_title, time_layout = create_card("dashboard.server_time")
+        time_info_layout = QHBoxLayout()
+        time_info_layout.setSpacing(12)
+        
+        self.time_icon = QLabel("🕒")
+        self.time_icon.setStyleSheet("font-size: 24px;")
+        
+        time_text_layout = QVBoxLayout()
+        self.time_val = QLabel("--:--:--")
+        self.time_val.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a;")
+        self.date_val = QLabel("----- -- --")
+        self.date_val.setStyleSheet("font-size: 12px; color: #64748b;")
+        
+        time_text_layout.addWidget(self.time_val)
+        time_text_layout.addWidget(self.date_val)
+        
+        time_info_layout.addWidget(self.time_icon)
+        time_info_layout.addLayout(time_text_layout, 1)
+        time_layout.addLayout(time_info_layout)
+        time_layout.addStretch(1)
+        
+        # Card 3: Permissions Card
+        self.perm_card, self.perm_card_title, perm_layout = create_card("dashboard.permissions")
+        perm_info_layout = QHBoxLayout()
+        perm_info_layout.setSpacing(12)
+        
+        self.perm_icon = QLabel("🔑")
+        self.perm_icon.setStyleSheet("font-size: 24px;")
+        
+        perm_text_layout = QVBoxLayout()
+        self.perm_val = QLabel("Authorized")
+        self.perm_val.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        self.perm_desc = QLabel("Verified Session")
+        self.perm_desc.setStyleSheet("font-size: 12px; color: #64748b;")
+        
+        perm_text_layout.addWidget(self.perm_val)
+        perm_text_layout.addWidget(self.perm_desc)
+        
+        perm_info_layout.addWidget(self.perm_icon)
+        perm_info_layout.addLayout(perm_text_layout, 1)
+        perm_layout.addLayout(perm_info_layout)
+        perm_layout.addStretch(1)
+        
+        grid_layout.addWidget(self.user_card, 0, 0)
+        grid_layout.addWidget(self.time_card, 0, 1)
+        grid_layout.addWidget(self.perm_card, 0, 2)
+        
+        container_layout.addLayout(grid_layout)
+        
+        # Dynamic responsive layout adjustments for grid spacing on resizing
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
+        grid_layout.setColumnStretch(2, 1)
+        
+        # Informational Banner
+        self.tip_frame = QFrame()
+        self.tip_frame.setObjectName("TipFrame")
+        self.tip_frame.setStyleSheet("""
+            QFrame#TipFrame {
+                background-color: #eff6ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 12px;
+                padding: 16px;
+            }
+        """)
+        tip_layout = QVBoxLayout(self.tip_frame)
+        self.tip_title = QLabel()
+        self.tip_title.setProperty("titleKey", "dashboard.tip_title")
+        self.tip_title.setStyleSheet("font-weight: bold; color: #1e40af; font-size: 13px;")
+        self.tip_desc = QLabel()
+        self.tip_desc.setProperty("titleKey", "dashboard.tip_desc")
+        self.tip_desc.setWordWrap(True)
+        self.tip_desc.setStyleSheet("color: #1e3a8a; font-size: 12px;")
+        tip_layout.addWidget(self.tip_title)
+        tip_layout.addWidget(self.tip_desc)
+        
+        container_layout.addWidget(self.tip_frame)
+        container_layout.addStretch(1)
+        
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
         return page
 
     def _build_users_page(self) -> QWidget:
@@ -841,7 +1081,136 @@ class MainWindow(QWidget):
     def refresh_dashboard(self) -> None:
         """Refresh server status."""
 
-        self._run_api(lambda: self.dashboard_text.setPlainText(json.dumps(self.api_client.get_status(), indent=2, ensure_ascii=False)))
+        def action() -> None:
+            try:
+                data = self.api_client.get_status()
+                self._update_dashboard_ui(data)
+            except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
+                self._set_dashboard_offline(str(exc))
+                raise exc
+
+        self._run_api(action)
+
+    def _update_dashboard_ui(self, data: dict[str, Any]) -> None:
+        """Populate modern UI cards with active server data."""
+
+        app_name = data.get("application") or "ERP Accounting Server"
+        status = data.get("status") or "running"
+        server_time_raw = data.get("server_time") or ""
+        current_user_id = data.get("current_user_id") or ""
+        current_username = data.get("current_username") or ""
+
+        # Update application banner status
+        self.banner_app_name.setText(app_name)
+        
+        lang = self.translator.language
+        if status.lower() == "running":
+            status_text = "РАБОТАЕТ" if lang == "ru" else "DEŇIZ" if lang == "tk" else "RUNNING"
+            self.banner_status_badge.setText(status_text)
+            self.banner_status_badge.setStyleSheet("""
+                background-color: #dcfce7;
+                color: #15803d;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 6px;
+            """)
+        else:
+            status_text = str(status).upper()
+            self.banner_status_badge.setText(status_text)
+            self.banner_status_badge.setStyleSheet("""
+                background-color: #fef3c7;
+                color: #d97706;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 6px;
+            """)
+
+        # User details card
+        user_name_text = str(current_username) if current_username else "Unknown User"
+        self.user_name_val.setText(user_name_text)
+        self.user_id_val.setText(f"ID: {current_user_id}" if current_user_id != "" else "ID: -")
+        
+        avatar_letter = user_name_text[0].upper() if user_name_text else "U"
+        self.user_avatar.setText(avatar_letter)
+        colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
+        color_index = sum(ord(c) for c in user_name_text) % len(colors)
+        self.user_avatar.setStyleSheet(f"""
+            background-color: {colors[color_index]};
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 20px;
+            min-width: 40px;
+            max-width: 40px;
+            min-height: 40px;
+            max-height: 40px;
+            text-align: center;
+        """)
+
+        # Server time parsing and formatting
+        formatted_time = "--:--:--"
+        formatted_date = "----- -- --"
+        if server_time_raw:
+            try:
+                from datetime import datetime
+                dt = datetime.fromisoformat(server_time_raw)
+                formatted_time = dt.strftime("%H:%M:%S")
+                formatted_date = dt.strftime("%Y-%m-%d")
+                tz_offset = dt.strftime("UTC%z")
+                if len(tz_offset) == 8:
+                    formatted_date += f" ({tz_offset[0:6]}:{tz_offset[6:8]})"
+            except Exception:
+                try:
+                    parts = server_time_raw.split("T")
+                    if len(parts) == 2:
+                        formatted_date = parts[0]
+                        formatted_time = parts[1].split(".")[0]
+                except Exception:
+                    formatted_time = str(server_time_raw)
+
+        self.time_val.setText(formatted_time)
+        self.date_val.setText(formatted_date)
+
+        # Authorization card
+        self.perm_val.setText("AUTHORIZED" if lang == "en" else "АВТОРИЗОВАН" if lang == "ru" else "YGTYYARLY")
+        self.perm_desc.setText("Session Token Valid" if lang == "en" else "Токен сессии действителен" if lang == "ru" else "Sessiýa tokeni dogry")
+
+    def _set_dashboard_offline(self, error_msg: str) -> None:
+        """Adjust dashboard to represent offline/error state."""
+
+        lang = self.translator.language
+        offline_text = "ОФФЛАЙН" if lang == "ru" else "OFLAYN" if lang == "tk" else "OFFLINE"
+        self.banner_status_badge.setText(offline_text)
+        self.banner_status_badge.setStyleSheet("""
+            background-color: #fee2e2;
+            color: #dc2626;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 4px 8px;
+            border-radius: 6px;
+        """)
+        self.time_val.setText("--:--:--")
+        self.date_val.setText("----- -- --")
+        self.user_name_val.setText("-")
+        self.user_id_val.setText("ID: -")
+        
+        self.user_avatar.setText("?")
+        self.user_avatar.setStyleSheet("""
+            background-color: #94a3b8;
+            color: #ffffff;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 20px;
+            min-width: 40px;
+            max-width: 40px;
+            min-height: 40px;
+            max-height: 40px;
+        """)
+        
+        self.perm_val.setText("OFFLINE" if lang == "en" else "ОФФЛАЙН" if lang == "ru" else "OFLAYN")
+        self.perm_desc.setText(error_msg)
 
     def _on_page_changed(self, row: int) -> None:
         """Switch pages and refresh data for the selected foundation view."""
