@@ -42,6 +42,7 @@ from user_app.core.i18n import (
     Translator,
 )
 from user_app.hardware.simulator import HardwareSimulator
+from user_app.ui.selectors import ReferenceSelectorDialog
 
 
 class MainWindow(QWidget):
@@ -195,6 +196,151 @@ class MainWindow(QWidget):
         title.setProperty("titleKey", title_key)
         layout.addWidget(title)
         return page, layout, title
+
+    def _add_selector_row(
+        self,
+        form: QFormLayout,
+        label_key: str,
+        field: QLineEdit,
+        selector: Callable[[QLineEdit], None],
+    ) -> None:
+        """Add a form row with an ID field and a searchable selector button."""
+
+        row = QHBoxLayout()
+        row.addWidget(field, 1)
+        button = QPushButton("...")
+        button.setFixedWidth(34)
+        button.clicked.connect(lambda _checked=False: selector(field))
+        row.addWidget(button)
+        form.addRow(self.translator.text(label_key), row)
+
+    def _select_reference(
+        self,
+        title: str,
+        rows_provider: Callable[[], list[dict[str, object]]],
+        target: QLineEdit,
+        columns: list[tuple[str, str]],
+        *,
+        display_target: QLineEdit | None = None,
+        display_fields: tuple[str, ...] = (),
+        price_target: QLineEdit | None = None,
+        price_field: str | None = None,
+        id_field: str = "id",
+    ) -> None:
+        """Open a selector dialog and copy the selected row into target fields."""
+
+        try:
+            rows = rows_provider()
+        except ApiClientError as exc:
+            QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
+            return
+        dialog = ReferenceSelectorDialog(title, rows, columns, search_placeholder=self.translator.text("common.search"), parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = dialog.selected_row()
+        if not selected:
+            return
+        target.setText(str(selected.get(id_field, "") or ""))
+        if display_target is not None and display_fields:
+            values = [str(selected.get(field, "") or "") for field in display_fields if selected.get(field) not in (None, "")]
+            display_target.setText(" - ".join(values))
+        if price_target is not None and price_field is not None and selected.get(price_field) is not None:
+            price_target.setText(str(selected.get(price_field)))
+
+    def _select_product_id(self, target: QLineEdit, name_target: QLineEdit | None = None, price_target: QLineEdit | None = None) -> None:
+        """Select a product and copy its id to a line edit."""
+
+        self._select_reference(
+            self.translator.text("catalog.title"),
+            lambda: self.api_client.get_products(),
+            target,
+            [("id", "ID"), ("sku", "SKU"), ("name", "Name"), ("retail_price", "Price")],
+            display_target=name_target,
+            display_fields=("sku", "name"),
+            price_target=price_target,
+            price_field="retail_price",
+        )
+
+    def _select_warehouse_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("warehouse.title"), lambda: self.api_client.get_warehouses(), target, [("id", "ID"), ("code", "Code"), ("name", "Name")])
+
+    def _select_counterparty_id(self, target: QLineEdit) -> None:
+        self._select_reference(
+            self.translator.text("counterparties.title"),
+            lambda: self.api_client.get_counterparties(include_debt=True),
+            target,
+            [("id", "ID"), ("code", "Code"), ("name", "Name"), ("counterparty_type", "Type"), ("debt_balance_tmt", "Debt")],
+        )
+
+    def _select_currency_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("pricing.form.currency_id"), lambda: self.api_client.get_currencies(), target, [("id", "ID"), ("code", "Code"), ("name", "Name")])
+
+    def _select_price_list_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("pricing.create_price_list"), lambda: self.api_client.get_price_lists(), target, [("id", "ID"), ("name_ru", "Name"), ("currency_code", "Currency"), ("is_default", "Default")])
+
+    def _select_cash_register_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("cashier.create_register"), lambda: self.api_client.get_cash_registers(), target, [("id", "ID"), ("name", "Name"), ("warehouse_id", "Warehouse"), ("is_active", "Active")])
+
+    def _select_cash_shift_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("cashier.form.shift_id"), lambda: self.api_client.get_cash_shifts(), target, [("id", "ID"), ("cash_register_name", "Register"), ("opened_at", "Opened"), ("status", "Status")])
+
+    def _select_purchase_invoice_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("purchase.create_invoice"), lambda: self.api_client.get_purchase_invoices(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Supplier"), ("total_amount_tmt", "Total"), ("status", "Status")])
+
+    def _select_purchase_order_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("purchase.create_order"), lambda: self.api_client.get_purchase_orders(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Supplier"), ("total_amount_tmt", "Total"), ("status", "Status")])
+
+    def _select_purchase_order_line_id(self, target: QLineEdit, order_id: QLineEdit) -> None:
+        """Select a line from the selected purchase order."""
+
+        order_text = order_id.text().strip()
+        if not order_text:
+            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("purchase.form.order_id"))
+            return
+        try:
+            order = next((row for row in self.api_client.get_purchase_orders() if int(row.get("id", 0)) == int(order_text)), None)
+        except (ApiClientError, ValueError) as exc:
+            QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
+            return
+        if not order:
+            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("purchase.form.order_id"))
+            return
+        lines = list(order.get("lines", []))
+        self._select_reference(
+            self.translator.text("purchase.form.order_line_id"),
+            lambda: lines,
+            target,
+            [("id", "ID"), ("product_name", "Product"), ("quantity_ordered", "Qty"), ("amount_tmt", "Amount")],
+        )
+
+    def _select_sale_id(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("sales.create_sale"), lambda: self.api_client.get_sales(), target, [("id", "ID"), ("doc_number", "Number"), ("counterparty_name", "Customer"), ("total_amount_tmt", "Total"), ("status", "Status")])
+
+    def _select_sale_line_id(self, target: QLineEdit, sale_id: QLineEdit) -> None:
+        """Select a line from the selected sale document."""
+
+        sale_text = sale_id.text().strip()
+        if not sale_text:
+            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_id"))
+            return
+        try:
+            sale = next((row for row in self.api_client.get_sales() if int(row.get("id", 0)) == int(sale_text)), None)
+        except (ApiClientError, ValueError) as exc:
+            QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
+            return
+        if not sale:
+            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_id"))
+            return
+        lines = list(sale.get("lines", []))
+        self._select_reference(
+            self.translator.text("sales.form.sale_line_id"),
+            lambda: lines,
+            target,
+            [("id", "ID"), ("product_name", "Product"), ("quantity", "Qty"), ("amount_tmt", "Amount")],
+        )
+
+    def _select_role_name(self, target: QLineEdit) -> None:
+        self._select_reference(self.translator.text("roles.title"), lambda: self.api_client.get_roles(), target, [("name", "Role"), ("description", "Description")], id_field="name")
 
     def _build_dashboard_page(self) -> QWidget:
         """Build dashboard page."""
@@ -509,6 +655,16 @@ class MainWindow(QWidget):
             widget.setProperty("placeholderKey", key)
             widget.setPlaceholderText(self.translator.text(key))
             entry_row.addWidget(widget)
+        pick_product = QPushButton("...")
+        pick_product.setFixedWidth(34)
+        pick_product.clicked.connect(
+            lambda _checked=False: self._select_product_id(
+                self.cashier_product_id_input,
+                self.cashier_product_name_input,
+                self.cashier_price_input,
+            )
+        )
+        entry_row.addWidget(pick_product)
         scan = QPushButton()
         scan.setProperty("textKey", "cashier.cart.scan")
         scan.clicked.connect(self.cashier_scan_barcode)
@@ -559,6 +715,17 @@ class MainWindow(QWidget):
             widget.setPlaceholderText(self.translator.text(key))
             payment_row.addWidget(widget)
         payment_row.addWidget(self.cashier_payment_type_combo)
+        for target, selector in (
+            (self.cashier_register_id_input, self._select_cash_register_id),
+            (self.cashier_shift_id_input, self._select_cash_shift_id),
+            (self.cashier_warehouse_id_input, self._select_warehouse_id),
+            (self.cashier_currency_id_input, self._select_currency_id),
+            (self.cashier_customer_id_input, self._select_counterparty_id),
+        ):
+            picker = QPushButton("...")
+            picker.setFixedWidth(34)
+            picker.clicked.connect(lambda _checked=False, field=target, pick=selector: pick(field))
+            payment_row.addWidget(picker)
         checkout = QPushButton()
         checkout.setObjectName("PrimaryButton")
         checkout.setProperty("textKey", "cashier.cart.checkout")
@@ -630,11 +797,11 @@ class MainWindow(QWidget):
         filters.addRow(self.translator.text("reports.report_code"), self.report_code)
         filters.addRow(self.translator.text("reports.date_from"), self.report_date_from)
         filters.addRow(self.translator.text("reports.date_to"), self.report_date_to)
-        filters.addRow(self.translator.text("reports.warehouse_id"), self.report_warehouse_id)
-        filters.addRow(self.translator.text("reports.counterparty_id"), self.report_counterparty_id)
-        filters.addRow(self.translator.text("reports.product_id"), self.report_product_id)
-        filters.addRow(self.translator.text("reports.cash_register_id"), self.report_cash_register_id)
-        filters.addRow(self.translator.text("reports.cash_shift_id"), self.report_cash_shift_id)
+        self._add_selector_row(filters, "reports.warehouse_id", self.report_warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(filters, "reports.counterparty_id", self.report_counterparty_id, self._select_counterparty_id)
+        self._add_selector_row(filters, "reports.product_id", self.report_product_id, self._select_product_id)
+        self._add_selector_row(filters, "reports.cash_register_id", self.report_cash_register_id, self._select_cash_register_id)
+        self._add_selector_row(filters, "reports.cash_shift_id", self.report_cash_shift_id, self._select_cash_shift_id)
         filters.addRow(self.translator.text("reports.debt_type"), self.report_debt_type)
         filters.addRow(self.translator.text("reports.filter_name"), self.report_filter_name)
 
@@ -1147,7 +1314,7 @@ class MainWindow(QWidget):
         currency_id = QLineEdit()
         is_default = QLineEdit("true")
         form.addRow(self.translator.text("pricing.form.name"), name)
-        form.addRow(self.translator.text("pricing.form.currency_id"), currency_id)
+        self._add_selector_row(form, "pricing.form.currency_id", currency_id, self._select_currency_id)
         form.addRow(self.translator.text("pricing.table.default"), is_default)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -1179,9 +1346,9 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         product_price = QLineEdit("0")
         valid_from = QLineEdit(date.today().isoformat())
+        self._add_selector_row(form, "pricing.form.price_list_id", price_list_id, self._select_price_list_id)
+        self._add_selector_row(form, "pricing.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=product_price))
         for key, widget in (
-            ("pricing.form.price_list_id", price_list_id),
-            ("pricing.form.product_id", product_id),
             ("pricing.form.price", product_price),
             ("pricing.form.valid_from", valid_from),
         ):
@@ -1218,11 +1385,11 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
+        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
+        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
+        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
         for key, widget in (
-            ("purchase.form.supplier_id", supplier_id),
-            ("purchase.form.warehouse_id", warehouse_id),
-            ("purchase.form.currency_id", currency_id),
-            ("purchase.form.product_id", product_id),
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
@@ -1267,11 +1434,11 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
+        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
+        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
+        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
         for key, widget in (
-            ("purchase.form.supplier_id", supplier_id),
-            ("purchase.form.warehouse_id", warehouse_id),
-            ("purchase.form.currency_id", currency_id),
-            ("purchase.form.product_id", product_id),
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
@@ -1320,14 +1487,14 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
+        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
+        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
+        self._add_selector_row(form, "purchase.form.return_invoice_id", source_invoice_id, self._select_purchase_invoice_id)
+        self._add_selector_row(form, "purchase.form.order_id", order_id, self._select_purchase_order_id)
+        self._add_selector_row(form, "purchase.form.order_line_id", order_line_id, lambda field: self._select_purchase_order_line_id(field, order_id))
+        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
         for key, widget in (
-            ("purchase.form.supplier_id", supplier_id),
-            ("purchase.form.warehouse_id", warehouse_id),
-            ("purchase.form.currency_id", currency_id),
-            ("purchase.form.return_invoice_id", source_invoice_id),
-            ("purchase.form.order_id", order_id),
-            ("purchase.form.order_line_id", order_line_id),
-            ("purchase.form.product_id", product_id),
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
@@ -1380,12 +1547,9 @@ class MainWindow(QWidget):
         supplier_id = QLineEdit()
         invoice_id = QLineEdit()
         amount = QLineEdit("0")
-        for key, widget in (
-            ("purchase.form.supplier_id", supplier_id),
-            ("purchase.form.invoice_id", invoice_id),
-            ("purchase.form.payment_amount", amount),
-        ):
-            form.addRow(self.translator.text(key), widget)
+        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
+        self._add_selector_row(form, "purchase.form.invoice_id", invoice_id, self._select_purchase_invoice_id)
+        form.addRow(self.translator.text("purchase.form.payment_amount"), amount)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1432,13 +1596,13 @@ class MainWindow(QWidget):
         paid_cash = QLineEdit("0")
         paid_transfer = QLineEdit("0")
         debt_amount = QLineEdit("0")
+        self._add_selector_row(form, "sales.form.cash_register_id", cash_register_id, self._select_cash_register_id)
+        self._add_selector_row(form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id)
+        self._add_selector_row(form, "sales.form.customer_id", customer_id, self._select_counterparty_id)
+        self._add_selector_row(form, "sales.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "sales.form.currency_id", currency_id, self._select_currency_id)
+        self._add_selector_row(form, "sales.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=sale_price))
         for key, widget in (
-            ("sales.form.cash_register_id", cash_register_id),
-            ("sales.form.cash_shift_id", cash_shift_id),
-            ("sales.form.customer_id", customer_id),
-            ("sales.form.warehouse_id", warehouse_id),
-            ("sales.form.currency_id", currency_id),
-            ("sales.form.product_id", product_id),
             ("sales.form.quantity", quantity),
             ("sales.form.price", sale_price),
             ("sales.form.payment_type", payment_type),
@@ -1500,11 +1664,11 @@ class MainWindow(QWidget):
         refund_cash = QLineEdit("0")
         refund_transfer = QLineEdit("0")
         receivable_correction = QLineEdit("0")
+        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
+        self._add_selector_row(form, "sales.form.sale_line_id", sale_line_id, lambda field: self._select_sale_line_id(field, sale_id))
+        self._add_selector_row(form, "sales.form.cash_register_id", cash_register_id, self._select_cash_register_id)
+        self._add_selector_row(form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id)
         for key, widget in (
-            ("sales.form.sale_id", sale_id),
-            ("sales.form.sale_line_id", sale_line_id),
-            ("sales.form.cash_register_id", cash_register_id),
-            ("sales.form.cash_shift_id", cash_shift_id),
             ("sales.form.quantity", quantity),
             ("sales.form.refund_method", refund_method),
             ("sales.form.refund_cash", refund_cash),
@@ -1561,13 +1725,10 @@ class MainWindow(QWidget):
         sale_id = QLineEdit()
         shift_id = QLineEdit()
         amount = QLineEdit("0")
-        for key, widget in (
-            ("sales.form.customer_id", customer_id),
-            ("sales.form.sale_id", sale_id),
-            ("sales.form.cash_shift_id", shift_id),
-            ("sales.form.paid_cash", amount),
-        ):
-            form.addRow(self.translator.text(key), widget)
+        self._add_selector_row(form, "sales.form.customer_id", customer_id, self._select_counterparty_id)
+        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
+        self._add_selector_row(form, "sales.form.cash_shift_id", shift_id, self._select_cash_shift_id)
+        form.addRow(self.translator.text("sales.form.paid_cash"), amount)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1606,7 +1767,7 @@ class MainWindow(QWidget):
         dialog.setWindowTitle(self.translator.text("sales.cancel"))
         form = QFormLayout(dialog)
         sale_id = QLineEdit()
-        form.addRow(self.translator.text("sales.form.sale_id"), sale_id)
+        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1925,7 +2086,7 @@ class MainWindow(QWidget):
         name = QLineEdit()
         warehouse_id = QLineEdit()
         form.addRow(self.translator.text("cashier.form.register_name"), name)
-        form.addRow(self.translator.text("cashier.form.warehouse_id"), warehouse_id)
+        self._add_selector_row(form, "cashier.form.warehouse_id", warehouse_id, self._select_warehouse_id)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1947,7 +2108,7 @@ class MainWindow(QWidget):
         form = QFormLayout(dialog)
         register_id = QLineEdit()
         opening_amount = QLineEdit("0")
-        form.addRow(self.translator.text("cashier.form.register_id"), register_id)
+        self._add_selector_row(form, "cashier.form.register_id", register_id, self._select_cash_register_id)
         form.addRow(self.translator.text("cashier.form.opening_amount"), opening_amount)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -1975,7 +2136,7 @@ class MainWindow(QWidget):
         form = QFormLayout(dialog)
         shift_id = QLineEdit()
         closing_amount = QLineEdit("0")
-        form.addRow(self.translator.text("cashier.form.shift_id"), shift_id)
+        self._add_selector_row(form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id)
         form.addRow(self.translator.text("cashier.form.closing_amount"), closing_amount)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -2001,14 +2162,11 @@ class MainWindow(QWidget):
         operation_type = QLineEdit("collection")
         amount = QLineEdit("0")
         target_register_id = QLineEdit()
-        for key, widget in (
-            ("cashier.form.shift_id", shift_id),
-            ("cashier.form.register_id", register_id),
-            ("cashier.form.operation_type", operation_type),
-            ("cashier.form.amount", amount),
-            ("cashier.form.target_register_id", target_register_id),
-        ):
-            form.addRow(self.translator.text(key), widget)
+        self._add_selector_row(form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id)
+        self._add_selector_row(form, "cashier.form.register_id", register_id, self._select_cash_register_id)
+        form.addRow(self.translator.text("cashier.form.operation_type"), operation_type)
+        form.addRow(self.translator.text("cashier.form.amount"), amount)
+        self._add_selector_row(form, "cashier.form.target_register_id", target_register_id, self._select_cash_register_id)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -2072,9 +2230,9 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         qty_actual = QLineEdit("0")
         unit_cost = QLineEdit("0")
+        self._add_selector_row(form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "warehouse.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=unit_cost))
         for key, widget in (
-            ("warehouse.form.warehouse_id", warehouse_id),
-            ("warehouse.form.product_id", product_id),
             ("warehouse.form.quantity", qty_actual),
             ("warehouse.form.unit_cost", unit_cost),
         ):
@@ -2114,13 +2272,10 @@ class MainWindow(QWidget):
         target_warehouse_id = QLineEdit()
         product_id = QLineEdit()
         quantity = QLineEdit("0")
-        for key, widget in (
-            ("warehouse.form.source_warehouse_id", source_warehouse_id),
-            ("warehouse.form.target_warehouse_id", target_warehouse_id),
-            ("warehouse.form.product_id", product_id),
-            ("warehouse.form.quantity", quantity),
-        ):
-            form.addRow(self.translator.text(key), widget)
+        self._add_selector_row(form, "warehouse.form.source_warehouse_id", source_warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "warehouse.form.target_warehouse_id", target_warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "warehouse.form.product_id", product_id, self._select_product_id)
+        form.addRow(self.translator.text("warehouse.form.quantity"), quantity)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -2158,9 +2313,9 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("0")
         reason = QLineEdit("other")
+        self._add_selector_row(form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id)
+        self._add_selector_row(form, "warehouse.form.product_id", product_id, self._select_product_id)
         for key, widget in (
-            ("warehouse.form.warehouse_id", warehouse_id),
-            ("warehouse.form.product_id", product_id),
             ("warehouse.form.quantity", quantity),
             ("warehouse.form.reason", reason),
         ):
@@ -2225,7 +2380,7 @@ class MainWindow(QWidget):
         form.addRow(self.translator.text("users.form.username"), username)
         form.addRow(self.translator.text("users.form.full_name"), full_name)
         form.addRow(self.translator.text("users.form.password"), password)
-        form.addRow(self.translator.text("users.form.role"), role)
+        self._add_selector_row(form, "users.form.role", role, self._select_role_name)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -2369,7 +2524,7 @@ class MainWindow(QWidget):
                 button.setText(self.translator.text(str(text_key)))
 
     def _apply_permissions(self) -> None:
-        """Hide navigation pages that the current user cannot reasonably use yet."""
+        """Hide unavailable pages and disable actions blocked by role permissions."""
 
         user = self.api_client.current_user
         permissions = set(user.permissions if user else [])
@@ -2392,3 +2547,43 @@ class MainWindow(QWidget):
             item = self.nav_items.get(page_id)
             if item is not None:
                 item.setHidden(required is not None and required not in permissions)
+
+        action_permissions: dict[str, tuple[str, ...]] = {
+            "users.create": ("admin.manage_users",),
+            "settings.save": ("settings.edit",),
+            "catalog.create_group": ("goods.create",),
+            "catalog.create_product": ("goods.create",),
+            "catalog.create_service": ("goods.create",),
+            "warehouse.create_warehouse": ("warehouse.create",),
+            "warehouse.opening_inventory": ("warehouse.inventory_create", "warehouse.inventory_post"),
+            "warehouse.transfer": ("warehouse.transfer_create", "warehouse.transfer_send", "warehouse.transfer_receive"),
+            "warehouse.writeoff": ("warehouse.writeoff_create", "warehouse.writeoff_post"),
+            "counterparties.create": ("counterparty.create",),
+            "pricing.create_price_list": ("pricing.price_list_create",),
+            "pricing.add_price": ("pricing.price_list_edit",),
+            "purchase.create_order": ("purchase.order_create",),
+            "purchase.create_invoice": ("purchase.invoice_create", "purchase.post"),
+            "purchase.create_return": ("purchase.return", "purchase.post"),
+            "purchase.create_payment": ("counterparty.payment_create",),
+            "sales.create_sale": ("sale.create", "sale.post"),
+            "sales.create_payment": ("counterparty.payment_create",),
+            "sales.create_return": ("sale_return.create", "sale_return.post"),
+            "sales.cancel": ("sale.cancel",),
+            "cashier.create_register": ("cashier.register_manage",),
+            "cashier.open_shift": ("cashier.shift_open",),
+            "cashier.close_shift": ("cashier.shift_close",),
+            "cashier.cash_operation": ("cashier.cash_operation",),
+            "cashier.cart.checkout": ("sale.create", "sale.post"),
+            "cashier.cart.print": ("cashier.print",),
+            "cashier.cart.z_report": ("cashier.shift_close",),
+            "reports.export": ("reports.export",),
+            "reports.save_filter": ("reports.filters_manage",),
+        }
+        for button in self.findChildren(QPushButton):
+            text_key = button.property("textKey")
+            required = action_permissions.get(str(text_key)) if text_key else None
+            if not required:
+                continue
+            allowed = all(permission in permissions for permission in required)
+            button.setEnabled(allowed)
+            button.setToolTip("" if allowed else self.translator.text("common.permission_required"))

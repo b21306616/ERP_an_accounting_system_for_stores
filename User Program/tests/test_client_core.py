@@ -24,6 +24,7 @@ class ClientCoreTests(unittest.TestCase):
         """Server URLs should always target API v1."""
 
         self.assertEqual(normalize_server_url("127.0.0.1:8000"), "http://127.0.0.1:8000/api/v1")
+        self.assertEqual(normalize_server_url("192.168.1.10:8000"), "http://192.168.1.10:8000/api/v1")
         self.assertEqual(normalize_server_url("http://host:8000/api/v1"), "http://host:8000/api/v1")
 
     def test_config_manager_roundtrips_config(self) -> None:
@@ -374,6 +375,59 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/report-filters", requested_paths[8])
         self.assertIn("/report-filters/8", requested_paths[9])
         self.assertIn("/report-filters/8", requested_paths[10])
+
+    def test_reference_selector_filters_and_selects_offscreen(self) -> None:
+        """ReferenceSelectorDialog should filter rows and return the selected API row."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.selectors import ReferenceSelectorDialog
+
+        app = QApplication.instance() or QApplication([])
+        dialog = ReferenceSelectorDialog(
+            "Products",
+            [
+                {"id": 1, "sku": "A-1", "name": "Alpha"},
+                {"id": 2, "sku": "B-2", "name": "Beta"},
+            ],
+            [("id", "ID"), ("sku", "SKU"), ("name", "Name")],
+        )
+        dialog.search.setText("beta")
+        self.assertEqual(dialog.table.rowCount(), 1)
+        dialog.table.selectRow(0)
+        dialog._accept_current()
+
+        self.assertEqual(dialog.selected_row()["id"], 2)
+        dialog.close()
+        app.processEvents()
+
+    def test_main_window_disables_actions_by_permissions_offscreen(self) -> None:
+        """Action buttons should be disabled when the role lacks create/post permissions."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication, QPushButton
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Auditor",
+                    role_name="Auditor",
+                    permissions=["sale.view", "reports.view", "warehouse.view", "goods.view"],
+                )
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        buttons = {str(button.property("textKey")): button for button in window.findChildren(QPushButton) if button.property("textKey")}
+
+        self.assertFalse(buttons["sales.create_sale"].isEnabled())
+        self.assertFalse(buttons["reports.export"].isEnabled())
+        self.assertTrue(buttons["catalog.refresh"].isEnabled())
+        window.close()
+        app.processEvents()
 
     def test_reports_page_filters_export_and_save_offscreen(self) -> None:
         """The PyQt reports page should pass filters to report, export, and save helpers."""

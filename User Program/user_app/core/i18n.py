@@ -255,6 +255,8 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "placeholder.body": "Серверная логика для этого раздела еще не реализована.",
         "common.error": "Ошибка",
         "common.success": "Готово",
+        "common.search": "Поиск",
+        "common.permission_required": "Недостаточно прав для этого действия",
     },
     "tk": {
         "app.title": "ERP hasap ulgamy",
@@ -503,6 +505,8 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "placeholder.body": "Bu bölüm üçin serwer logikasy entek ýerine ýetirilmedi.",
         "common.error": "Ýalňyşlyk",
         "common.success": "Taýýar",
+        "common.search": "Gozleg",
+        "common.permission_required": "Bu amal ucin hukuk yetarli dal",
     },
     "en": {
         "app.title": "ERP Accounting System",
@@ -751,6 +755,8 @@ TRANSLATIONS: dict[LanguageCode, dict[str, str]] = {
         "placeholder.body": "Server logic for this section is not implemented yet.",
         "common.error": "Error",
         "common.success": "Done",
+        "common.search": "Search",
+        "common.permission_required": "You do not have permission for this action",
     },
 }
 
