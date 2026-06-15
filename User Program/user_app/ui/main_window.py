@@ -361,6 +361,7 @@ class MainWindow(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("background: transparent;")
         
         container = QWidget()
@@ -2956,3 +2957,10 @@ class MainWindow(QWidget):
             allowed = all(permission in permissions for permission in required)
             button.setEnabled(allowed)
             button.setToolTip("" if allowed else self.translator.text("common.permission_required"))
+
+    def resizeEvent(self, event: object) -> None:
+        """Handle window resizing to toggle sidebar visibility based on width."""
+
+        super().resizeEvent(event)
+        # Auto-hide the navigation sidebar if the window width is below 1100 pixels
+        self.nav.setHidden(self.width() < 1100)
