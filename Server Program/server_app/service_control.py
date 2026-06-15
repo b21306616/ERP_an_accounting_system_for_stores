@@ -7,6 +7,7 @@ from enum import Enum
 import ctypes
 import os
 from pathlib import Path
+import site
 import sys
 import time
 from types import ModuleType, SimpleNamespace
@@ -117,6 +118,57 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
+def _dedupe_existing_paths(paths: list[str | Path]) -> list[str]:
+    """Return existing paths once, preserving order and original spelling."""
+
+    unique_paths: list[str] = []
+    seen: set[str] = set()
+    for raw_path in paths:
+        if not raw_path:
+            continue
+        path = Path(raw_path)
+        if not path.exists():
+            continue
+        normalized = _normalize_registry_path(path)
+        if normalized in seen:
+            continue
+        unique_paths.append(str(path))
+        seen.add(normalized)
+    return unique_paths
+
+
+def _service_python_path_entries() -> list[str]:
+    """Return import paths needed by pythonservice.exe for this source checkout."""
+
+    candidates: list[str | Path] = [_project_root()]
+
+    try:
+        candidates.extend(site.getsitepackages())
+    except AttributeError:
+        pass
+
+    try:
+        candidates.append(site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    for path in sys.path:
+        if not path:
+            continue
+        path_parts = {part.lower() for part in Path(path).parts}
+        path_name = Path(path).name.lower()
+        if "site-packages" in path_parts or path_name in {"win32", "pythonwin"}:
+            candidates.append(path)
+
+    return _dedupe_existing_paths(candidates)
+
+
+def _service_python_path_value() -> str:
+    """Return the registry value used to extend pythonservice.exe imports."""
+
+    return os.pathsep.join(_service_python_path_entries())
+
+
 def _is_missing_service_error(exc: BaseException) -> bool:
     """Return whether a pywin32 error means the service is not installed."""
 
@@ -215,17 +267,20 @@ def _normalize_registry_path(path: str | Path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
 
 
-def _registered_python_path_matches_project(value: str | None) -> bool:
-    """Return whether a registered PythonPath value includes this project root."""
+def _registered_python_path_is_current(value: str | None) -> bool:
+    """Return whether the registered PythonPath includes required service imports."""
 
     if not value:
         return False
 
-    expected = _normalize_registry_path(_project_root())
-    return any(
-        _normalize_registry_path(path_part) == expected
+    registered_paths = {
+        _normalize_registry_path(path_part)
         for path_part in value.split(os.pathsep)
         if path_part.strip()
+    }
+    return all(
+        _normalize_registry_path(path_part) in registered_paths
+        for path_part in _service_python_path_entries()
     )
 
 
@@ -454,7 +509,7 @@ class WindowsServiceController:
 
         return (
             _read_registered_service_class() != SERVICE_CLASS
-            or not _registered_python_path_matches_project(_read_registered_project_python_path())
+            or not _registered_python_path_is_current(_read_registered_project_python_path())
         )
 
     def wait_for_run_state(
@@ -544,11 +599,11 @@ class WindowsServiceController:
         """Register this checkout so pythonservice.exe can import server_app."""
 
         try:
-            project_root = str(_project_root())
+            service_python_path = _service_python_path_value()
             if isinstance(self.modules, _PyWin32Modules):
-                _write_registered_project_python_path(project_root)
+                _write_registered_project_python_path(service_python_path)
             else:
-                self.regutil.RegisterNamedPath(PYTHONPATH_REGISTRY_NAME, project_root)
+                self.regutil.RegisterNamedPath(PYTHONPATH_REGISTRY_NAME, service_python_path)
         except Exception as exc:
             raise ServiceControlError(_status_error_message("register Python path for", exc)) from exc
 

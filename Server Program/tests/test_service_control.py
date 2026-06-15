@@ -17,6 +17,7 @@ from server_app.service_control import (
     ServiceStartType,
     WindowsServiceController,
     _project_root,
+    _service_python_path_value,
     service_health_url,
     wait_for_service_health,
 )
@@ -140,7 +141,10 @@ class ServiceControlTests(unittest.TestCase):
 
         return (
             patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
-            patch("server_app.service_control._read_registered_project_python_path", return_value=str(_project_root())),
+            patch(
+                "server_app.service_control._read_registered_project_python_path",
+                return_value=_service_python_path_value(),
+            ),
         )
 
     def test_status_maps_running_automatic_service(self) -> None:
@@ -235,6 +239,48 @@ class ServiceControlTests(unittest.TestCase):
             status = controller.get_status()
 
         self.assertTrue(status.needs_repair)
+
+    def test_status_flags_repair_when_dependency_python_path_is_missing(self) -> None:
+        """The service should repair old registrations that lack dependency paths."""
+
+        modules = _fake_modules(run_state=1, start_type=2)
+        controller = WindowsServiceController(modules)
+        project_root = str(_project_root())
+        dependency_path = r"C:\Python\Lib\site-packages"
+
+        with (
+            patch("server_app.service_control._read_registered_service_class", return_value=SERVICE_CLASS),
+            patch("server_app.service_control._read_registered_project_python_path", return_value=project_root),
+            patch(
+                "server_app.service_control._service_python_path_entries",
+                return_value=[project_root, dependency_path],
+            ),
+        ):
+            status = controller.get_status()
+
+        self.assertTrue(status.needs_repair)
+
+    def test_missing_service_registers_dependency_python_paths(self) -> None:
+        """Install should register all import paths needed by pythonservice.exe."""
+
+        modules = _fake_modules(installed=False)
+        controller = WindowsServiceController(modules)
+        project_root = str(_project_root())
+        dependency_path = r"C:\Python\Lib\site-packages"
+
+        with (
+            patch("server_app.service_control.is_user_admin", return_value=True),
+            patch(
+                "server_app.service_control._service_python_path_entries",
+                return_value=[project_root, dependency_path],
+            ),
+        ):
+            controller.ensure_installed()
+
+        self.assertEqual(
+            modules.state["registered_path"],
+            ("ERPAccountingServer", f"{project_root};{dependency_path}"),
+        )
 
     def test_start_running_disabled_service_only_enables_autostart(self) -> None:
         """Start should repair startup mode even when the service is already running."""

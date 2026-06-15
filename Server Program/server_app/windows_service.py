@@ -7,7 +7,6 @@ import win32event
 import win32service
 import win32serviceutil
 
-from server_app.server_runtime import ApiServiceRuntime
 from server_app.service_control import (
     SERVICE_CLASS,
     SERVICE_DESCRIPTION,
@@ -29,14 +28,15 @@ class ERPAccountingWindowsService(win32serviceutil.ServiceFramework):
         super().__init__(args)
         self.stop_event = win32event.CreateEvent(None, 0, 0, None)
         self.stop_requested = False
-        self.runtime = ApiServiceRuntime()
+        self.runtime = None
 
     def SvcStop(self) -> None:
         """Handle Stop from Services, Task Manager, or the GUI controller."""
 
         self.stop_requested = True
         self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
-        self.runtime.stop()
+        if self.runtime is not None:
+            self.runtime.stop()
         win32event.SetEvent(self.stop_event)
 
     def _stop_was_requested(self) -> bool:
@@ -50,6 +50,9 @@ class ERPAccountingWindowsService(win32serviceutil.ServiceFramework):
         servicemanager.LogInfoMsg(f"{SERVICE_DISPLAY_NAME} service is starting with class {SERVICE_CLASS}.")
         try:
             self.ReportServiceStatus(win32service.SERVICE_START_PENDING, waitHint=60000)
+            from server_app.server_runtime import ApiServiceRuntime
+
+            self.runtime = ApiServiceRuntime()
             self.runtime.prepare()
             clear_service_error_log()
             if self._stop_was_requested():
@@ -65,7 +68,8 @@ class ERPAccountingWindowsService(win32serviceutil.ServiceFramework):
             servicemanager.LogErrorMsg(f"{SERVICE_DISPLAY_NAME} service failed: {exc}")
             raise
         finally:
-            self.runtime.close()
+            if self.runtime is not None:
+                self.runtime.close()
 
 
 if __name__ == "__main__":

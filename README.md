@@ -21,7 +21,7 @@ SQLAlchemy + pyodbc for MSSQL access, and Alembic for database migrations.
 
 Alembic revision IDs must be **32 characters or fewer** (Alembic default `version_num` column limit).
 
-## Install
+## Server Install
 
 From the `Server Program` directory:
 
@@ -29,7 +29,7 @@ From the `Server Program` directory:
 pip install -r requirements.txt
 ```
 
-## Run
+## Server Run
 
 ```powershell
 cd "Server Program"
@@ -63,6 +63,20 @@ python reset_env.py
 Options: `--db-only`, `--config-only`, `--cache-only`.
 
 After a full reset, run `python server.py` again to launch first-run setup.
+
+## User Program Install
+
+From the `User Program` directory:
+
+```powershell
+pip install -r requirements.txt
+```
+
+Then run the endpoint client with:
+
+```powershell
+python user.py
+```
 
 ## Test
 
