@@ -541,6 +541,16 @@ class ApiClient:
 
         return dict(self._request("POST", f"/cash-shifts/{shift_id}/close", json=payload))
 
+    def get_cash_shift_x_report(self, shift_id: int) -> dict[str, Any]:
+        """Return an X-report snapshot for one shift."""
+
+        return dict(self._request("GET", f"/cash-shifts/{shift_id}/x-report"))
+
+    def create_cash_shift_z_report(self, shift_id: int, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Create a Z-report for one shift."""
+
+        return dict(self._request("POST", f"/cash-shifts/{shift_id}/z-report", json=payload or {}))
+
     def create_cash_operation(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a cash operation."""
 

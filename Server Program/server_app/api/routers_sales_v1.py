@@ -40,6 +40,7 @@ from server_app.schemas.sales_v1 import (
     CashRegisterCreate,
     CashShiftClose,
     CashShiftOpen,
+    CashShiftZReportCreate,
     SaleCreate,
     SaleLineCreate,
     SaleReturnCreate,
@@ -184,6 +185,92 @@ def _cash_shift_payload(row: CashShift) -> dict[str, Any]:
         "status": row.status,
         "posted_sales_cash_tmt": _decimal(sales_cash, "0.01"),
         "posted_sales_transfer_tmt": _decimal(sales_transfer, "0.01"),
+    }
+
+
+def _cash_shift_report_payload(session: Session, shift: CashShift, report_type: str) -> dict[str, Any]:
+    """Return X/Z report totals for one cashier shift."""
+
+    shift_end = shift.closed_at or now_utc()
+    sales = (
+        session.query(Sale)
+        .filter(Sale.cash_shift_id == shift.id, Sale.status == "posted")
+        .order_by(Sale.id)
+        .all()
+    )
+    sale_returns = (
+        session.query(SaleReturn)
+        .filter(SaleReturn.cash_shift_id == shift.id, SaleReturn.status == "posted")
+        .order_by(SaleReturn.id)
+        .all()
+    )
+    payments = (
+        session.query(Payment)
+        .filter(Payment.cash_shift_id == shift.id, Payment.status == "posted")
+        .order_by(Payment.id)
+        .all()
+    )
+    operations = (
+        session.query(CashOperation)
+        .filter(CashOperation.doc_date >= shift.opened_at, CashOperation.doc_date <= shift_end)
+        .filter(or_(CashOperation.cash_shift_id == shift.id, CashOperation.cash_register_to_id == shift.cash_register_id))
+        .order_by(CashOperation.id)
+        .all()
+    )
+
+    sale_cash = sum((money(row.paid_cash_tmt) for row in sales), Decimal("0.00"))
+    sale_transfer = sum((money(row.paid_transfer_tmt) for row in sales), Decimal("0.00"))
+    return_cash = sum((money(row.refund_cash_tmt) for row in sale_returns), Decimal("0.00"))
+    return_transfer = sum((money(row.refund_transfer_tmt) for row in sale_returns), Decimal("0.00"))
+    incoming_cash = sum((money(row.amount_tmt) for row in payments if row.direction == "incoming" and row.payment_method == "cash"), Decimal("0.00"))
+    outgoing_cash = sum((money(row.amount_tmt) for row in payments if row.direction == "outgoing" and row.payment_method == "cash"), Decimal("0.00"))
+    incoming_transfer = sum((money(row.amount_tmt) for row in payments if row.direction == "incoming" and row.payment_method != "cash"), Decimal("0.00"))
+    outgoing_transfer = sum((money(row.amount_tmt) for row in payments if row.direction == "outgoing" and row.payment_method != "cash"), Decimal("0.00"))
+    collections = sum((money(row.amount_tmt) for row in operations if row.operation_type == "collection" and row.cash_shift_id == shift.id), Decimal("0.00"))
+    transfer_out = sum((money(row.amount_tmt) for row in operations if row.operation_type == "transfer" and row.cash_shift_id == shift.id), Decimal("0.00"))
+    transfer_in = sum((money(row.amount_tmt) for row in operations if row.operation_type == "transfer" and row.cash_register_to_id == shift.cash_register_id), Decimal("0.00"))
+    expected_cash = money(shift.opening_amount + sale_cash + incoming_cash + transfer_in - outgoing_cash - return_cash - collections - transfer_out)
+    actual_cash = money(shift.closing_amount) if shift.closing_amount is not None else None
+    variance = money(actual_cash - expected_cash) if actual_cash is not None else None
+
+    return {
+        "report_type": report_type,
+        "generated_at": now_utc().isoformat(),
+        "shift_id": shift.id,
+        "shift_status": shift.status,
+        "cash_register_id": shift.cash_register_id,
+        "cash_register_name": shift.cash_register.name if shift.cash_register else None,
+        "opened_at": shift.opened_at.isoformat() if shift.opened_at else None,
+        "closed_at": shift.closed_at.isoformat() if shift.closed_at else None,
+        "opening_amount_tmt": _decimal(shift.opening_amount, "0.01"),
+        "sale_count": len(sales),
+        "return_count": len(sale_returns),
+        "sale_cash_tmt": _decimal(sale_cash, "0.01"),
+        "sale_transfer_tmt": _decimal(sale_transfer, "0.01"),
+        "return_cash_tmt": _decimal(return_cash, "0.01"),
+        "return_transfer_tmt": _decimal(return_transfer, "0.01"),
+        "incoming_cash_payments_tmt": _decimal(incoming_cash, "0.01"),
+        "outgoing_cash_payments_tmt": _decimal(outgoing_cash, "0.01"),
+        "incoming_transfer_payments_tmt": _decimal(incoming_transfer, "0.01"),
+        "outgoing_transfer_payments_tmt": _decimal(outgoing_transfer, "0.01"),
+        "collections_tmt": _decimal(collections, "0.01"),
+        "transfer_in_tmt": _decimal(transfer_in, "0.01"),
+        "transfer_out_tmt": _decimal(transfer_out, "0.01"),
+        "expected_cash_tmt": _decimal(expected_cash, "0.01"),
+        "actual_cash_tmt": _decimal(actual_cash, "0.01") if actual_cash is not None else None,
+        "variance_tmt": _decimal(variance, "0.01") if variance is not None else None,
+        "sales": [_sale_payload(row) for row in sales],
+        "payments": [
+            {
+                "id": row.id,
+                "doc_number": row.doc_number,
+                "direction": row.direction,
+                "payment_method": row.payment_method,
+                "amount_tmt": _decimal(row.amount_tmt, "0.01"),
+            }
+            for row in payments
+        ],
+        "cash_operations": [_cash_operation_payload(row) for row in operations if row.cash_shift_id == shift.id],
     }
 
 
@@ -838,6 +925,42 @@ def close_cash_shift(
     shift.closing_amount = money(payload.closing_amount)
     session.commit()
     return success_response(_cash_shift_payload(shift))
+
+
+
+
+@router.get("/cash-shifts/{shift_id}/x-report")
+def get_cash_shift_x_report(
+    shift_id: int,
+    _: User = Depends(require_cashier_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return an X-report snapshot without closing the shift."""
+
+    shift = _get_or_404(session, CashShift, shift_id, "Cash shift")
+    return success_response(_cash_shift_report_payload(session, shift, "X"))
+
+
+@router.post("/cash-shifts/{shift_id}/z-report")
+def create_cash_shift_z_report(
+    shift_id: int,
+    payload: CashShiftZReportCreate,
+    current_user: User = Depends(require_shift_close),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return a Z-report and close the shift when requested."""
+
+    shift = _get_or_404(session, CashShift, shift_id, "Cash shift")
+    if payload.close_shift and shift.status == "open":
+        current_report = _cash_shift_report_payload(session, shift, "Z")
+        closing_amount = money(payload.closing_amount) if payload.closing_amount is not None else money(current_report["expected_cash_tmt"])
+        shift.status = "closed"
+        shift.closed_by_user_id = current_user.id
+        shift.closed_at = now_utc()
+        shift.closing_amount = closing_amount
+        session.commit()
+        session.refresh(shift)
+    return success_response(_cash_shift_report_payload(session, shift, "Z"))
 
 
 @router.post("/cash-operations", status_code=status.HTTP_201_CREATED)

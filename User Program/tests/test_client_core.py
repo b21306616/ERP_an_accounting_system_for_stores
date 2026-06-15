@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import os
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import Mock
@@ -11,6 +13,7 @@ from unittest.mock import Mock
 from user_app.api.client import ApiClient
 from user_app.core.config import ClientConfig, ClientConfigManager, normalize_server_url
 from user_app.core.i18n import TRANSLATIONS, Translator
+from user_app.hardware.interfaces import BarcodeScanner, CashDrawer, FiscalDevice, ReceiptPrinter, ScaleDevice
 from user_app.hardware.simulator import HardwareSimulator
 
 
@@ -300,6 +303,8 @@ class ClientCoreTests(unittest.TestCase):
         client.create_cash_register({"name": "Register", "warehouse_id": 1})
         client.open_cash_shift({"cash_register_id": 1, "opening_amount": "0"})
         client.close_cash_shift(3, {"closing_amount": "0"})
+        client.get_cash_shift_x_report(3)
+        client.create_cash_shift_z_report(3, {"closing_amount": "0"})
         client.create_cash_operation({"cash_shift_id": 3, "cash_register_from_id": 1, "operation_type": "collection", "amount_tmt": "1.00"})
 
         response.json.return_value = {
@@ -311,7 +316,7 @@ class ClientCoreTests(unittest.TestCase):
         report = client.get_sales_report()
 
         self.assertEqual(report["sales_total_tmt"], "30.00")
-        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-11:]]
+        requested_paths = [call.args[1] for call in client.session.request.call_args_list[-13:]]
         self.assertIn("/sales", requested_paths[0])
         self.assertIn("/sales/9/post", requested_paths[1])
         self.assertIn("/sales/9/cancel", requested_paths[2])
@@ -321,8 +326,10 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/cash-registers", requested_paths[6])
         self.assertIn("/cash-shifts/open", requested_paths[7])
         self.assertIn("/cash-shifts/3/close", requested_paths[8])
-        self.assertIn("/cash-operations", requested_paths[9])
-        self.assertIn("/reports/sales", requested_paths[10])
+        self.assertIn("/cash-shifts/3/x-report", requested_paths[9])
+        self.assertIn("/cash-shifts/3/z-report", requested_paths[10])
+        self.assertIn("/cash-operations", requested_paths[11])
+        self.assertIn("/reports/sales", requested_paths[12])
 
     def test_api_client_pricing_promotion_loyalty_helpers_use_envelopes(self) -> None:
         """Stage 3 pricing, promotion, and loyalty helpers should target API v1 paths."""
@@ -403,6 +410,97 @@ class ClientCoreTests(unittest.TestCase):
         self.assertIn("/loyalty-cards/8/adjust", requested_paths[10])
         self.assertIn("/loyalty-cards/8/transactions", requested_paths[11])
 
+    def test_cashier_cart_posts_sale_and_previews_receipt_offscreen(self) -> None:
+        """The PyQt cashier cart should build a sale payload and receipt preview."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Cashier",
+                    role_name="Cashier",
+                    permissions=[
+                        "cashier.view",
+                        "sale.view",
+                        "warehouse.view",
+                        "reports.view",
+                    ],
+                )
+                self.created_sale_payload: dict[str, object] | None = None
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_currencies(self) -> list[dict[str, object]]:
+                return [{"id": 1, "code": "TMT"}]
+
+            def create_sale(self, payload: dict[str, object]) -> dict[str, object]:
+                self.created_sale_payload = payload
+                return {"id": 9}
+
+            def post_sale(self, sale_id: int) -> dict[str, object]:
+                return {
+                    "id": sale_id,
+                    "doc_number": "SAL-TEST",
+                    "total_amount_tmt": "18.00",
+                    "payment_type": "cash",
+                    "lines": [
+                        {
+                            "product_name": "Sugar",
+                            "quantity": "2.0000",
+                            "amount_tmt": "18.00",
+                        }
+                    ],
+                }
+
+            def get_sales(self, status: str | None = None) -> list[dict[str, object]]:
+                return []
+
+            def get_debt_ledger(self, **_: object) -> list[dict[str, object]]:
+                return []
+
+            def get_cash_shifts(self, status: str | None = None) -> list[dict[str, object]]:
+                return []
+
+            def get_cash_flow_report(self) -> dict[str, str]:
+                return {"net_cash_flow_tmt": "0.00"}
+
+            def get_stock_balances(self, **_: object) -> list[dict[str, object]]:
+                return []
+
+            def get_stock_movements(self, **_: object) -> list[dict[str, object]]:
+                return []
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))
+        try:
+            window.cashier_product_id_input.setText("5")
+            window.cashier_product_name_input.setText("Sugar")
+            window.cashier_quantity_input.setText("2")
+            window.cashier_price_input.setText("10")
+            window.cashier_discount_input.setText("10")
+            window.cashier_add_item_from_inputs()
+            window.cashier_register_id_input.setText("1")
+            window.cashier_shift_id_input.setText("3")
+            window.cashier_warehouse_id_input.setText("2")
+            window.cashier_currency_id_input.setText("1")
+            window.cashier_payment_type_combo.setCurrentText("cash")
+
+            window.cashier_checkout()
+
+            fake = window.api_client
+            self.assertEqual(fake.created_sale_payload["warehouse_id"], 2)
+            self.assertEqual(fake.created_sale_payload["lines"][0]["product_id"], 5)
+            self.assertIn("SAL-TEST", window.cashier_receipt_preview.toPlainText())
+            self.assertEqual(window.hardware.drawer_open_count, 1)
+            self.assertEqual(window.hardware.fiscal_operations[-1], Decimal("18.00"))
+        finally:
+            window.close()
+            app.processEvents()
+
     def test_hardware_simulator_records_operations(self) -> None:
         """Hardware simulator should behave predictably."""
 
@@ -416,6 +514,11 @@ class ClientCoreTests(unittest.TestCase):
         self.assertEqual(len(hardware.printed_receipts), 1)
         self.assertEqual(hardware.drawer_open_count, 1)
         self.assertEqual(len(hardware.fiscal_operations), 1)
+        self.assertIsInstance(hardware, BarcodeScanner)
+        self.assertIsInstance(hardware, ReceiptPrinter)
+        self.assertIsInstance(hardware, CashDrawer)
+        self.assertIsInstance(hardware, ScaleDevice)
+        self.assertIsInstance(hardware, FiscalDevice)
 
 
 if __name__ == "__main__":

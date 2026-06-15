@@ -916,6 +916,15 @@ class ApiV1ContractTests(unittest.TestCase):
         )
         self.assertEqual(collection.status_code, 201)
 
+        x_report = requests.get(f"{self.base_url}/cash-shifts/{shift_id}/x-report", headers=headers, timeout=2)
+        self.assertEqual(x_report.status_code, 200)
+        self.assertEqual(x_report.json()["data"]["report_type"], "X")
+        self.assertEqual(x_report.json()["data"]["shift_status"], "open")
+        self.assertEqual(x_report.json()["data"]["expected_cash_tmt"], "17.00")
+        self.assertEqual(x_report.json()["data"]["sale_cash_tmt"], "10.00")
+        self.assertEqual(x_report.json()["data"]["incoming_cash_payments_tmt"], "5.00")
+        self.assertEqual(x_report.json()["data"]["collections_tmt"], "3.00")
+
         closed = requests.post(
             f"{self.base_url}/cash-shifts/{shift_id}/close",
             json={"closing_amount": "17.00"},
@@ -924,6 +933,13 @@ class ApiV1ContractTests(unittest.TestCase):
         )
         self.assertEqual(closed.status_code, 200)
         self.assertEqual(closed.json()["data"]["status"], "closed")
+
+        z_report = requests.post(f"{self.base_url}/cash-shifts/{shift_id}/z-report", json={}, headers=headers, timeout=2)
+        self.assertEqual(z_report.status_code, 200)
+        self.assertEqual(z_report.json()["data"]["report_type"], "Z")
+        self.assertEqual(z_report.json()["data"]["shift_status"], "closed")
+        self.assertEqual(z_report.json()["data"]["actual_cash_tmt"], "17.00")
+        self.assertEqual(z_report.json()["data"]["variance_tmt"], "0.00")
 
         sales_report = requests.get(f"{self.base_url}/reports/sales", headers=headers, timeout=2)
         self.assertEqual(sales_report.status_code, 200)

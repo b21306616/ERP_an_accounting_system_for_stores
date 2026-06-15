@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 from user_app.api.client import ApiClient, ApiClientError
 from user_app.core.i18n import (
     CATALOG_TABLE_HEADER_KEYS,
+    CASHIER_CART_HEADER_KEYS,
     CASHIER_TABLE_HEADER_KEYS,
     COUNTERPARTY_TABLE_HEADER_KEYS,
     PRICING_TABLE_HEADER_KEYS,
@@ -54,6 +55,7 @@ class MainWindow(QWidget):
         self.api_client = api_client
         self.translator = translator
         self.hardware = HardwareSimulator()
+        self.cashier_cart: list[dict[str, object]] = []
         self.setObjectName("MainWindow")
         self.setMinimumSize(980, 620)
         self.nav = QListWidget()
@@ -457,7 +459,7 @@ class MainWindow(QWidget):
         return page
 
     def _build_cashier_page(self) -> QWidget:
-        """Build cashier shift and cash-operation page."""
+        """Build cashier shift controls and cart workflow page."""
 
         page, layout, _title = self._page("cashier.title")
         action_row = QHBoxLayout()
@@ -479,14 +481,118 @@ class MainWindow(QWidget):
         for widget in (refresh, create_register, open_shift, close_shift, cash_operation):
             action_row.addWidget(widget)
         action_row.addStretch(1)
+
         self.cashier_table = QTableWidget(0, len(CASHIER_TABLE_HEADER_KEYS))
         self._set_cashier_table_headers()
         self.cashier_text = QPlainTextEdit()
         self.cashier_text.setReadOnly(True)
-        self.cashier_text.setMinimumHeight(130)
+        self.cashier_text.setMinimumHeight(110)
+
+        cart_title = QLabel(self.translator.text("cashier.cart.title"))
+        cart_title.setProperty("bodyKey", "cashier.cart.title")
+
+        entry_row = QHBoxLayout()
+        self.cashier_barcode_input = QLineEdit()
+        self.cashier_product_id_input = QLineEdit()
+        self.cashier_product_name_input = QLineEdit()
+        self.cashier_quantity_input = QLineEdit("1")
+        self.cashier_price_input = QLineEdit("0")
+        self.cashier_discount_input = QLineEdit("0")
+        for widget, key in (
+            (self.cashier_barcode_input, "cashier.form.barcode"),
+            (self.cashier_product_id_input, "cashier.form.product_id"),
+            (self.cashier_product_name_input, "cashier.form.product_name"),
+            (self.cashier_quantity_input, "cashier.form.quantity"),
+            (self.cashier_price_input, "cashier.form.price"),
+            (self.cashier_discount_input, "cashier.form.discount_percent"),
+        ):
+            widget.setProperty("placeholderKey", key)
+            widget.setPlaceholderText(self.translator.text(key))
+            entry_row.addWidget(widget)
+        scan = QPushButton()
+        scan.setProperty("textKey", "cashier.cart.scan")
+        scan.clicked.connect(self.cashier_scan_barcode)
+        add = QPushButton()
+        add.setProperty("textKey", "cashier.cart.add")
+        add.clicked.connect(self.cashier_add_item_from_inputs)
+        update = QPushButton()
+        update.setProperty("textKey", "cashier.cart.update")
+        update.clicked.connect(self.cashier_update_selected_item)
+        remove = QPushButton()
+        remove.setProperty("textKey", "cashier.cart.remove")
+        remove.clicked.connect(self.cashier_remove_selected_item)
+        clear = QPushButton()
+        clear.setProperty("textKey", "cashier.cart.clear")
+        clear.clicked.connect(self.cashier_clear_cart)
+        for button in (scan, add, update, remove, clear):
+            entry_row.addWidget(button)
+
+        self.cashier_cart_table = QTableWidget(0, len(CASHIER_CART_HEADER_KEYS))
+        self.cashier_cart_table.setMinimumHeight(170)
+        self.cashier_cart_table.itemSelectionChanged.connect(self.cashier_load_selected_cart_item)
+        self._set_cashier_cart_table_headers()
+
+        payment_row = QHBoxLayout()
+        self.cashier_register_id_input = QLineEdit()
+        self.cashier_shift_id_input = QLineEdit()
+        self.cashier_warehouse_id_input = QLineEdit()
+        self.cashier_currency_id_input = QLineEdit()
+        self.cashier_customer_id_input = QLineEdit()
+        self.cashier_payment_type_combo = QComboBox()
+        self.cashier_payment_type_combo.addItems(["cash", "transfer", "mixed", "debt"])
+        self.cashier_paid_cash_input = QLineEdit("0")
+        self.cashier_paid_transfer_input = QLineEdit("0")
+        self.cashier_debt_amount_input = QLineEdit("0")
+        self.cashier_closing_amount_input = QLineEdit()
+        for widget, key in (
+            (self.cashier_register_id_input, "cashier.form.register_id"),
+            (self.cashier_shift_id_input, "cashier.form.shift_id"),
+            (self.cashier_warehouse_id_input, "cashier.form.warehouse_id"),
+            (self.cashier_currency_id_input, "cashier.form.currency_id"),
+            (self.cashier_customer_id_input, "cashier.form.customer_id"),
+            (self.cashier_paid_cash_input, "cashier.form.paid_cash"),
+            (self.cashier_paid_transfer_input, "cashier.form.paid_transfer"),
+            (self.cashier_debt_amount_input, "cashier.form.debt_amount"),
+            (self.cashier_closing_amount_input, "cashier.form.closing_amount"),
+        ):
+            widget.setProperty("placeholderKey", key)
+            widget.setPlaceholderText(self.translator.text(key))
+            payment_row.addWidget(widget)
+        payment_row.addWidget(self.cashier_payment_type_combo)
+        checkout = QPushButton()
+        checkout.setObjectName("PrimaryButton")
+        checkout.setProperty("textKey", "cashier.cart.checkout")
+        checkout.clicked.connect(self.cashier_checkout)
+        print_receipt = QPushButton()
+        print_receipt.setProperty("textKey", "cashier.cart.print")
+        print_receipt.clicked.connect(self.cashier_print_receipt)
+        x_report = QPushButton()
+        x_report.setProperty("textKey", "cashier.cart.x_report")
+        x_report.clicked.connect(self.cashier_x_report)
+        z_report = QPushButton()
+        z_report.setProperty("textKey", "cashier.cart.z_report")
+        z_report.clicked.connect(self.cashier_z_report)
+        for button in (checkout, print_receipt, x_report, z_report):
+            payment_row.addWidget(button)
+
+        self.cashier_total_label = QLabel()
+        receipt_label = QLabel(self.translator.text("cashier.cart.receipt"))
+        receipt_label.setProperty("bodyKey", "cashier.cart.receipt")
+        self.cashier_receipt_preview = QPlainTextEdit()
+        self.cashier_receipt_preview.setReadOnly(True)
+        self.cashier_receipt_preview.setMinimumHeight(130)
+
         layout.addLayout(action_row)
         layout.addWidget(self.cashier_table, 1)
         layout.addWidget(self.cashier_text)
+        layout.addWidget(cart_title)
+        layout.addLayout(entry_row)
+        layout.addWidget(self.cashier_cart_table)
+        layout.addWidget(self.cashier_total_label)
+        layout.addLayout(payment_row)
+        layout.addWidget(receipt_label)
+        layout.addWidget(self.cashier_receipt_preview)
+        self._refresh_cashier_cart_table()
         return page
 
     def _build_reports_page(self) -> QWidget:
@@ -1391,6 +1497,302 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
+    def cashier_scan_barcode(self) -> None:
+        """Scan or resolve a barcode into the cart entry fields."""
+
+        barcode = self.hardware.scan(self.cashier_barcode_input.text().strip() or None)
+        self.cashier_barcode_input.setText(barcode)
+
+        def action() -> None:
+            product = self.api_client.find_product_by_barcode(barcode)
+            self._cashier_set_product_inputs(product)
+
+        self._run_api(action)
+
+    def cashier_add_item_from_inputs(self) -> None:
+        """Add the current product entry to the cashier cart."""
+
+        def action() -> None:
+            barcode = self.cashier_barcode_input.text().strip()
+            if barcode and not self.cashier_product_id_input.text().strip():
+                self._cashier_set_product_inputs(self.api_client.find_product_by_barcode(barcode))
+            self.cashier_cart.append(self._cashier_cart_row_from_inputs())
+            self._refresh_cashier_cart_table()
+
+        self._run_api(action)
+
+    def cashier_update_selected_item(self) -> None:
+        """Update the selected cart row from entry fields."""
+
+        def action() -> None:
+            row = self._cashier_selected_row()
+            self.cashier_cart[row] = self._cashier_cart_row_from_inputs()
+            self._refresh_cashier_cart_table()
+            self.cashier_cart_table.selectRow(row)
+
+        self._run_api(action)
+
+    def cashier_remove_selected_item(self) -> None:
+        """Remove the selected cart row."""
+
+        try:
+            row = self._cashier_selected_row()
+        except ValueError:
+            return
+        del self.cashier_cart[row]
+        self._refresh_cashier_cart_table()
+
+    def cashier_clear_cart(self) -> None:
+        """Clear all cart rows and receipt preview."""
+
+        self.cashier_cart.clear()
+        self.cashier_receipt_preview.clear()
+        self._refresh_cashier_cart_table()
+
+    def cashier_load_selected_cart_item(self) -> None:
+        """Load the selected cart row into editable fields."""
+
+        row = self.cashier_cart_table.currentRow()
+        if row < 0 or row >= len(self.cashier_cart):
+            return
+        item = self.cashier_cart[row]
+        self.cashier_product_id_input.setText(str(item.get("product_id", "")))
+        self.cashier_product_name_input.setText(str(item.get("product_name", "")))
+        self.cashier_quantity_input.setText(str(item.get("quantity", "1")))
+        self.cashier_price_input.setText(str(item.get("price_final", "0")))
+        self.cashier_discount_input.setText(str(item.get("discount_percent", "0")))
+
+    def cashier_checkout(self) -> None:
+        """Create, post, and preview a cashier sale from the current cart."""
+
+        def action() -> None:
+            if not self.cashier_cart:
+                raise ValueError("Cashier cart is empty.")
+            total = self._cashier_cart_total()
+            payment_type = self.cashier_payment_type_combo.currentText() or "cash"
+            paid_cash = Decimal("0.00")
+            paid_transfer = Decimal("0.00")
+            debt_amount = Decimal("0.00")
+            if payment_type == "cash":
+                paid_cash = total
+                self.cashier_paid_cash_input.setText(str(total))
+            elif payment_type == "transfer":
+                paid_transfer = total
+                self.cashier_paid_transfer_input.setText(str(total))
+            elif payment_type == "debt":
+                debt_amount = total
+                self.cashier_debt_amount_input.setText(str(total))
+            else:
+                paid_cash = self._cashier_decimal_text(self.cashier_paid_cash_input.text())
+                paid_transfer = self._cashier_decimal_text(self.cashier_paid_transfer_input.text())
+                debt_amount = self._cashier_decimal_text(self.cashier_debt_amount_input.text())
+                if (paid_cash + paid_transfer + debt_amount).quantize(Decimal("0.01")) != total:
+                    raise ValueError("Mixed payment parts must equal cart total.")
+            customer_id = self._cashier_optional_int(self.cashier_customer_id_input)
+            if debt_amount > Decimal("0.00") and customer_id is None:
+                raise ValueError("Customer ID is required for debt sales.")
+            cash_register_id = self._cashier_optional_int(self.cashier_register_id_input)
+            cash_shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
+            warehouse_id = self._cashier_optional_int(self.cashier_warehouse_id_input)
+            if warehouse_id is None:
+                raise ValueError("Warehouse ID is required.")
+            currency_id = self._cashier_optional_int(self.cashier_currency_id_input) or self._default_currency_id()
+            payload: dict[str, object] = {
+                "sale_type": "retail",
+                "cash_register_id": cash_register_id,
+                "cash_shift_id": cash_shift_id,
+                "counterparty_id": customer_id,
+                "warehouse_id": warehouse_id,
+                "currency_id": currency_id,
+                "payment_type": payment_type,
+                "paid_cash_tmt": str(paid_cash),
+                "paid_transfer_tmt": str(paid_transfer),
+                "debt_amount_tmt": str(debt_amount),
+                "lines": [
+                    {
+                        "product_id": int(item["product_id"]),
+                        "quantity": str(item["quantity"]),
+                        "price_final": str(item["price_final"]),
+                        "discount_percent": str(item["discount_percent"]),
+                    }
+                    for item in self.cashier_cart
+                ],
+            }
+            sale = self.api_client.create_sale(payload)
+            posted = self.api_client.post_sale(int(sale["id"]))
+            receipt_lines = self._cashier_receipt_lines(posted)
+            self.cashier_receipt_preview.setPlainText("\n".join(receipt_lines))
+            if paid_cash > Decimal("0.00"):
+                self.hardware.open_drawer()
+            self.hardware.register_operation(total)
+            self.cashier_cart.clear()
+            self._refresh_cashier_cart_table()
+            self.refresh_sales()
+            self.refresh_cashier()
+            self.refresh_warehouse()
+
+        self._run_api(action)
+
+    def cashier_print_receipt(self) -> None:
+        """Send the current receipt preview to the configured printer adapter."""
+
+        lines = [line for line in self.cashier_receipt_preview.toPlainText().splitlines() if line.strip()]
+        if not lines:
+            lines = self._cashier_receipt_lines(None)
+            self.cashier_receipt_preview.setPlainText("\n".join(lines))
+        self.cashier_text.appendPlainText(self.hardware.print_receipt(lines))
+
+    def cashier_x_report(self) -> None:
+        """Fetch and display the current shift X-report."""
+
+        def action() -> None:
+            shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
+            if shift_id is None:
+                raise ValueError("Shift ID is required.")
+            report = self.api_client.get_cash_shift_x_report(shift_id)
+            self._show_cashier_report(report)
+
+        self._run_api(action)
+
+    def cashier_z_report(self) -> None:
+        """Create and display a shift Z-report."""
+
+        def action() -> None:
+            shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
+            if shift_id is None:
+                raise ValueError("Shift ID is required.")
+            payload: dict[str, object] = {}
+            closing_amount = self.cashier_closing_amount_input.text().strip()
+            if closing_amount:
+                payload["closing_amount"] = closing_amount
+            report = self.api_client.create_cash_shift_z_report(shift_id, payload)
+            self._show_cashier_report(report)
+            self.refresh_cashier()
+
+        self._run_api(action)
+
+    def _show_cashier_report(self, report: dict[str, object]) -> None:
+        """Render an X/Z report into the cashier text and receipt preview panes."""
+
+        self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
+        self.cashier_receipt_preview.setPlainText("\n".join(self._cashier_report_lines(report)))
+
+    def _cashier_set_product_inputs(self, product: dict[str, object]) -> None:
+        """Populate product entry fields from a catalog payload."""
+
+        self.cashier_product_id_input.setText(str(product.get("id", "")))
+        self.cashier_product_name_input.setText(str(product.get("name") or product.get("name_ru") or product.get("sku") or ""))
+        self.cashier_price_input.setText(str(product.get("retail_price") or "0"))
+
+    def _cashier_cart_row_from_inputs(self) -> dict[str, object]:
+        """Build one cart row from entry fields."""
+
+        product_id = self._cashier_optional_int(self.cashier_product_id_input)
+        if product_id is None:
+            raise ValueError("Product ID is required.")
+        quantity = self._cashier_decimal_text(self.cashier_quantity_input.text(), Decimal("1.0000"))
+        price_final = self._cashier_decimal_text(self.cashier_price_input.text())
+        discount_percent = self._cashier_decimal_text(self.cashier_discount_input.text())
+        if quantity <= Decimal("0.00"):
+            raise ValueError("Quantity must be greater than zero.")
+        if price_final < Decimal("0.00"):
+            raise ValueError("Price cannot be negative.")
+        if discount_percent < Decimal("0.00") or discount_percent > Decimal("100.00"):
+            raise ValueError("Discount percent must be between 0 and 100.")
+        return {
+            "product_id": product_id,
+            "product_name": self.cashier_product_name_input.text().strip() or f"Product {product_id}",
+            "quantity": quantity,
+            "price_final": price_final,
+            "discount_percent": discount_percent,
+        }
+
+    def _cashier_selected_row(self) -> int:
+        """Return the selected cart row index."""
+
+        row = self.cashier_cart_table.currentRow()
+        if row < 0 or row >= len(self.cashier_cart):
+            raise ValueError("Select a cart row first.")
+        return row
+
+    def _cashier_optional_int(self, widget: QLineEdit) -> int | None:
+        """Parse an optional integer input."""
+
+        text = widget.text().strip()
+        return int(text) if text else None
+
+    def _cashier_decimal_text(self, text: str, default: Decimal = Decimal("0.00")) -> Decimal:
+        """Parse a decimal input with a default for blank values."""
+
+        value = text.strip()
+        return Decimal(value) if value else default
+
+    def _cashier_line_amount(self, item: dict[str, object]) -> Decimal:
+        """Return one cart row amount after percentage discount."""
+
+        quantity = Decimal(str(item["quantity"]))
+        price_final = Decimal(str(item["price_final"]))
+        discount_percent = Decimal(str(item["discount_percent"]))
+        amount = quantity * price_final * (Decimal("100.00") - discount_percent) / Decimal("100.00")
+        return amount.quantize(Decimal("0.01"))
+
+    def _cashier_cart_total(self) -> Decimal:
+        """Return the current cart total."""
+
+        return sum((self._cashier_line_amount(item) for item in self.cashier_cart), Decimal("0.00")).quantize(Decimal("0.01"))
+
+    def _refresh_cashier_cart_table(self) -> None:
+        """Refresh cart table rows and total label."""
+
+        self.cashier_cart_table.setRowCount(len(self.cashier_cart))
+        for row, item in enumerate(self.cashier_cart):
+            values = [
+                item.get("product_name"),
+                item.get("quantity"),
+                item.get("price_final"),
+                item.get("discount_percent"),
+                self._cashier_line_amount(item),
+            ]
+            for col, value in enumerate(values):
+                self.cashier_cart_table.setItem(row, col, QTableWidgetItem(str(value)))
+        self.cashier_total_label.setText(f"{self.translator.text('cashier.cart.total')}: {self._cashier_cart_total()} TMT")
+
+    def _cashier_receipt_lines(self, sale: dict[str, object] | None) -> list[str]:
+        """Build receipt-preview lines for a posted sale or current cart."""
+
+        lines = ["ERP Accounting", "Receipt"]
+        if sale:
+            lines.append(f"Sale: {sale.get('doc_number', sale.get('id', ''))}")
+            sale_lines = sale.get("lines", [])
+            if isinstance(sale_lines, list):
+                for item in sale_lines:
+                    if isinstance(item, dict):
+                        name = item.get("product_name") or item.get("service_name_ru") or item.get("product_id")
+                        lines.append(f"{name} x {item.get('quantity')} = {item.get('amount_tmt')} TMT")
+            lines.append(f"Total: {sale.get('total_amount_tmt', '0.00')} TMT")
+            lines.append(f"Payment: {sale.get('payment_type', '')}")
+            return lines
+        for item in self.cashier_cart:
+            lines.append(f"{item.get('product_name')} x {item.get('quantity')} = {self._cashier_line_amount(item)} TMT")
+        lines.append(f"Total: {self._cashier_cart_total()} TMT")
+        return lines
+
+    def _cashier_report_lines(self, report: dict[str, object]) -> list[str]:
+        """Build printable X/Z report lines."""
+
+        return [
+            "ERP Accounting",
+            f"{report.get('report_type', '')} report",
+            f"Shift: {report.get('shift_id', '')} ({report.get('shift_status', '')})",
+            f"Register: {report.get('cash_register_name') or report.get('cash_register_id', '')}",
+            f"Sales cash: {report.get('sale_cash_tmt', '0.00')} TMT",
+            f"Incoming cash payments: {report.get('incoming_cash_payments_tmt', '0.00')} TMT",
+            f"Collections: {report.get('collections_tmt', '0.00')} TMT",
+            f"Expected cash: {report.get('expected_cash_tmt', '0.00')} TMT",
+            f"Actual cash: {report.get('actual_cash_tmt') or '-'} TMT",
+            f"Variance: {report.get('variance_tmt') or '-'} TMT",
+        ]
+
     def create_cash_register_dialog(self) -> None:
         """Create a cash register."""
 
@@ -1796,6 +2198,11 @@ class MainWindow(QWidget):
 
         self.cashier_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_TABLE_HEADER_KEYS])
 
+    def _set_cashier_cart_table_headers(self) -> None:
+        """Apply translated column headers to the cashier cart table."""
+
+        self.cashier_cart_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_CART_HEADER_KEYS])
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
@@ -1808,10 +2215,17 @@ class MainWindow(QWidget):
         self._set_purchase_table_headers()
         self._set_sales_table_headers()
         self._set_cashier_table_headers()
+        if hasattr(self, "cashier_cart_table"):
+            self._set_cashier_cart_table_headers()
+            self._refresh_cashier_cart_table()
         if hasattr(self, "catalog_search"):
             self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
         if hasattr(self, "counterparty_search"):
             self.counterparty_search.setPlaceholderText(self.translator.text("counterparties.search"))
+        for line_edit in self.findChildren(QLineEdit):
+            placeholder_key = line_edit.property("placeholderKey")
+            if placeholder_key:
+                line_edit.setPlaceholderText(self.translator.text(str(placeholder_key)))
         user = self.api_client.current_user
         user_text = f"{user.full_name} ({user.role_name})" if user else ""
         self.status_label.setText(f"{self.translator.text('main.connected')}: {user_text}")

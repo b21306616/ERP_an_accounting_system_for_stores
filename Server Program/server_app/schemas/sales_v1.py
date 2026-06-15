@@ -29,6 +29,13 @@ class CashShiftClose(BaseModel):
     closing_amount: Decimal = Field(ge=0)
 
 
+class CashShiftZReportCreate(BaseModel):
+    """Create a Z-report and optionally close the shift."""
+
+    closing_amount: Decimal | None = Field(default=None, ge=0)
+    close_shift: bool = True
+
+
 class CashOperationCreate(BaseModel):
     """Create payload for a manual cash operation."""
 

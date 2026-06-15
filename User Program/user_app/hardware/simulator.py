@@ -4,42 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Protocol
-
-
-class BarcodeScanner(Protocol):
-    """Barcode scanner interface."""
-
-    def scan(self, barcode: str) -> str:
-        """Return the scanned barcode."""
-
-
-class ReceiptPrinter(Protocol):
-    """Receipt printer interface."""
-
-    def print_receipt(self, lines: list[str]) -> str:
-        """Print receipt lines and return a device message."""
-
-
-class CashDrawer(Protocol):
-    """Cash drawer interface."""
-
-    def open_drawer(self) -> str:
-        """Open the cash drawer and return a device message."""
-
-
-class ScaleDevice(Protocol):
-    """Scale interface."""
-
-    def read_weight(self) -> Decimal:
-        """Return the current weight in kilograms."""
-
-
-class FiscalDevice(Protocol):
-    """Fiscal-device interface."""
-
-    def register_operation(self, amount: Decimal) -> str:
-        """Register an operation and return a device message."""
+from user_app.hardware.interfaces import BarcodeScanner, CashDrawer, FiscalDevice, ReceiptPrinter, ScaleDevice
 
 
 @dataclass(slots=True)
