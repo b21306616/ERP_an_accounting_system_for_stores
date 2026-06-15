@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from user_app.api.client import ApiClient
 from user_app.core.config import ClientConfig, ClientConfigManager, normalize_server_url
@@ -428,6 +428,48 @@ class ClientCoreTests(unittest.TestCase):
         self.assertTrue(buttons["catalog.refresh"].isEnabled())
         window.close()
         app.processEvents()
+
+    def test_settings_page_uses_editable_form_offscreen(self) -> None:
+        """Settings should render as editable fields and save key/value payloads."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Admin", role_name="Super Admin", permissions=["settings.view", "settings.edit"])
+                self.saved_values: dict[str, object] | None = None
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_settings(self) -> dict[str, object]:
+                return {
+                    "organization": {"name_ru": "Old Org", "base_currency": "TMT", "second_currency": None},
+                    "feature_enabled": True,
+                }
+
+            def update_settings(self, values: dict[str, object]) -> dict[str, object]:
+                self.saved_values = values
+                return values
+
+        app = QApplication.instance() or QApplication([])
+        api_client = FakeApiClient()
+        window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
+        try:
+            window.refresh_settings()
+            self.assertFalse(window.settings_text.isVisible())
+            window.settings_fields[("organization", "name_ru")].setText("Modern Org")
+            window.settings_fields[("feature_enabled",)].setText("false")
+            with patch.object(QMessageBox, "information", return_value=QMessageBox.StandardButton.Ok):
+                window.save_settings()
+
+            self.assertEqual(api_client.saved_values["organization"]["name_ru"], "Modern Org")  # type: ignore[index]
+            self.assertFalse(api_client.saved_values["feature_enabled"])  # type: ignore[index]
+        finally:
+            window.close()
+            app.processEvents()
 
     def test_reports_page_filters_export_and_save_offscreen(self) -> None:
         """The PyQt reports page should pass filters to report, export, and save helpers."""

@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 import json
-from typing import Callable
+from typing import Any, Callable
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -24,6 +25,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QHeaderView,
+    QLayout,
     QPlainTextEdit,
     QScrollArea,
     QStackedWidget,
@@ -84,49 +87,136 @@ class MainWindow(QWidget):
         self.setStyleSheet(
             """
             QWidget#MainWindow {
-                background: #f3f6fb;
-                color: #182033;
+                background: #eef3f8;
+                color: #152238;
                 font-size: 10pt;
             }
-            QListWidget {
+            QListWidget#Sidebar {
                 background: #ffffff;
-                border: 1px solid #dce4ef;
+                border: 1px solid #d8e1ec;
+                border-radius: 12px;
+                padding: 8px;
+            }
+            QListWidget#Sidebar::item {
                 border-radius: 8px;
-                padding: 6px;
+                color: #475569;
+                margin: 2px 0;
+                padding: 10px 12px;
             }
-            QListWidget::item {
-                border-radius: 6px;
-                padding: 9px;
+            QListWidget#Sidebar::item:hover {
+                background: #f1f5f9;
+                color: #0f172a;
             }
-            QListWidget::item:selected {
-                background: #dbeafe;
-                color: #1d4ed8;
+            QListWidget#Sidebar::item:selected {
+                background: #e0edff;
+                color: #1557c0;
+                font-weight: 700;
+            }
+            QStackedWidget {
+                background: transparent;
             }
             QLabel#PageTitle {
-                color: #111827;
-                font-size: 20px;
+                color: #0f172a;
+                font-size: 22px;
                 font-weight: 700;
+            }
+            QLabel#SectionTitle {
+                color: #172033;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QLabel#MutedLabel {
+                color: #64748b;
+                font-size: 9pt;
+            }
+            QFrame#Card {
+                background: #ffffff;
+                border: 1px solid #dce5ef;
+                border-radius: 10px;
+            }
+            QFrame#MetricCard {
+                background: #ffffff;
+                border: 1px solid #dce5ef;
+                border-radius: 10px;
+            }
+            QLabel#MetricTitle {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 700;
+            }
+            QLabel#MetricValue {
+                color: #0f172a;
+                font-size: 16px;
+                font-weight: 800;
             }
             QPushButton {
                 background: #ffffff;
                 border: 1px solid #cbd5e1;
-                border-radius: 6px;
-                color: #1d4ed8;
+                border-radius: 8px;
+                color: #1557c0;
                 font-weight: 700;
-                padding: 7px 11px;
+                padding: 8px 12px;
+            }
+            QPushButton:hover {
+                background: #f8fafc;
+                border-color: #94a3b8;
             }
             QPushButton#PrimaryButton {
-                background: #2563eb;
-                border-color: #1d4ed8;
+                background: #1f6feb;
+                border-color: #1f6feb;
                 color: #ffffff;
             }
-            QTableWidget,
+            QPushButton#PrimaryButton:hover {
+                background: #1557c0;
+                border-color: #1557c0;
+            }
+            QPushButton:disabled {
+                background: #f1f5f9;
+                border-color: #e2e8f0;
+                color: #94a3b8;
+            }
             QPlainTextEdit,
             QLineEdit,
             QComboBox {
                 background: #ffffff;
                 border: 1px solid #cbd5e1;
-                border-radius: 6px;
+                border-radius: 8px;
+                padding: 6px 8px;
+            }
+            QLineEdit:focus,
+            QComboBox:focus {
+                border-color: #1f6feb;
+            }
+            QTableWidget {
+                background: #ffffff;
+                alternate-background-color: #f8fafc;
+                border: 1px solid #dce5ef;
+                border-radius: 10px;
+                gridline-color: #e7edf4;
+                selection-background-color: #dbeafe;
+                selection-color: #0f172a;
+            }
+            QHeaderView::section {
+                background: #f8fafc;
+                border: 0;
+                border-bottom: 1px solid #dce5ef;
+                color: #475569;
+                font-weight: 700;
+                padding: 8px;
+            }
+            QScrollArea {
+                background: transparent;
+                border: 0;
+            }
+            QScrollBar:vertical {
+                background: #eef3f8;
+                border: 0;
+                width: 10px;
+            }
+            QScrollBar::handle:vertical {
+                background: #cbd5e1;
+                border-radius: 5px;
+                min-height: 28px;
             }
             """
         )
@@ -151,7 +241,10 @@ class MainWindow(QWidget):
         root.addLayout(top)
 
         body = QHBoxLayout()
-        self.nav.setFixedWidth(220)
+        self.nav.setObjectName("Sidebar")
+        self.nav.setFixedWidth(238)
+        self.nav.setSpacing(2)
+        self.stack.setObjectName("ContentStack")
         body.addWidget(self.nav)
         body.addWidget(self.stack, 1)
         root.addLayout(body, 1)
@@ -195,12 +288,152 @@ class MainWindow(QWidget):
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(16, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(14)
         title = QLabel(self.translator.text(title_key))
         title.setObjectName("PageTitle")
         title.setProperty("titleKey", title_key)
         layout.addWidget(title)
         return page, layout, title
+
+    def _make_card(self, title: str | None = None) -> tuple[QFrame, QVBoxLayout]:
+        """Create one reusable content card."""
+
+        card = QFrame()
+        card.setObjectName("Card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 14, 14, 14)
+        card_layout.setSpacing(10)
+        if title:
+            label = QLabel(title)
+            label.setObjectName("SectionTitle")
+            card_layout.addWidget(label)
+        return card, card_layout
+
+    def _metric_area(self) -> tuple[QWidget, QHBoxLayout]:
+        """Create a horizontal metric area that can be repopulated."""
+
+        area = QWidget()
+        layout = QHBoxLayout(area)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        return area, layout
+
+    def _clear_layout(self, layout: QLayout) -> None:
+        """Remove all child widgets/layouts from a layout."""
+
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                continue
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout(child_layout)
+
+    def _configure_table(self, table: QTableWidget) -> None:
+        """Apply consistent desktop-table behavior."""
+
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        table.setShowGrid(False)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        table.verticalHeader().setDefaultSectionSize(34)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+
+    def _table_item(self, value: object) -> QTableWidgetItem:
+        """Return a non-editable table item with formatted text."""
+
+        item = QTableWidgetItem(self._format_value(value))
+        item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        return item
+
+    def _populate_table(
+        self,
+        table: QTableWidget,
+        rows: list[dict[str, object]],
+        columns: list[tuple[str | Callable[[dict[str, object]], object], str]],
+    ) -> None:
+        """Render a list of API dictionaries into a table."""
+
+        table.setSortingEnabled(False)
+        table.setColumnCount(len(columns))
+        table.setHorizontalHeaderLabels([label for _key, label in columns])
+        table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            for column_index, (key, _label) in enumerate(columns):
+                value = key(row) if callable(key) else row.get(key)
+                item = self._table_item(value)
+                item.setData(Qt.ItemDataRole.UserRole, row)
+                table.setItem(row_index, column_index, item)
+        table.resizeColumnsToContents()
+        table.setSortingEnabled(True)
+
+    def _format_value(self, value: object) -> str:
+        """Format API values for human-facing widgets."""
+
+        if value is None or value == "":
+            return "-"
+        if isinstance(value, bool):
+            return "Yes" if value else "No"
+        if isinstance(value, list):
+            if not value:
+                return "-"
+            if all(not isinstance(item, (dict, list, tuple)) for item in value):
+                return ", ".join(str(item) for item in value)
+            return f"{len(value)} items"
+        if isinstance(value, dict):
+            return f"{len(value)} fields" if value else "-"
+        return str(value)
+
+    def _humanize_key(self, key: str) -> str:
+        """Convert snake-case API keys into compact labels."""
+
+        return key.replace("_", " ").replace("-", " ").strip().title() or key
+
+    def _safe_decimal(self, value: object) -> Decimal:
+        """Parse a decimal-ish API value for summary cards."""
+
+        try:
+            return Decimal(str(value or "0"))
+        except Exception:
+            return Decimal("0")
+
+    def _sum_rows(self, rows: list[dict[str, object]], key: str) -> Decimal:
+        """Sum one numeric field from API rows."""
+
+        return sum((self._safe_decimal(row.get(key)) for row in rows), Decimal("0"))
+
+    def _render_metric_cards(self, layout: QHBoxLayout, metrics: list[tuple[str, object]]) -> None:
+        """Render metric cards into an existing horizontal layout."""
+
+        self._clear_layout(layout)
+        if not metrics:
+            muted = QLabel("No summary")
+            muted.setObjectName("MutedLabel")
+            layout.addWidget(muted)
+            layout.addStretch(1)
+            return
+        for title, value in metrics:
+            card = QFrame()
+            card.setObjectName("MetricCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(4)
+            title_label = QLabel(title)
+            title_label.setObjectName("MetricTitle")
+            value_label = QLabel(self._format_value(value))
+            value_label.setObjectName("MetricValue")
+            value_label.setWordWrap(True)
+            card_layout.addWidget(title_label)
+            card_layout.addWidget(value_label)
+            layout.addWidget(card, 1)
+        layout.addStretch(1)
 
     def _add_selector_row(
         self,
@@ -611,6 +844,7 @@ class MainWindow(QWidget):
         row.addWidget(create)
         row.addStretch(1)
         self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
+        self._configure_table(self.users_table)
         self._set_users_table_headers()
         layout.addLayout(row)
         layout.addWidget(self.users_table, 1)
@@ -622,11 +856,23 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("roles.title")
         self.roles_text = QPlainTextEdit()
         self.roles_text.setReadOnly(True)
+        self.roles_text.hide()
         refresh = QPushButton()
         refresh.setProperty("textKey", "dashboard.refresh")
         refresh.clicked.connect(self.refresh_roles)
+        self.roles_table = QTableWidget(0, 3)
+        self._configure_table(self.roles_table)
+        self.roles_table.setHorizontalHeaderLabels(["Role", "Description", "Permissions"])
+        self.roles_table.itemSelectionChanged.connect(self._render_selected_role_permissions)
+        self.role_permissions_table = QTableWidget(0, 2)
+        self._configure_table(self.role_permissions_table)
+        self.role_permissions_table.setHorizontalHeaderLabels(["Module", "Permission"])
         layout.addWidget(refresh)
-        layout.addWidget(self.roles_text, 1)
+        layout.addWidget(self.roles_table, 1)
+        permissions_label = QLabel("Permissions")
+        permissions_label.setObjectName("SectionTitle")
+        layout.addWidget(permissions_label)
+        layout.addWidget(self.role_permissions_table, 1)
         return page
 
     def _build_settings_page(self) -> QWidget:
@@ -634,11 +880,28 @@ class MainWindow(QWidget):
 
         page, layout, _title = self._page("settings.title")
         self.settings_text = QPlainTextEdit()
+        self.settings_text.hide()
+        self.settings_values: dict[str, object] = {}
+        self.settings_fields: dict[tuple[str, ...], QLineEdit] = {}
+        action_row = QHBoxLayout()
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "dashboard.refresh")
+        refresh.clicked.connect(self.refresh_settings)
         save = QPushButton()
         save.setProperty("textKey", "settings.save")
         save.clicked.connect(self.save_settings)
-        layout.addWidget(self.settings_text, 1)
-        layout.addWidget(save)
+        action_row.addWidget(refresh)
+        action_row.addWidget(save)
+        action_row.addStretch(1)
+        self.settings_scroll = QScrollArea()
+        self.settings_scroll.setWidgetResizable(True)
+        self.settings_forms_container = QWidget()
+        self.settings_forms_layout = QVBoxLayout(self.settings_forms_container)
+        self.settings_forms_layout.setContentsMargins(0, 0, 12, 0)
+        self.settings_forms_layout.setSpacing(12)
+        self.settings_scroll.setWidget(self.settings_forms_container)
+        layout.addLayout(action_row)
+        layout.addWidget(self.settings_scroll, 1)
         return page
 
     def _build_hardware_page(self) -> QWidget:
@@ -692,6 +955,7 @@ class MainWindow(QWidget):
         action_row.addStretch(1)
 
         self.catalog_table = QTableWidget(0, len(CATALOG_TABLE_HEADER_KEYS))
+        self._configure_table(self.catalog_table)
         self._set_catalog_table_headers()
         layout.addLayout(action_row)
         layout.addWidget(self.catalog_table, 1)
@@ -722,16 +986,20 @@ class MainWindow(QWidget):
         action_row.addStretch(1)
 
         self.warehouse_table = QTableWidget(0, len(WAREHOUSE_TABLE_HEADER_KEYS))
+        self._configure_table(self.warehouse_table)
         self._set_warehouse_table_headers()
         self.warehouse_movements_text = QPlainTextEdit()
         self.warehouse_movements_text.setReadOnly(True)
-        self.warehouse_movements_text.setMinimumHeight(150)
+        self.warehouse_movements_text.hide()
+        self.warehouse_movements_table = QTableWidget(0, 8)
+        self._configure_table(self.warehouse_movements_table)
         layout.addLayout(action_row)
         layout.addWidget(self.warehouse_table, 1)
         movements_label = QLabel(self.translator.text("warehouse.movements"))
         movements_label.setProperty("bodyKey", "warehouse.movements")
+        movements_label.setObjectName("SectionTitle")
         layout.addWidget(movements_label)
-        layout.addWidget(self.warehouse_movements_text)
+        layout.addWidget(self.warehouse_movements_table, 1)
         return page
 
     def _build_counterparties_page(self) -> QWidget:
@@ -751,6 +1019,7 @@ class MainWindow(QWidget):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.counterparties_table = QTableWidget(0, len(COUNTERPARTY_TABLE_HEADER_KEYS))
+        self._configure_table(self.counterparties_table)
         self._set_counterparties_table_headers()
         layout.addLayout(action_row)
         layout.addWidget(self.counterparties_table, 1)
@@ -774,6 +1043,7 @@ class MainWindow(QWidget):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.pricing_table = QTableWidget(0, len(PRICING_TABLE_HEADER_KEYS))
+        self._configure_table(self.pricing_table)
         self._set_pricing_table_headers()
         layout.addLayout(action_row)
         layout.addWidget(self.pricing_table, 1)
@@ -803,13 +1073,18 @@ class MainWindow(QWidget):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.purchase_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
+        self._configure_table(self.purchase_table)
         self._set_purchase_table_headers()
         self.purchase_debt_text = QPlainTextEdit()
         self.purchase_debt_text.setReadOnly(True)
-        self.purchase_debt_text.setMinimumHeight(130)
+        self.purchase_debt_text.hide()
+        self.purchase_debt_metrics, self.purchase_debt_metrics_layout = self._metric_area()
+        self.purchase_debt_table = QTableWidget(0, 8)
+        self._configure_table(self.purchase_debt_table)
         layout.addLayout(action_row)
         layout.addWidget(self.purchase_table, 1)
-        layout.addWidget(self.purchase_debt_text)
+        layout.addWidget(self.purchase_debt_metrics)
+        layout.addWidget(self.purchase_debt_table, 1)
         return page
 
     def _build_sales_page(self) -> QWidget:
@@ -836,13 +1111,18 @@ class MainWindow(QWidget):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.sales_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
+        self._configure_table(self.sales_table)
         self._set_sales_table_headers()
         self.sales_debt_text = QPlainTextEdit()
         self.sales_debt_text.setReadOnly(True)
-        self.sales_debt_text.setMinimumHeight(130)
+        self.sales_debt_text.hide()
+        self.sales_debt_metrics, self.sales_debt_metrics_layout = self._metric_area()
+        self.sales_debt_table = QTableWidget(0, 8)
+        self._configure_table(self.sales_debt_table)
         layout.addLayout(action_row)
         layout.addWidget(self.sales_table, 1)
-        layout.addWidget(self.sales_debt_text)
+        layout.addWidget(self.sales_debt_metrics)
+        layout.addWidget(self.sales_debt_table, 1)
         return page
 
     def _build_cashier_page(self) -> QWidget:
@@ -870,13 +1150,20 @@ class MainWindow(QWidget):
         action_row.addStretch(1)
 
         self.cashier_table = QTableWidget(0, len(CASHIER_TABLE_HEADER_KEYS))
+        self._configure_table(self.cashier_table)
         self._set_cashier_table_headers()
         self.cashier_text = QPlainTextEdit()
         self.cashier_text.setReadOnly(True)
-        self.cashier_text.setMinimumHeight(110)
+        self.cashier_text.hide()
+        self.cashier_report_status = QLabel("Cash-flow snapshot")
+        self.cashier_report_status.setObjectName("SectionTitle")
+        self.cashier_report_metrics, self.cashier_report_metrics_layout = self._metric_area()
+        self.cashier_report_table = QTableWidget(0, 3)
+        self._configure_table(self.cashier_report_table)
 
         cart_title = QLabel(self.translator.text("cashier.cart.title"))
         cart_title.setProperty("bodyKey", "cashier.cart.title")
+        cart_title.setObjectName("SectionTitle")
 
         entry_row = QHBoxLayout()
         self.cashier_barcode_input = QLineEdit()
@@ -925,6 +1212,7 @@ class MainWindow(QWidget):
             entry_row.addWidget(button)
 
         self.cashier_cart_table = QTableWidget(0, len(CASHIER_CART_HEADER_KEYS))
+        self._configure_table(self.cashier_cart_table)
         self.cashier_cart_table.setMinimumHeight(170)
         self.cashier_cart_table.itemSelectionChanged.connect(self.cashier_load_selected_cart_item)
         self._set_cashier_cart_table_headers()
@@ -992,7 +1280,9 @@ class MainWindow(QWidget):
 
         layout.addLayout(action_row)
         layout.addWidget(self.cashier_table, 1)
-        layout.addWidget(self.cashier_text)
+        layout.addWidget(self.cashier_report_status)
+        layout.addWidget(self.cashier_report_metrics)
+        layout.addWidget(self.cashier_report_table, 1)
         layout.addWidget(cart_title)
         layout.addLayout(entry_row)
         layout.addWidget(self.cashier_cart_table)
@@ -1062,9 +1352,26 @@ class MainWindow(QWidget):
 
         self.reports_text = QPlainTextEdit()
         self.reports_text.setReadOnly(True)
-        layout.addLayout(filters)
+        self.reports_text.hide()
+        filter_card, filter_layout = self._make_card("Filters")
+        filter_layout.addLayout(filters)
+        self.report_status_label = QLabel("Run a report to view results.")
+        self.report_status_label.setObjectName("MutedLabel")
+        self.report_metrics, self.report_metrics_layout = self._metric_area()
+        self.report_rows_table = QTableWidget(0, 1)
+        self._configure_table(self.report_rows_table)
+        self.report_saved_filters_table = QTableWidget(0, 4)
+        self._configure_table(self.report_saved_filters_table)
+        self.report_saved_filters_table.setHorizontalHeaderLabels(["Name", "Report", "Scope", "Updated"])
+        layout.addWidget(filter_card)
         layout.addLayout(actions)
-        layout.addWidget(self.reports_text, 1)
+        layout.addWidget(self.report_status_label)
+        layout.addWidget(self.report_metrics)
+        layout.addWidget(self.report_rows_table, 1)
+        saved_label = QLabel("Saved filters")
+        saved_label.setObjectName("SectionTitle")
+        layout.addWidget(saved_label)
+        layout.addWidget(self.report_saved_filters_table, 1)
         return page
 
     def _build_placeholder_page(self, page_id: str) -> QWidget:
@@ -1078,6 +1385,226 @@ class MainWindow(QWidget):
         layout.addStretch(1)
         page.setProperty("moduleId", page_id)
         return page
+
+    def _columns_from_rows(self, rows: list[dict[str, object]], preferred: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+        """Build readable table columns from API row dictionaries."""
+
+        keys: list[str] = []
+        for key in preferred:
+            if any(key in row for row in rows):
+                keys.append(key)
+        for row in rows:
+            for key in row:
+                if key not in keys and key != "xlsx_base64":
+                    keys.append(key)
+        return [(key, self._humanize_key(key)) for key in keys]
+
+    def _render_selected_role_permissions(self) -> None:
+        """Render permission details for the selected role."""
+
+        selected = self.roles_table.selectedItems()
+        if not selected:
+            self.role_permissions_table.setRowCount(0)
+            return
+        role = selected[0].data(Qt.ItemDataRole.UserRole)
+        if not isinstance(role, dict):
+            self.role_permissions_table.setRowCount(0)
+            return
+        permissions = role.get("permissions")
+        rows: list[dict[str, object]] = []
+        if isinstance(permissions, list):
+            for permission in permissions:
+                code = str(permission)
+                module = code.split(".", 1)[0] if "." in code else "-"
+                rows.append({"module": module, "permission": code})
+        self._populate_table(
+            self.role_permissions_table,
+            rows,
+            [("module", "Module"), ("permission", "Permission")],
+        )
+
+    def _render_settings_forms(self, settings: dict[str, object]) -> None:
+        """Render editable settings forms without exposing raw JSON."""
+
+        self.settings_fields = {}
+        self._clear_layout(self.settings_forms_layout)
+        if not settings:
+            empty = QLabel("No settings are available.")
+            empty.setObjectName("MutedLabel")
+            self.settings_forms_layout.addWidget(empty)
+            self.settings_forms_layout.addStretch(1)
+            return
+
+        for key in sorted(settings):
+            value = settings[key]
+            card, card_layout = self._make_card(self._humanize_key(key))
+            form = QFormLayout()
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+            if isinstance(value, dict):
+                for child_key in sorted(value):
+                    child_value = value[child_key]
+                    self._add_settings_field(form, (key, child_key), child_value)
+            else:
+                self._add_settings_field(form, (key,), value)
+            card_layout.addLayout(form)
+            self.settings_forms_layout.addWidget(card)
+        self.settings_forms_layout.addStretch(1)
+
+    def _add_settings_field(self, form: QFormLayout, path: tuple[str, ...], value: object) -> None:
+        """Add one editable or read-only settings field."""
+
+        label = self._humanize_key(path[-1])
+        if isinstance(value, (dict, list, tuple)):
+            preview = QLabel(self._format_value(value))
+            preview.setObjectName("MutedLabel")
+            form.addRow(label, preview)
+            return
+        field = QLineEdit("" if value is None else str(value))
+        field.setProperty("settingsPath", ".".join(path))
+        field.setPlaceholderText(label)
+        self.settings_fields[path] = field
+        form.addRow(label, field)
+
+    def _setting_value_from_text(self, text: str, original: object) -> object:
+        """Parse settings form text using the original value type."""
+
+        value = text.strip()
+        if isinstance(original, bool):
+            return value.casefold() in {"1", "true", "yes", "y", "on"}
+        if isinstance(original, int) and not isinstance(original, bool):
+            return int(value or "0")
+        if isinstance(original, float):
+            return float(value or "0")
+        if isinstance(original, Decimal):
+            return str(Decimal(value or "0"))
+        if original is None:
+            return value or None
+        return value
+
+    def _settings_value_at_path(self, path: tuple[str, ...]) -> object:
+        """Return the original settings value for a rendered field path."""
+
+        current: object = self.settings_values
+        for part in path:
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+        return current
+
+    def _render_debt_ledger(
+        self,
+        rows: list[dict[str, object]],
+        table: QTableWidget,
+        metrics_layout: QHBoxLayout,
+        *,
+        title: str,
+    ) -> None:
+        """Render receivable/payable ledger rows and summaries."""
+
+        self._populate_table(
+            table,
+            rows,
+            [
+                ("doc_date", "Date"),
+                ("doc_number", "Document"),
+                ("doc_type", "Type"),
+                ("debt_type", "Debt"),
+                ("debit_tmt", "Debit"),
+                ("credit_tmt", "Credit"),
+                ("running_balance_tmt", "Balance"),
+                ("note", "Note"),
+            ],
+        )
+        balance = rows[0].get("running_balance_tmt") if rows else "0.00"
+        self._render_metric_cards(
+            metrics_layout,
+            [
+                (title, len(rows)),
+                ("Debit TMT", f"{self._sum_rows(rows, 'debit_tmt')}"),
+                ("Credit TMT", f"{self._sum_rows(rows, 'credit_tmt')}"),
+                ("Current balance", balance),
+            ],
+        )
+
+    def _render_cash_report(self, report: dict[str, object], *, title: str = "Cash-flow snapshot") -> None:
+        """Render cashier cash-flow or shift report data."""
+
+        self.cashier_report_status.setText(title)
+        metric_keys = [key for key, value in report.items() if key != "rows" and not isinstance(value, (dict, list, tuple))]
+        metrics = [(self._humanize_key(key), report.get(key)) for key in metric_keys[:6]]
+        self._render_metric_cards(self.cashier_report_metrics_layout, metrics)
+        rows = report.get("rows")
+        if isinstance(rows, list) and all(isinstance(row, dict) for row in rows):
+            typed_rows = [dict(row) for row in rows]
+            columns = self._columns_from_rows(typed_rows, ("metric", "label", "amount_tmt", "value")) or [("message", "Message")]
+            self._populate_table(self.cashier_report_table, typed_rows, columns)
+        else:
+            summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
+            self._populate_table(self.cashier_report_table, summary_rows, [("metric", "Metric"), ("value", "Value")])
+
+    def _render_report_view(
+        self,
+        *,
+        code: str,
+        filters: dict[str, str],
+        saved_filters: list[dict[str, object]],
+        report: object,
+    ) -> None:
+        """Render report data as metrics, rows, and saved-filter tables."""
+
+        filter_text = ", ".join(f"{self._humanize_key(key)}={value}" for key, value in filters.items()) or "No filters"
+        self.report_status_label.setText(f"{code} report · {filter_text}")
+        self._populate_table(
+            self.report_saved_filters_table,
+            saved_filters,
+            [
+                ("name", "Name"),
+                ("report_code", "Report"),
+                (lambda row: "Shared" if row.get("is_shared") else "Private", "Scope"),
+                ("updated_at", "Updated"),
+            ],
+        )
+
+        if isinstance(report, list):
+            rows = [dict(row) for row in report if isinstance(row, dict)]
+            self._render_metric_cards(self.report_metrics_layout, [("Rows", len(rows))])
+            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows) or [("message", "Message")])
+            return
+
+        if isinstance(report, dict):
+            metric_keys = [key for key, value in report.items() if key != "rows" and not isinstance(value, (dict, list, tuple))]
+            metrics = [(self._humanize_key(key), report.get(key)) for key in metric_keys]
+            rows_payload = report.get("rows")
+            rows = [dict(row) for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+            if not metrics:
+                metrics = [("Rows", len(rows))]
+            self._render_metric_cards(self.report_metrics_layout, metrics)
+            if rows:
+                self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows))
+            else:
+                summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
+                self._populate_table(self.report_rows_table, summary_rows, [("metric", "Metric"), ("value", "Value")])
+            return
+
+        self._render_metric_cards(self.report_metrics_layout, [("Result", self._format_value(report))])
+        self._populate_table(self.report_rows_table, [], [("message", "Message")])
+
+    def _render_report_result(self, payload: dict[str, object], *, title: str) -> None:
+        """Render export/save responses without showing JSON."""
+
+        self.report_status_label.setText(title)
+        rows_payload = payload.get("rows")
+        rows = [dict(row) for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+        metric_keys = [key for key in payload if key not in {"rows", "xlsx_base64"}]
+        self._render_metric_cards(self.report_metrics_layout, [(self._humanize_key(key), payload.get(key)) for key in metric_keys])
+        if rows:
+            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows))
+        else:
+            self._populate_table(
+                self.report_rows_table,
+                [{"field": self._humanize_key(key), "value": payload.get(key)} for key in metric_keys],
+                [("field", "Field"), ("value", "Value")],
+            )
 
     def refresh_dashboard(self) -> None:
         """Refresh server status."""
@@ -1253,7 +1780,7 @@ class MainWindow(QWidget):
             for row, user in enumerate(users):
                 values = [user.get("id"), user.get("username"), user.get("full_name"), user.get("role_name"), user.get("is_active")]
                 for col, value in enumerate(values):
-                    self.users_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.users_table.setItem(row, col, self._table_item(value))
 
         self._run_api(action)
 
@@ -1272,7 +1799,7 @@ class MainWindow(QWidget):
                     product.get("is_active"),
                 ]
                 for col, value in enumerate(values):
-                    self.catalog_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.catalog_table.setItem(row, col, self._table_item(value))
 
         self._run_api(action)
 
@@ -1291,9 +1818,23 @@ class MainWindow(QWidget):
                     balance.get("avg_cost_tmt"),
                 ]
                 for col, value in enumerate(values):
-                    self.warehouse_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.warehouse_table.setItem(row, col, self._table_item(value))
             movements = self.api_client.get_stock_movements()
             self.warehouse_movements_text.setPlainText(json.dumps(movements, indent=2, ensure_ascii=False))
+            self._populate_table(
+                self.warehouse_movements_table,
+                movements,
+                [
+                    ("movement_date", "Date"),
+                    ("warehouse_name", "Warehouse"),
+                    ("product_name", "Product"),
+                    ("movement_type", "Type"),
+                    (lambda row: f"{row.get('document_type') or '-'} #{row.get('document_id') or '-'}", "Document"),
+                    ("quantity", "Qty"),
+                    ("unit_cost_tmt", "Unit cost"),
+                    ("amount_tmt", "Amount"),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1314,7 +1855,7 @@ class MainWindow(QWidget):
                     debt_text,
                 ]
                 for col, value in enumerate(values):
-                    self.counterparties_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.counterparties_table.setItem(row, col, self._table_item(value))
 
         self._run_api(action)
 
@@ -1332,7 +1873,7 @@ class MainWindow(QWidget):
                     price_list.get("is_default"),
                 ]
                 for col, value in enumerate(values):
-                    self.pricing_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.pricing_table.setItem(row, col, self._table_item(value))
 
         self._run_api(action)
 
@@ -1352,9 +1893,10 @@ class MainWindow(QWidget):
                     invoice.get("payment_status"),
                 ]
                 for col, value in enumerate(values):
-                    self.purchase_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.purchase_table.setItem(row, col, self._table_item(value))
             ledger = self.api_client.get_debt_ledger(debt_type="payable")
             self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
+            self._render_debt_ledger(ledger, self.purchase_debt_table, self.purchase_debt_metrics_layout, title="Payable entries")
 
         self._run_api(action)
 
@@ -1375,9 +1917,10 @@ class MainWindow(QWidget):
                     sale.get("payment_type"),
                 ]
                 for col, value in enumerate(values):
-                    self.sales_table.setItem(row, col, QTableWidgetItem(str(value)))
+                    self.sales_table.setItem(row, col, self._table_item(value))
             ledger = self.api_client.get_debt_ledger(debt_type="receivable")
             self.sales_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
+            self._render_debt_ledger(ledger, self.sales_debt_table, self.sales_debt_metrics_layout, title="Receivable entries")
 
         self._run_api(action)
 
@@ -1397,8 +1940,10 @@ class MainWindow(QWidget):
                     shift.get("status"),
                 ]
                 for col, value in enumerate(values):
-                    self.cashier_table.setItem(row, col, QTableWidgetItem(str(value)))
-            self.cashier_text.setPlainText(json.dumps(self.api_client.get_cash_flow_report(), indent=2, ensure_ascii=False))
+                    self.cashier_table.setItem(row, col, self._table_item(value))
+            report = self.api_client.get_cash_flow_report()
+            self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
+            self._render_cash_report(report)
 
         self._run_api(action)
 
@@ -1449,13 +1994,15 @@ class MainWindow(QWidget):
             filters = self._current_report_filters()
             report = self._fetch_selected_report(code, filters)
             saved_filters = self.api_client.get_report_filters(code)
+            payload = {"report_code": code, "filters": filters, "saved_filters": saved_filters, "report": report}
             self.reports_text.setPlainText(
                 json.dumps(
-                    {"report_code": code, "filters": filters, "saved_filters": saved_filters, "report": report},
+                    payload,
                     indent=2,
                     ensure_ascii=False,
                 )
             )
+            self._render_report_view(code=code, filters=filters, saved_filters=saved_filters, report=report)
 
         self._run_api(action)
 
@@ -1466,6 +2013,8 @@ class MainWindow(QWidget):
             code = self._selected_report_code()
             payload = self.api_client.export_report(code, self._current_report_filters())
             self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
+            filename = payload.get("filename") or self.translator.text("reports.export")
+            self._render_report_result(payload, title=f"Export ready: {filename}")
 
         self._run_api(action)
 
@@ -1487,6 +2036,7 @@ class MainWindow(QWidget):
                 }
             )
             self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
+            self._render_report_result(payload, title=f"Filter saved: {payload.get('name', name)}")
 
         self._run_api(action)
 
@@ -1624,13 +2174,39 @@ class MainWindow(QWidget):
 
         def action() -> None:
             product = self.api_client.find_product_by_barcode(barcode.text().strip())
-            QMessageBox.information(
-                self,
-                self.translator.text("catalog.find_barcode"),
-                json.dumps(product, indent=2, ensure_ascii=False),
-            )
+            self._show_product_result_dialog(product)
 
         self._run_api(action)
+
+    def _show_product_result_dialog(self, product: dict[str, object]) -> None:
+        """Show barcode lookup results as a friendly details dialog."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("catalog.find_barcode"))
+        dialog.setMinimumSize(520, 360)
+        layout = QVBoxLayout(dialog)
+        header = QLabel(product.get("name") or product.get("name_ru") or product.get("sku") or self.translator.text("catalog.find_barcode"))
+        header.setObjectName("PageTitle")
+        layout.addWidget(header)
+        summary, summary_layout = self._metric_area()
+        self._render_metric_cards(
+            summary_layout,
+            [
+                ("SKU", product.get("sku") or product.get("code")),
+                ("Retail price", product.get("retail_price") or product.get("default_price")),
+                ("Active", product.get("is_active")),
+            ],
+        )
+        layout.addWidget(summary)
+        rows = [{"field": self._humanize_key(key), "value": value} for key, value in product.items() if key != "barcodes"]
+        table = QTableWidget(0, 2)
+        self._configure_table(table)
+        self._populate_table(table, rows, [("field", "Field"), ("value", "Value")])
+        layout.addWidget(table, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
 
     def create_counterparty_dialog(self) -> None:
         """Create a supplier/customer counterparty."""
@@ -2294,7 +2870,9 @@ class MainWindow(QWidget):
         if not lines:
             lines = self._cashier_receipt_lines(None)
             self.cashier_receipt_preview.setPlainText("\n".join(lines))
-        self.cashier_text.appendPlainText(self.hardware.print_receipt(lines))
+        message = self.hardware.print_receipt(lines)
+        self.cashier_text.appendPlainText(message)
+        self.cashier_report_status.setText(message)
 
     def cashier_x_report(self) -> None:
         """Fetch and display the current shift X-report."""
@@ -2329,6 +2907,8 @@ class MainWindow(QWidget):
         """Render an X/Z report into the cashier text and receipt preview panes."""
 
         self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
+        title = f"{self._format_value(report.get('report_type'))} report"
+        self._render_cash_report(report, title=title)
         self.cashier_receipt_preview.setPlainText("\n".join(self._cashier_report_lines(report)))
 
     def _cashier_set_product_inputs(self, product: dict[str, object]) -> None:
@@ -2408,7 +2988,7 @@ class MainWindow(QWidget):
                 self._cashier_line_amount(item),
             ]
             for col, value in enumerate(values):
-                self.cashier_cart_table.setItem(row, col, QTableWidgetItem(str(value)))
+                self.cashier_cart_table.setItem(row, col, self._table_item(value))
         self.cashier_total_label.setText(f"{self.translator.text('cashier.cart.total')}: {self._cashier_cart_total()} TMT")
 
     def _cashier_receipt_lines(self, sale: dict[str, object] | None) -> list[str]:
@@ -2718,20 +3298,52 @@ class MainWindow(QWidget):
     def refresh_roles(self) -> None:
         """Refresh roles."""
 
-        self._run_api(lambda: self.roles_text.setPlainText(json.dumps(self.api_client.get_roles(), indent=2, ensure_ascii=False)))
+        def action() -> None:
+            roles = self.api_client.get_roles()
+            self.roles_text.setPlainText(json.dumps(roles, indent=2, ensure_ascii=False))
+            self._populate_table(
+                self.roles_table,
+                roles,
+                [
+                    ("name", "Role"),
+                    ("description", "Description"),
+                    (lambda row: len(row.get("permissions") or []), "Permissions"),
+                ],
+            )
+            if roles:
+                self.roles_table.selectRow(0)
+            self._render_selected_role_permissions()
+
+        self._run_api(action)
 
     def refresh_settings(self) -> None:
         """Refresh settings editor."""
 
-        self._run_api(lambda: self.settings_text.setPlainText(json.dumps(self.api_client.get_settings(), indent=2, ensure_ascii=False)))
+        def action() -> None:
+            settings = self.api_client.get_settings()
+            self.settings_values = dict(settings)
+            self.settings_text.setPlainText(json.dumps(settings, indent=2, ensure_ascii=False))
+            self._render_settings_forms(self.settings_values)
+
+        self._run_api(action)
 
     def save_settings(self) -> None:
-        """Save JSON settings."""
+        """Save settings from editable form fields."""
 
         def action() -> None:
-            values = json.loads(self.settings_text.toPlainText() or "{}")
+            values = json.loads(json.dumps(self.settings_values, ensure_ascii=False))
+            for path, field in self.settings_fields.items():
+                parsed = self._setting_value_from_text(field.text(), self._settings_value_at_path(path))
+                if len(path) == 1:
+                    values[path[0]] = parsed
+                elif len(path) == 2:
+                    parent = values.setdefault(path[0], {})
+                    if isinstance(parent, dict):
+                        parent[path[1]] = parsed
             updated = self.api_client.update_settings(values)
+            self.settings_values = dict(updated)
             self.settings_text.setPlainText(json.dumps(updated, indent=2, ensure_ascii=False))
+            self._render_settings_forms(self.settings_values)
             QMessageBox.information(self, self.translator.text("common.success"), self.translator.text("common.success"))
 
         self._run_api(action)
