@@ -74,6 +74,27 @@ def create_app(config: AppConfig, session_factory: sessionmaker[Session]) -> Fas
             },
         )
 
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(
+        _request: Request,
+        exc: Exception,
+    ) -> JSONResponse:
+        """Wrap unexpected server errors in the API v1 envelope."""
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Internal server error: {exc}",
+                    "details": {},
+                },
+                "meta": None,
+            },
+        )
+
     @app.middleware("http")
     async def audit_mutating_api_v1_requests(request: Request, call_next):
         """Append audit rows for successful mutating API v1 requests."""

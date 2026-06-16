@@ -873,7 +873,7 @@ class ApiClient:
             raise ApiClientError(f"Server returned non-JSON response: HTTP {response.status_code}") from exc
 
         if not isinstance(envelope, dict) or "success" not in envelope:
-            raise ApiClientError("Server response is not an API v1 envelope.")
+            raise ApiClientError(f"Server response is not an API v1 envelope (HTTP {response.status_code}).")
 
         if not response.ok or not envelope.get("success"):
             error = envelope.get("error") or {}
