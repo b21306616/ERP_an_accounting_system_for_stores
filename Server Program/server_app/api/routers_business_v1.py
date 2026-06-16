@@ -60,6 +60,8 @@ from server_app.schemas.business_v1 import (
     PriceListImportPayload,
     PriceListImportRow,
     PriceListItemCreate,
+    PriceListItemUpdate,
+    PriceListUpdate,
     PromotionCreate,
     PromotionUpdate,
     PurchaseInvoiceCreate,
@@ -103,6 +105,7 @@ require_purchase_order_create = require_v1_permission("purchase.order_create")
 require_purchase_order_edit = require_v1_permission("purchase.order_edit")
 require_purchase_order_cancel = require_v1_permission("purchase.order_cancel")
 require_purchase_create = require_v1_permission("purchase.invoice_create")
+require_purchase_invoice_edit = require_v1_permission("purchase.invoice_edit")
 require_purchase_post = require_v1_permission("purchase.post")
 require_purchase_cancel = require_v1_permission("purchase.cancel")
 require_purchase_return = require_v1_permission("purchase.return")
@@ -1228,6 +1231,47 @@ def create_price_list(
     return success_response(_price_list_payload(row))
 
 
+@router.patch("/price-lists/{price_list_id}")
+def update_price_list(
+    price_list_id: int,
+    payload: PriceListUpdate,
+    _: User = Depends(require_pricing_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch a price-list header."""
+
+    row = _get_or_404(session, PriceList, price_list_id, "Price list")
+    updates = _updates(payload)
+    if updates.get("currency_id") is not None:
+        _ensure_active_currency(session, int(updates["currency_id"]))
+    if updates.get("is_default") is True:
+        session.query(PriceList).filter(PriceList.is_default.is_(True), PriceList.id != row.id).update({PriceList.is_default: False})
+    for key, value in updates.items():
+        setattr(row, key, value)
+    session.commit()
+    session.refresh(row)
+    return success_response(_price_list_payload(row))
+
+
+@router.get("/price-lists/{price_list_id}/items")
+def list_price_list_items(
+    price_list_id: int,
+    _: User = Depends(require_pricing_view),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """List versioned price rows for one price list."""
+
+    _get_or_404(session, PriceList, price_list_id, "Price list")
+    rows = (
+        session.query(PriceListItem)
+        .options(selectinload(PriceListItem.product), selectinload(PriceListItem.service), selectinload(PriceListItem.uom))
+        .filter(PriceListItem.price_list_id == price_list_id)
+        .order_by(PriceListItem.valid_from.desc(), PriceListItem.id.desc())
+        .all()
+    )
+    return success_response([_price_item_payload(row) for row in rows])
+
+
 @router.post("/price-lists/{price_list_id}/items", status_code=status.HTTP_201_CREATED)
 def add_price_list_item(
     price_list_id: int,
@@ -1250,6 +1294,61 @@ def add_price_list_item(
     session.add(item)
     session.commit()
     return success_response(_price_item_payload(item))
+
+
+@router.patch("/price-list-items/{item_id}")
+def update_price_list_item(
+    item_id: int,
+    payload: PriceListItemUpdate,
+    _: User = Depends(require_pricing_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch one versioned price row."""
+
+    row = (
+        session.query(PriceListItem)
+        .options(selectinload(PriceListItem.product), selectinload(PriceListItem.service), selectinload(PriceListItem.uom))
+        .filter(PriceListItem.id == item_id)
+        .one_or_none()
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Price-list item not found."))
+    updates = _updates(payload)
+    target_product_id = updates.get("product_id", row.product_id)
+    target_service_id = updates.get("service_id", row.service_id)
+    if (target_product_id is None) == (target_service_id is None):
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_PRICE_TARGET", "Exactly one of product_id or service_id is required."))
+    if target_product_id is not None:
+        product = _get_or_404(session, Product, int(target_product_id), "Product")
+        if not product.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_PRODUCT", "Product is inactive."))
+    if target_service_id is not None:
+        service = _get_or_404(session, Service, int(target_service_id), "Service")
+        if not service.is_active:
+            raise HTTPException(status_code=400, detail=error_detail("INACTIVE_SERVICE", "Service is inactive."))
+    if updates.get("product_uom_id") is not None:
+        _get_or_404(session, ProductUom, int(updates["product_uom_id"]), "Product UOM")
+    if updates.get("uom_id") is not None:
+        _get_or_404(session, UnitOfMeasure, int(updates["uom_id"]), "Unit of measure")
+    for key, value in updates.items():
+        setattr(row, key, value)
+    session.commit()
+    session.refresh(row)
+    return success_response(_price_item_payload(row))
+
+
+@router.delete("/price-list-items/{item_id}")
+def delete_price_list_item(
+    item_id: int,
+    _: User = Depends(require_pricing_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Delete one versioned price row."""
+
+    row = _get_or_404(session, PriceListItem, item_id, "Price-list item")
+    session.delete(row)
+    session.commit()
+    return success_response({"deleted": True, "id": item_id})
 
 
 @router.get("/price-lists/{price_list_id}/export")
@@ -1827,6 +1926,70 @@ def get_purchase_invoice(
     """Return one purchase invoice."""
 
     return success_response(_invoice_payload(_refresh_invoice(session, invoice_id)))
+
+
+@router.put("/purchase-invoices/{invoice_id}")
+def update_purchase_invoice(
+    invoice_id: int,
+    payload: PurchaseInvoiceCreate,
+    _: User = Depends(require_purchase_invoice_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Replace a draft purchase invoice header and lines."""
+
+    invoice = _refresh_invoice(session, invoice_id)
+    if invoice.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft purchase invoices can be edited."))
+    counterparty = _ensure_active_counterparty(session, payload.counterparty_id)
+    _ensure_supplier(counterparty)
+    _ensure_active_warehouse(session, payload.warehouse_id)
+    _ensure_active_currency(session, payload.currency_id)
+    if payload.doc_number and payload.doc_number != invoice.doc_number:
+        duplicate = session.query(PurchaseInvoice).filter(PurchaseInvoice.doc_number == payload.doc_number, PurchaseInvoice.id != invoice.id).one_or_none()
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Purchase invoice number already exists."))
+    order: PurchaseOrder | None = None
+    source_invoice: PurchaseInvoice | None = None
+    if payload.purchase_order_id is not None:
+        order = _refresh_order(session, payload.purchase_order_id)
+        if order.status == "cancelled":
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_CANCELLED", "Purchase order is cancelled."))
+        if order.counterparty_id != payload.counterparty_id or order.warehouse_id != payload.warehouse_id or order.currency_id != payload.currency_id:
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_HEADER_MISMATCH", "Invoice header differs from the linked purchase order."))
+        if any(line.purchase_order_line_id is None for line in payload.lines):
+            raise HTTPException(status_code=400, detail=error_detail("ORDER_LINE_REQUIRED", "Every invoice line linked to an order must reference a purchase order line."))
+    if payload.return_invoice_id is not None:
+        source_invoice = _get_or_404(session, PurchaseInvoice, payload.return_invoice_id, "Return source invoice")
+        if source_invoice.status != "posted" or source_invoice.is_return:
+            raise HTTPException(status_code=400, detail=error_detail("INVALID_RETURN_SOURCE", "Supplier returns must reference a posted purchase invoice."))
+    contract_id = _contract_id_for_order(order, payload.contract_id)
+    if contract_id is None and source_invoice is not None:
+        contract_id = source_invoice.contract_id
+    _ensure_contract_matches(session, contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
+
+    invoice.doc_number = payload.doc_number or invoice.doc_number
+    invoice.doc_date = payload.doc_date or invoice.doc_date
+    invoice.purchase_order_id = payload.purchase_order_id
+    invoice.counterparty_id = payload.counterparty_id
+    invoice.contract_id = contract_id
+    invoice.warehouse_id = payload.warehouse_id
+    invoice.currency_id = payload.currency_id
+    invoice.currency_rate = payload.currency_rate
+    invoice.expiry_note = payload.expiry_note
+    invoice.is_return = payload.is_return
+    invoice.return_invoice_id = payload.return_invoice_id
+    invoice.note = payload.note
+    invoice.lines.clear()
+    session.flush()
+    for line_payload in payload.lines:
+        invoice.lines.append(_create_invoice_line(session, invoice, line_payload))
+    invoice.total_amount_cur = money(sum((line.amount_cur for line in invoice.lines), Decimal("0")))
+    invoice.total_amount_tmt = money(sum((line.amount_tmt for line in invoice.lines), Decimal("0")))
+    if invoice.is_return:
+        invoice.total_amount_cur = -invoice.total_amount_cur
+        invoice.total_amount_tmt = -invoice.total_amount_tmt
+    session.commit()
+    return success_response(_invoice_payload(_refresh_invoice(session, invoice.id)))
 
 
 @router.post("/purchase-invoices/{invoice_id}/post")

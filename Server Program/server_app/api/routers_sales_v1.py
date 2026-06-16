@@ -45,6 +45,7 @@ from server_app.db.models import (
 from server_app.schemas.sales_v1 import (
     CashOperationCreate,
     CashRegisterCreate,
+    CashRegisterUpdate,
     CashShiftClose,
     CashShiftOpen,
     CashShiftZReportCreate,
@@ -82,6 +83,7 @@ require_shift_close = require_v1_permission("cashier.shift_close")
 require_cash_operation = require_v1_permission("cashier.cash_operation")
 require_sale_view = require_v1_permission("sale.view")
 require_sale_create = require_v1_permission("sale.create")
+require_sale_edit = require_v1_permission("sale.edit")
 require_sale_post = require_v1_permission("sale.post")
 require_sale_cancel = require_v1_permission("sale.cancel")
 require_sale_return_create = require_v1_permission("sale_return.create")
@@ -874,6 +876,26 @@ def create_cash_register(
     return success_response(_cash_register_payload(register))
 
 
+@router.patch("/cash-registers/{register_id}")
+def update_cash_register(
+    register_id: int,
+    payload: CashRegisterUpdate,
+    _: User = Depends(require_register_manage),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Patch a cash register."""
+
+    register = _get_or_404(session, CashRegister, register_id, "Cash register")
+    updates = payload.model_dump(exclude_unset=True)
+    if updates.get("warehouse_id") is not None:
+        _get_or_404(session, Warehouse, int(updates["warehouse_id"]), "Warehouse")
+    for key, value in updates.items():
+        setattr(register, key, value)
+    session.commit()
+    session.refresh(register)
+    return success_response(_cash_register_payload(register))
+
+
 @router.get("/cash-shifts")
 def list_cash_shifts(
     status_filter: str | None = Query(default=None, alias="status"),
@@ -1035,6 +1057,80 @@ def get_sale(
     """Return one sale document."""
 
     return success_response(_sale_payload(_refresh_sale(session, sale_id)))
+
+
+@router.put("/sales/{sale_id}")
+def update_sale(
+    sale_id: int,
+    payload: SaleCreate,
+    _: User = Depends(require_sale_edit),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Replace a draft sale document."""
+
+    sale = _refresh_sale(session, sale_id)
+    if sale.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft sales can be edited."))
+    _get_or_404(session, Warehouse, payload.warehouse_id, "Warehouse")
+    _get_or_404(session, Currency, payload.currency_id, "Currency")
+    if payload.doc_number and payload.doc_number != sale.doc_number:
+        duplicate = session.query(Sale).filter(Sale.doc_number == payload.doc_number, Sale.id != sale.id).one_or_none()
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Sale number already exists."))
+    if payload.cash_register_id is not None:
+        register = _get_or_404(session, CashRegister, payload.cash_register_id, "Cash register")
+        if register.warehouse_id != payload.warehouse_id:
+            raise HTTPException(status_code=400, detail=error_detail("REGISTER_WAREHOUSE_MISMATCH", "Cash register belongs to another warehouse."))
+    _validate_shift_for_register(session, payload.cash_shift_id, payload.cash_register_id)
+    counterparty = session.get(Counterparty, payload.counterparty_id) if payload.counterparty_id is not None else None
+    if payload.counterparty_id is not None and counterparty is None:
+        raise HTTPException(status_code=404, detail=error_detail("NOT_FOUND", "Counterparty not found."))
+    _ensure_customer(
+        counterparty,
+        required=payload.sale_type == "wholesale" or payload.payment_type == "debt" or money(payload.debt_amount_tmt) > Decimal("0.00") or payload.contract_id is not None,
+    )
+    _ensure_sale_contract_matches(session, payload.contract_id, counterparty_id=payload.counterparty_id, currency_id=payload.currency_id)
+
+    sale_date = payload.doc_date or sale.doc_date
+    lines = [_build_sale_line(session, item) for item in payload.lines]
+    lines = _apply_promotions_to_lines(session, lines, sale_date)
+    subtotal = money(sum((line.amount_tmt for line in lines), Decimal("0")))
+    doc_discount = money((subtotal * money(payload.discount_percent) / Decimal("100")) + payload.discount_amount_tmt)
+    if doc_discount > subtotal:
+        raise HTTPException(status_code=400, detail=error_detail("DISCOUNT_EXCEEDS_TOTAL", "Document discount exceeds sale subtotal."))
+    total = money(subtotal - doc_discount)
+    paid_cash, paid_transfer, paid_bonus, debt = _payment_split(payload, total)
+    if debt > Decimal("0.00") and counterparty is None:
+        raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Counterparty is required for debt amount."))
+    loyalty_card = _validate_loyalty_payment(session, payload, counterparty, total, paid_bonus)
+    credit_warning = _credit_limit_warning(session, counterparty, debt)
+
+    sale.doc_number = payload.doc_number or sale.doc_number
+    sale.doc_date = sale_date
+    sale.sale_type = payload.sale_type
+    sale.cash_register_id = payload.cash_register_id
+    sale.cash_shift_id = payload.cash_shift_id
+    sale.counterparty_id = payload.counterparty_id
+    sale.contract_id = payload.contract_id
+    sale.warehouse_id = payload.warehouse_id
+    sale.price_list_id = payload.price_list_id
+    sale.currency_id = payload.currency_id
+    sale.currency_rate = payload.currency_rate
+    sale.discount_percent = payload.discount_percent
+    sale.discount_amount_tmt = doc_discount
+    sale.total_amount_tmt = total
+    sale.payment_type = payload.payment_type
+    sale.paid_cash_tmt = paid_cash
+    sale.paid_transfer_tmt = paid_transfer
+    sale.paid_bonus_tmt = paid_bonus
+    sale.debt_amount_tmt = debt
+    sale.loyalty_card_id = loyalty_card.id if loyalty_card is not None else None
+    sale.lines.clear()
+    session.flush()
+    sale.lines.extend(lines)
+    session.commit()
+    meta = {"warnings": [credit_warning]} if credit_warning is not None else None
+    return success_response(_sale_payload(_refresh_sale(session, sale.id)), meta=meta)
 
 
 @router.post("/sales", status_code=status.HTTP_201_CREATED)
@@ -1271,6 +1367,96 @@ def get_sale_return(
     """Return one sale return."""
 
     return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return_id)))
+
+
+@router.put("/sale-returns/{sale_return_id}")
+def update_sale_return(
+    sale_return_id: int,
+    payload: SaleReturnCreate,
+    _: User = Depends(require_sale_return_create),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Replace a draft sale-return document."""
+
+    sale_return = _refresh_sale_return(session, sale_return_id)
+    if sale_return.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft sale returns can be edited."))
+    sale = _refresh_sale(session, payload.sale_id)
+    if sale.status != "posted":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only posted sales can be returned."))
+    register_id = payload.cash_register_id if payload.cash_register_id is not None else sale.cash_register_id
+    shift_id = payload.cash_shift_id if payload.cash_shift_id is not None else sale.cash_shift_id
+    if register_id is not None:
+        register = _get_or_404(session, CashRegister, register_id, "Cash register")
+        if register.warehouse_id != sale.warehouse_id:
+            raise HTTPException(status_code=400, detail=error_detail("REGISTER_WAREHOUSE_MISMATCH", "Cash register belongs to another warehouse."))
+    if shift_id is not None:
+        _validate_shift_for_register(session, shift_id, register_id)
+
+    source_lines = {line.id: line for line in sale.lines}
+    seen_lines: set[int] = set()
+    return_lines: list[SaleReturnLine] = []
+    for line_payload in payload.lines:
+        if line_payload.source_sale_line_id in seen_lines:
+            raise HTTPException(status_code=400, detail=error_detail("DUPLICATE_RETURN_LINE", "A sale line can appear only once in a return."))
+        seen_lines.add(line_payload.source_sale_line_id)
+        source_line = source_lines.get(line_payload.source_sale_line_id)
+        if source_line is None:
+            raise HTTPException(status_code=400, detail=error_detail("SALE_LINE_MISMATCH", "Return line does not belong to the source sale."))
+        returned_qty = _returned_quantity_for_sale_line(session, source_line.id)
+        remaining_qty = qty4(source_line.quantity) - returned_qty
+        return_qty = qty4(line_payload.quantity)
+        if return_qty > remaining_qty:
+            raise HTTPException(status_code=400, detail=error_detail("RETURN_EXCEEDS_SALE", "Return quantity exceeds the source sale quantity."))
+        final_price = price(line_payload.price_final if line_payload.price_final is not None else source_line.price_final)
+        return_lines.append(
+            SaleReturnLine(
+                source_sale_line_id=source_line.id,
+                product_id=source_line.product_id,
+                service_id=source_line.service_id,
+                product_uom_id=source_line.product_uom_id,
+                uom_id=source_line.uom_id,
+                quantity=return_qty,
+                price_final=final_price,
+                amount_tmt=money(return_qty * final_price),
+                avg_cost_tmt=source_line.avg_cost_tmt,
+            )
+        )
+
+    total = money(sum((line.amount_tmt for line in return_lines), Decimal("0.00")))
+    refund_cash, refund_transfer, refund_bonus, receivable_correction = _sale_return_payment_split(payload, total)
+    if refund_cash > Decimal("0.00") and shift_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("SHIFT_NOT_OPEN", "Cash refund requires an open cash shift."))
+    if refund_bonus > Decimal("0.00") and sale.loyalty_card_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("LOYALTY_CARD_REQUIRED", "Bonus refund requires the source sale to have a loyalty card."))
+    if receivable_correction > Decimal("0.00") and sale.counterparty_id is None:
+        raise HTTPException(status_code=400, detail=error_detail("COUNTERPARTY_REQUIRED", "Receivable correction requires a counterparty."))
+    if payload.doc_number and payload.doc_number != sale_return.doc_number:
+        duplicate = session.query(SaleReturn).filter(SaleReturn.doc_number == payload.doc_number, SaleReturn.id != sale_return.id).one_or_none()
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail=error_detail("DUPLICATE_DOC_NUMBER", "Sale return number already exists."))
+
+    sale_return.doc_number = payload.doc_number or sale_return.doc_number
+    sale_return.doc_date = payload.doc_date or sale_return.doc_date
+    sale_return.sale_id = sale.id
+    sale_return.cash_register_id = register_id
+    sale_return.cash_shift_id = shift_id
+    sale_return.counterparty_id = sale.counterparty_id
+    sale_return.warehouse_id = sale.warehouse_id
+    sale_return.currency_id = sale.currency_id
+    sale_return.currency_rate = sale.currency_rate
+    sale_return.total_amount_tmt = total
+    sale_return.refund_method = payload.refund_method
+    sale_return.refund_cash_tmt = refund_cash
+    sale_return.refund_transfer_tmt = refund_transfer
+    sale_return.refund_bonus_tmt = refund_bonus
+    sale_return.receivable_correction_tmt = receivable_correction
+    sale_return.note = payload.note
+    sale_return.lines.clear()
+    session.flush()
+    sale_return.lines.extend(return_lines)
+    session.commit()
+    return success_response(_sale_return_payload(_refresh_sale_return(session, sale_return.id)))
 
 
 @router.post("/sale-returns", status_code=status.HTTP_201_CREATED)

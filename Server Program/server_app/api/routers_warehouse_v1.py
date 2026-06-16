@@ -483,6 +483,43 @@ def create_stock_transfer(
     return success_response(_transfer_payload(_refresh_transfer(session, transfer.id)))
 
 
+@router.put("/stock-transfers/{transfer_id}")
+def update_stock_transfer(
+    transfer_id: int,
+    payload: StockTransferCreate,
+    _: User = Depends(require_transfer_create),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Replace a draft stock transfer header and lines."""
+
+    transfer = _refresh_transfer(session, transfer_id)
+    if transfer.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft transfers can be edited."))
+    if payload.source_warehouse_id == payload.target_warehouse_id:
+        raise HTTPException(status_code=400, detail=error_detail("SAME_WAREHOUSE", "Source and target warehouses must differ."))
+    _ensure_warehouse(session, payload.source_warehouse_id)
+    _ensure_warehouse(session, payload.target_warehouse_id)
+    for line in payload.lines:
+        _ensure_product_refs(session, line)
+
+    transfer.source_warehouse_id = payload.source_warehouse_id
+    transfer.target_warehouse_id = payload.target_warehouse_id
+    transfer.note = payload.note
+    transfer.lines.clear()
+    session.flush()
+    for line in payload.lines:
+        transfer.lines.append(
+            StockTransferLine(
+                product_id=line.product_id,
+                uom_id=line.uom_id,
+                quantity=quantity(line.quantity),
+                unit_cost_tmt=money(line.unit_cost_tmt or 0),
+            )
+        )
+    session.commit()
+    return success_response(_transfer_payload(_refresh_transfer(session, transfer.id)))
+
+
 @router.get("/stock-transfers/{transfer_id}")
 def get_stock_transfer(
     transfer_id: int,
@@ -643,6 +680,40 @@ def create_stock_writeoff(
             )
         )
     session.add(writeoff)
+    session.commit()
+    return success_response(_writeoff_payload(_refresh_writeoff(session, writeoff.id)))
+
+
+@router.put("/stock-writeoffs/{writeoff_id}")
+def update_stock_writeoff(
+    writeoff_id: int,
+    payload: StockWriteoffCreate,
+    _: User = Depends(require_writeoff_create),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Replace a draft write-off header and lines."""
+
+    writeoff = _refresh_writeoff(session, writeoff_id)
+    if writeoff.status != "draft":
+        raise HTTPException(status_code=400, detail=error_detail("INVALID_STATUS", "Only draft write-offs can be edited."))
+    _ensure_warehouse(session, payload.warehouse_id)
+    for line in payload.lines:
+        _ensure_product_refs(session, line)
+
+    writeoff.warehouse_id = payload.warehouse_id
+    writeoff.reason_code = payload.reason_code
+    writeoff.note = payload.note
+    writeoff.lines.clear()
+    session.flush()
+    for line in payload.lines:
+        writeoff.lines.append(
+            StockWriteoffLine(
+                product_id=line.product_id,
+                uom_id=line.uom_id,
+                quantity=quantity(line.quantity),
+                unit_cost_tmt=money(line.unit_cost_tmt or 0),
+            )
+        )
     session.commit()
     return success_response(_writeoff_payload(_refresh_writeoff(session, writeoff.id)))
 

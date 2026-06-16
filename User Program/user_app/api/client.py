@@ -91,10 +91,35 @@ class ApiClient:
 
         return dict(self._request("POST", "/users", json=payload))
 
+    def update_user(self, user_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Update a user."""
+
+        return dict(self._request("PUT", f"/users/{user_id}", json=payload))
+
+    def deactivate_user(self, user_id: int) -> dict[str, Any]:
+        """Deactivate a user."""
+
+        return dict(self._request("POST", f"/users/{user_id}/deactivate"))
+
     def get_roles(self) -> list[dict[str, Any]]:
         """Return roles visible to the current account."""
 
         return list(self._request("GET", "/roles"))
+
+    def create_role(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create a custom role."""
+
+        return dict(self._request("POST", "/roles", json=payload))
+
+    def update_role(self, role_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a role."""
+
+        return dict(self._request("PATCH", f"/roles/{role_id}", json=payload))
+
+    def delete_role(self, role_id: int) -> dict[str, Any]:
+        """Delete an unused custom role."""
+
+        return dict(self._request("DELETE", f"/roles/{role_id}"))
 
     def get_permissions(self) -> list[dict[str, Any]]:
         """Return permissions visible to the current account."""
@@ -131,6 +156,11 @@ class ApiClient:
 
         return dict(self._request("POST", "/product-groups", json=payload))
 
+    def update_product_group(self, group_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a product group."""
+
+        return dict(self._request("PATCH", f"/product-groups/{group_id}", json=payload))
+
     def get_products(self, search: str | None = None) -> list[dict[str, Any]]:
         """Return products."""
 
@@ -143,6 +173,21 @@ class ApiClient:
         """Create a product."""
 
         return dict(self._request("POST", "/products", json=payload))
+
+    def get_product(self, product_id: int) -> dict[str, Any]:
+        """Return one product."""
+
+        return dict(self._request("GET", f"/products/{product_id}"))
+
+    def update_product(self, product_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a product."""
+
+        return dict(self._request("PATCH", f"/products/{product_id}", json=payload))
+
+    def deactivate_product(self, product_id: int) -> dict[str, Any]:
+        """Deactivate a product."""
+
+        return dict(self._request("DELETE", f"/products/{product_id}"))
 
     def add_product_barcode(self, product_id: int, barcode: str) -> dict[str, Any]:
         """Add a barcode to a product."""
@@ -167,6 +212,16 @@ class ApiClient:
 
         return dict(self._request("POST", "/services", json=payload))
 
+    def get_service(self, service_id: int) -> dict[str, Any]:
+        """Return one service."""
+
+        return dict(self._request("GET", f"/services/{service_id}"))
+
+    def update_service(self, service_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a service."""
+
+        return dict(self._request("PATCH", f"/services/{service_id}", json=payload))
+
     def get_expense_categories(self) -> list[dict[str, Any]]:
         """Return expense categories."""
 
@@ -181,6 +236,11 @@ class ApiClient:
         """Create a warehouse."""
 
         return dict(self._request("POST", "/warehouses", json=payload))
+
+    def update_warehouse(self, warehouse_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a warehouse."""
+
+        return dict(self._request("PATCH", f"/warehouses/{warehouse_id}", json=payload))
 
     def get_stock_balances(
         self,
@@ -231,10 +291,40 @@ class ApiClient:
 
         return dict(self._request("POST", f"/inventories/{inventory_id}/post"))
 
+    def get_inventories(self) -> list[dict[str, Any]]:
+        """Return recent inventory documents."""
+
+        return list(self._request("GET", "/inventories"))
+
+    def get_inventory(self, inventory_id: int) -> dict[str, Any]:
+        """Return one inventory document."""
+
+        return dict(self._request("GET", f"/inventories/{inventory_id}"))
+
+    def cancel_inventory(self, inventory_id: int) -> dict[str, Any]:
+        """Cancel an open inventory document."""
+
+        return dict(self._request("POST", f"/inventories/{inventory_id}/cancel"))
+
     def create_stock_transfer(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a stock transfer."""
 
         return dict(self._request("POST", "/stock-transfers", json=payload))
+
+    def get_stock_transfers(self) -> list[dict[str, Any]]:
+        """Return recent stock transfers."""
+
+        return list(self._request("GET", "/stock-transfers"))
+
+    def get_stock_transfer(self, transfer_id: int) -> dict[str, Any]:
+        """Return one stock transfer."""
+
+        return dict(self._request("GET", f"/stock-transfers/{transfer_id}"))
+
+    def update_stock_transfer(self, transfer_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a draft stock transfer."""
+
+        return dict(self._request("PUT", f"/stock-transfers/{transfer_id}", json=payload))
 
     def send_stock_transfer(self, transfer_id: int) -> dict[str, Any]:
         """Send a stock transfer."""
@@ -255,6 +345,21 @@ class ApiClient:
         """Create a stock write-off."""
 
         return dict(self._request("POST", "/stock-writeoffs", json=payload))
+
+    def get_stock_writeoffs(self) -> list[dict[str, Any]]:
+        """Return recent stock write-offs."""
+
+        return list(self._request("GET", "/stock-writeoffs"))
+
+    def get_stock_writeoff(self, writeoff_id: int) -> dict[str, Any]:
+        """Return one stock write-off."""
+
+        return dict(self._request("GET", f"/stock-writeoffs/{writeoff_id}"))
+
+    def update_stock_writeoff(self, writeoff_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a draft stock write-off."""
+
+        return dict(self._request("PUT", f"/stock-writeoffs/{writeoff_id}", json=payload))
 
     def post_stock_writeoff(self, writeoff_id: int) -> dict[str, Any]:
         """Post a stock write-off."""
@@ -285,6 +390,11 @@ class ApiClient:
         """Create a counterparty."""
 
         return dict(self._request("POST", "/counterparties", json=payload))
+
+    def update_counterparty(self, counterparty_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a counterparty."""
+
+        return dict(self._request("PATCH", f"/counterparties/{counterparty_id}", json=payload))
 
     def get_debt_summary(self, counterparty_id: int) -> dict[str, Any]:
         """Return debt balances for one counterparty."""
@@ -386,10 +496,30 @@ class ApiClient:
 
         return dict(self._request("POST", "/price-lists", json=payload))
 
+    def update_price_list(self, price_list_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a price list."""
+
+        return dict(self._request("PATCH", f"/price-lists/{price_list_id}", json=payload))
+
+    def get_price_list_items(self, price_list_id: int) -> list[dict[str, Any]]:
+        """Return versioned price-list items."""
+
+        return list(self._request("GET", f"/price-lists/{price_list_id}/items"))
+
     def add_price_list_item(self, price_list_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         """Add a versioned price-list item."""
 
         return dict(self._request("POST", f"/price-lists/{price_list_id}/items", json=payload))
+
+    def update_price_list_item(self, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a versioned price-list item."""
+
+        return dict(self._request("PATCH", f"/price-list-items/{item_id}", json=payload))
+
+    def delete_price_list_item(self, item_id: int) -> dict[str, Any]:
+        """Delete a versioned price-list item."""
+
+        return dict(self._request("DELETE", f"/price-list-items/{item_id}"))
 
     def export_price_list(self, price_list_id: int) -> dict[str, Any]:
         """Export a price list as rows and base64 XLSX data."""
@@ -466,6 +596,11 @@ class ApiClient:
 
         return list(self._request("GET", "/purchase-orders"))
 
+    def get_purchase_order(self, order_id: int) -> dict[str, Any]:
+        """Return one purchase order."""
+
+        return dict(self._request("GET", f"/purchase-orders/{order_id}"))
+
     def create_purchase_order(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a purchase order."""
 
@@ -491,6 +626,11 @@ class ApiClient:
 
         return list(self._request("GET", "/purchase-invoices"))
 
+    def get_purchase_invoice(self, invoice_id: int) -> dict[str, Any]:
+        """Return one purchase invoice."""
+
+        return dict(self._request("GET", f"/purchase-invoices/{invoice_id}"))
+
     def create_purchase_invoice(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a purchase invoice."""
 
@@ -500,6 +640,11 @@ class ApiClient:
         """Create a supplier return invoice."""
 
         return dict(self._request("POST", "/purchase-invoices/return", json=payload))
+
+    def update_purchase_invoice(self, invoice_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a draft purchase invoice."""
+
+        return dict(self._request("PUT", f"/purchase-invoices/{invoice_id}", json=payload))
 
     def post_purchase_invoice(self, invoice_id: int) -> dict[str, Any]:
         """Post a purchase invoice."""
@@ -516,6 +661,11 @@ class ApiClient:
 
         return dict(self._request("POST", "/payments", json=payload))
 
+    def cancel_payment(self, payment_id: int) -> dict[str, Any]:
+        """Cancel a payment document."""
+
+        return dict(self._request("POST", f"/payments/{payment_id}/cancel"))
+
     def get_cash_registers(self) -> list[dict[str, Any]]:
         """Return cash registers."""
 
@@ -525,6 +675,11 @@ class ApiClient:
         """Create a cash register."""
 
         return dict(self._request("POST", "/cash-registers", json=payload))
+
+    def update_cash_register(self, register_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Patch a cash register."""
+
+        return dict(self._request("PATCH", f"/cash-registers/{register_id}", json=payload))
 
     def get_cash_shifts(self, status: str | None = None) -> list[dict[str, Any]]:
         """Return cash shifts."""
@@ -561,10 +716,20 @@ class ApiClient:
 
         return list(self._request("GET", self._path_with_params("/sales", {"status": status})))
 
+    def get_sale(self, sale_id: int) -> dict[str, Any]:
+        """Return one sale."""
+
+        return dict(self._request("GET", f"/sales/{sale_id}"))
+
     def create_sale(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a sale."""
 
         return dict(self._request("POST", "/sales", json=payload))
+
+    def update_sale(self, sale_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a draft sale."""
+
+        return dict(self._request("PUT", f"/sales/{sale_id}", json=payload))
 
     def post_sale(self, sale_id: int) -> dict[str, Any]:
         """Post a sale."""
@@ -581,10 +746,20 @@ class ApiClient:
 
         return list(self._request("GET", self._path_with_params("/sale-returns", {"status": status})))
 
+    def get_sale_return(self, sale_return_id: int) -> dict[str, Any]:
+        """Return one sale return."""
+
+        return dict(self._request("GET", f"/sale-returns/{sale_return_id}"))
+
     def create_sale_return(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Create a sale return."""
 
         return dict(self._request("POST", "/sale-returns", json=payload))
+
+    def update_sale_return(self, sale_return_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Replace a draft sale return."""
+
+        return dict(self._request("PUT", f"/sale-returns/{sale_return_id}", json=payload))
 
     def post_sale_return(self, sale_return_id: int) -> dict[str, Any]:
         """Post a sale return."""

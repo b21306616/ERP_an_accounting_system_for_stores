@@ -94,6 +94,17 @@ class PriceListCreate(BaseModel):
     note: str | None = None
 
 
+class PriceListUpdate(BaseModel):
+    """Patch payload for a price list."""
+
+    name_ru: str | None = Field(default=None, min_length=1, max_length=100)
+    name_tk: str | None = Field(default=None, max_length=100)
+    currency_id: int | None = None
+    is_default: bool | None = None
+    is_active: bool | None = None
+    note: str | None = None
+
+
 class PriceListItemCreate(BaseModel):
     """Create payload for a versioned price-list item."""
 
@@ -112,6 +123,18 @@ class PriceListItemCreate(BaseModel):
         if (self.product_id is None) == (self.service_id is None):
             raise ValueError("Exactly one of product_id or service_id is required.")
         return self
+
+
+class PriceListItemUpdate(BaseModel):
+    """Patch payload for a versioned price-list item."""
+
+    product_id: int | None = None
+    service_id: int | None = None
+    product_uom_id: int | None = None
+    uom_id: int | None = None
+    price_tmt: Decimal | None = Field(default=None, gt=0)
+    valid_from: date | None = None
+    valid_to: date | None = None
 
 
 class PriceListImportRow(BaseModel):

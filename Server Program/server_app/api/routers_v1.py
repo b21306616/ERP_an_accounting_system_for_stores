@@ -13,6 +13,7 @@ from server_app.api.dependencies import get_db
 from server_app.core.constants import (
     ACCESS_TOKEN_EXPIRE_MINUTES,
     APP_NAME,
+    BUILTIN_ROLES,
     SUPER_ADMIN_FULL_NAME,
     SUPER_ADMIN_ROLE,
     SUPER_ADMIN_USERNAME,
@@ -31,6 +32,8 @@ from server_app.db.models import (
 from server_app.schemas.api_v1 import (
     V1AdminPasswordRequest,
     V1LoginRequest,
+    V1RoleCreate,
+    V1RoleUpdate,
     V1SettingsUpdate,
     V1UserCreate,
     V1UserUpdate,
@@ -123,6 +126,32 @@ def _permission_payload(permission: Permission) -> dict[str, Any]:
         "module": permission.module,
         "description": permission.description,
     }
+
+
+def _permission_rows_for_codes(session: Session, permission_codes: list[str]) -> list[Permission]:
+    """Return permission rows for the supplied codes or raise a v1 error."""
+
+    clean_codes = sorted({code.strip() for code in permission_codes if code.strip()})
+    if not clean_codes:
+        return []
+    rows = session.query(Permission).filter(Permission.code.in_(clean_codes)).all()
+    found = {row.code for row in rows}
+    missing = [code for code in clean_codes if code not in found]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail("UNKNOWN_PERMISSION", "Unknown permission code.", {"permissions": missing}),
+        )
+    return sorted(rows, key=lambda row: row.code)
+
+
+def _replace_role_permissions(session: Session, role: Role, permission_codes: list[str]) -> None:
+    """Replace a role's permission assignments."""
+
+    role.role_permissions.clear()
+    session.flush()
+    for permission in _permission_rows_for_codes(session, permission_codes):
+        role.role_permissions.append(RolePermission(permission=permission))
 
 
 def _workplace_payload(workplace: Workplace) -> dict[str, Any]:
@@ -356,6 +385,93 @@ def list_permissions(_: User = Depends(require_v1_super_admin), session: Session
 
     permissions = session.query(Permission).order_by(Permission.module, Permission.code).all()
     return success_response([_permission_payload(permission) for permission in permissions])
+
+
+@router.post("/roles", status_code=status.HTTP_201_CREATED)
+def create_role(
+    payload: V1RoleCreate,
+    _: User = Depends(require_v1_super_admin),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Create a custom role with explicit permissions."""
+
+    role_name = payload.name.strip()
+    if role_name in BUILTIN_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail("BUILTIN_ROLE", "Built-in roles already exist and cannot be recreated."),
+        )
+    if session.query(Role).filter(Role.name == role_name).one_or_none() is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=error_detail("DUPLICATE_ROLE", "Role name already exists."),
+        )
+    role = Role(name=role_name, description=payload.description)
+    session.add(role)
+    session.flush()
+    _replace_role_permissions(session, role, payload.permissions)
+    session.commit()
+    session.refresh(role)
+    return success_response(_role_payload(role))
+
+
+@router.patch("/roles/{role_id}")
+def update_role(
+    role_id: int,
+    payload: V1RoleUpdate,
+    _: User = Depends(require_v1_super_admin),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Update a role description and permission assignments."""
+
+    role = (
+        session.query(Role)
+        .options(selectinload(Role.role_permissions).selectinload(RolePermission.permission))
+        .filter(Role.id == role_id)
+        .one_or_none()
+    )
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("NOT_FOUND", "Role not found."),
+        )
+    if payload.description is not None:
+        role.description = payload.description
+    if payload.permissions is not None:
+        _replace_role_permissions(session, role, payload.permissions)
+    session.commit()
+    session.refresh(role)
+    return success_response(_role_payload(role))
+
+
+@router.delete("/roles/{role_id}")
+def delete_role(
+    role_id: int,
+    _: User = Depends(require_v1_super_admin),
+    session: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Delete an unused custom role."""
+
+    role = session.get(Role, role_id)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_detail("NOT_FOUND", "Role not found."),
+        )
+    if role.name in BUILTIN_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail("BUILTIN_ROLE", "Built-in roles cannot be deleted."),
+        )
+    assigned_users = session.query(User).filter(User.role_id == role.id).count()
+    if assigned_users:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_detail("ROLE_IN_USE", "Role is assigned to users and cannot be deleted."),
+        )
+    session.delete(role)
+    session.commit()
+    return success_response({"deleted": True, "id": role_id})
 
 
 @router.get("/users")

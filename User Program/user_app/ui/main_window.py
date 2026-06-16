@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QMessageBox,
     QPushButton,
     QHeaderView,
@@ -30,6 +31,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QScrollArea,
     QStackedWidget,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -391,6 +393,223 @@ class MainWindow(QWidget):
                 table.setItem(row_index, column_index, item)
         table.resizeColumnsToContents()
         table.setSortingEnabled(True)
+
+    def _api_list(self, method_name: str, *args: object, **kwargs: object) -> list[dict[str, object]]:
+        """Return an API list when the staged client/server method exists."""
+
+        method = getattr(self.api_client, method_name, None)
+        if method is None:
+            return []
+        rows = method(*args, **kwargs)
+        return rows if isinstance(rows, list) else []
+
+    def _selected_table_row(self, table: QTableWidget) -> dict[str, object] | None:
+        """Return the API row attached to the selected table row."""
+
+        selected = table.selectedItems()
+        if not selected:
+            return None
+        row_data = selected[0].data(Qt.ItemDataRole.UserRole)
+        return row_data if isinstance(row_data, dict) else None
+
+    def _record_name(self, row: dict[str, object]) -> str:
+        """Return a compact human name for a row."""
+
+        for key in ("name", "name_ru", "username", "full_name", "doc_number", "code", "sku", "number"):
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value)
+        return f"#{row.get('id', '')}"
+
+    def _install_record_actions(
+        self,
+        table: QTableWidget,
+        *,
+        view: Callable[[dict[str, object]], None],
+        edit: Callable[[dict[str, object]], None] | None = None,
+        lifecycle: Callable[[dict[str, object]], None] | None = None,
+        lifecycle_label: Callable[[dict[str, object]], str] | None = None,
+        edit_enabled: Callable[[dict[str, object]], bool] | None = None,
+        lifecycle_enabled: Callable[[dict[str, object]], bool] | None = None,
+    ) -> None:
+        """Attach a localized right-click menu and double-click view action."""
+
+        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        table.customContextMenuRequested.connect(
+            lambda position, current_table=table: self._show_record_context_menu(
+                current_table,
+                position,
+                view=view,
+                edit=edit,
+                lifecycle=lifecycle,
+                lifecycle_label=lifecycle_label,
+                edit_enabled=edit_enabled,
+                lifecycle_enabled=lifecycle_enabled,
+            )
+        )
+        table.itemDoubleClicked.connect(lambda _item, current_table=table: self._view_selected_record(current_table, view))
+
+    def _show_record_context_menu(
+        self,
+        table: QTableWidget,
+        position: object,
+        *,
+        view: Callable[[dict[str, object]], None],
+        edit: Callable[[dict[str, object]], None] | None,
+        lifecycle: Callable[[dict[str, object]], None] | None,
+        lifecycle_label: Callable[[dict[str, object]], str] | None,
+        edit_enabled: Callable[[dict[str, object]], bool] | None,
+        lifecycle_enabled: Callable[[dict[str, object]], bool] | None,
+    ) -> None:
+        """Show the context menu for one record table."""
+
+        index = table.indexAt(position)
+        if index.isValid():
+            table.selectRow(index.row())
+        row = self._selected_table_row(table)
+        if row is None:
+            return
+        menu = QMenu(table)
+        view_action = menu.addAction(self.translator.text("crud.view"))
+        edit_action = menu.addAction(self.translator.text("crud.edit")) if edit is not None else None
+        lifecycle_action = None
+        if lifecycle is not None:
+            label = lifecycle_label(row) if lifecycle_label else self.translator.text("crud.deactivate")
+            lifecycle_action = menu.addAction(label)
+        if edit_action is not None:
+            can_edit = edit_enabled(row) if edit_enabled else True
+            edit_action.setEnabled(can_edit)
+            if not can_edit:
+                edit_action.setToolTip(self.translator.text("crud.edit_disabled"))
+                edit_action.setStatusTip(self.translator.text("crud.edit_disabled"))
+        if lifecycle_action is not None:
+            lifecycle_action.setEnabled(lifecycle_enabled(row) if lifecycle_enabled else True)
+        chosen = menu.exec(table.viewport().mapToGlobal(position))
+        if chosen == view_action:
+            view(row)
+        elif edit_action is not None and chosen == edit_action:
+            edit(row)
+        elif lifecycle_action is not None and chosen == lifecycle_action:
+            lifecycle(row)
+
+    def _view_selected_record(self, table: QTableWidget, view: Callable[[dict[str, object]], None]) -> None:
+        """Open the selected row in the detail dialog."""
+
+        row = self._selected_table_row(table)
+        if row is not None:
+            view(row)
+
+    def _show_record_details(self, title: str, row: dict[str, object]) -> None:
+        """Show scalar fields and related list data for a record."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(720, 520)
+        layout = QVBoxLayout(dialog)
+        header = QLabel(self._record_name(row))
+        header.setObjectName("PageTitle")
+        layout.addWidget(header)
+
+        scalar_rows = [
+            {"field": self._humanize_key(key), "value": value}
+            for key, value in row.items()
+            if not isinstance(value, (list, dict, tuple))
+        ]
+        table = QTableWidget(0, 2)
+        self._configure_table(table)
+        self._populate_table(table, scalar_rows, [("field", self._ui("field")), ("value", self._ui("value"))])
+        layout.addWidget(table, 1)
+
+        for key, value in row.items():
+            if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+                label = QLabel(self._humanize_key(key))
+                label.setObjectName("SectionTitle")
+                layout.addWidget(label)
+                nested_rows = [dict(item) for item in value]
+                nested = QTableWidget(0, 1)
+                self._configure_table(nested)
+                self._populate_table(nested, nested_rows, self._columns_from_rows(nested_rows) or [("id", "ID")])
+                layout.addWidget(nested, 1)
+            elif isinstance(value, dict):
+                label = QLabel(self._humanize_key(key))
+                label.setObjectName("SectionTitle")
+                layout.addWidget(label)
+                nested_rows = [{"field": self._humanize_key(str(child_key)), "value": child_value} for child_key, child_value in value.items()]
+                nested = QTableWidget(0, 2)
+                self._configure_table(nested)
+                self._populate_table(nested, nested_rows, [("field", self._ui("field")), ("value", self._ui("value"))])
+                layout.addWidget(nested, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _simple_record_form(
+        self,
+        title: str,
+        fields: list[tuple[str, str, object]],
+        *,
+        omit_blank: tuple[str, ...] = (),
+    ) -> dict[str, object] | None:
+        """Show a simple localized edit form and return parsed values."""
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(520, 360)
+        form = QFormLayout(dialog)
+        widgets: dict[str, tuple[QLineEdit, object]] = {}
+        for key, label, value in fields:
+            field = QLineEdit("" if value is None else str(value))
+            field.setPlaceholderText(label)
+            widgets[key] = (field, value)
+            form.addRow(label, field)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        payload: dict[str, object] = {}
+        for key, (field, original) in widgets.items():
+            text = field.text().strip()
+            if key in omit_blank and not text:
+                continue
+            payload[key] = self._parse_record_field(text, original, key)
+        return payload
+
+    def _parse_record_field(self, text: str, original: object, key: str) -> object:
+        """Parse one string from a CRUD form into a practical API value."""
+
+        if isinstance(original, bool) or key.startswith("is_") or key in {"active", "is_shared"}:
+            return text.casefold() in {"1", "true", "yes", "y", "on", "да", "hawa"}
+        if key.endswith("_id") or key in {"role_flags", "sort_order"}:
+            return int(text) if text else None
+        if original is None:
+            return text or None
+        return text
+
+    def _confirm_record_action(self, row: dict[str, object], action_label: str, *, hard_delete: bool = False) -> bool:
+        """Ask the user to confirm a lifecycle or delete action."""
+
+        name = self._record_name(row)
+        if hard_delete:
+            message = self.translator.text("crud.confirm_delete").format(name=name)
+        else:
+            message = self.translator.text("crud.confirm_action").format(action=action_label.lower(), name=name)
+        result = QMessageBox.question(
+            self,
+            action_label,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        return result == QMessageBox.StandardButton.Yes
+
+    def _active_lifecycle_label(self, row: dict[str, object]) -> str:
+        """Return Activate or Deactivate for rows with is_active."""
+
+        return self.translator.text("crud.deactivate" if row.get("is_active") else "crud.activate")
 
     def _format_value(self, value: object) -> str:
         """Format API values for human-facing widgets."""
@@ -868,6 +1087,13 @@ class MainWindow(QWidget):
         self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
         self._configure_table(self.users_table)
         self._set_users_table_headers()
+        self._install_record_actions(
+            self.users_table,
+            view=lambda row: self._show_record_details(self.translator.text("users.title"), row),
+            edit=self.edit_user_dialog,
+            lifecycle=self.deactivate_user_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
         layout.addLayout(row)
         layout.addWidget(self.users_table, 1)
         return page
@@ -882,14 +1108,28 @@ class MainWindow(QWidget):
         refresh = QPushButton()
         refresh.setProperty("textKey", "dashboard.refresh")
         refresh.clicked.connect(self.refresh_roles)
+        create = QPushButton()
+        create.setProperty("textKey", "roles.create")
+        create.clicked.connect(self.create_role_dialog)
         self.roles_table = QTableWidget(0, 3)
         self._configure_table(self.roles_table)
         self._set_roles_table_headers()
         self.roles_table.itemSelectionChanged.connect(self._render_selected_role_permissions)
+        self._install_record_actions(
+            self.roles_table,
+            view=lambda row: self._show_record_details(self.translator.text("roles.title"), row),
+            edit=self.edit_role_dialog,
+            lifecycle=self.delete_role_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.delete"),
+        )
         self.role_permissions_table = QTableWidget(0, 2)
         self._configure_table(self.role_permissions_table)
         self._set_role_permissions_table_headers()
-        layout.addWidget(refresh)
+        actions = QHBoxLayout()
+        actions.addWidget(refresh)
+        actions.addWidget(create)
+        actions.addStretch(1)
+        layout.addLayout(actions)
         layout.addWidget(self.roles_table, 1)
         permissions_label = QLabel(self._ui("permissions"))
         permissions_label.setProperty("titleKey", "ui.permissions")
@@ -980,8 +1220,38 @@ class MainWindow(QWidget):
         self.catalog_table = QTableWidget(0, len(CATALOG_TABLE_HEADER_KEYS))
         self._configure_table(self.catalog_table)
         self._set_catalog_table_headers()
+        self._install_record_actions(
+            self.catalog_table,
+            view=lambda row: self._show_record_details(self.translator.text("catalog.title"), row),
+            edit=self.edit_product_dialog,
+            lifecycle=self.toggle_product_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
+        self.product_groups_table = QTableWidget(0, 5)
+        self._configure_table(self.product_groups_table)
+        self._install_record_actions(
+            self.product_groups_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.product_groups"), row),
+            edit=self.edit_product_group_dialog,
+            lifecycle=self.toggle_product_group_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
+        self.services_table = QTableWidget(0, 6)
+        self._configure_table(self.services_table)
+        self._install_record_actions(
+            self.services_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.services"), row),
+            edit=self.edit_service_dialog,
+            lifecycle=self.toggle_service_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
+        tabs = QTabWidget()
+        tabs.addTab(self.catalog_table, self.translator.text("tabs.products"))
+        tabs.addTab(self.product_groups_table, self.translator.text("tabs.product_groups"))
+        tabs.addTab(self.services_table, self.translator.text("tabs.services"))
+        self.catalog_tabs = tabs
         layout.addLayout(action_row)
-        layout.addWidget(self.catalog_table, 1)
+        layout.addWidget(tabs, 1)
         return page
 
     def _build_warehouse_page(self) -> QWidget:
@@ -1011,18 +1281,71 @@ class MainWindow(QWidget):
         self.warehouse_table = QTableWidget(0, len(WAREHOUSE_TABLE_HEADER_KEYS))
         self._configure_table(self.warehouse_table)
         self._set_warehouse_table_headers()
+        self._install_record_actions(
+            self.warehouse_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.balances"), row),
+        )
+        self.warehouses_table = QTableWidget(0, 5)
+        self._configure_table(self.warehouses_table)
+        self._install_record_actions(
+            self.warehouses_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.warehouses"), row),
+            edit=self.edit_warehouse_dialog,
+            lifecycle=self.toggle_warehouse_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
         self.warehouse_movements_text = QPlainTextEdit()
         self.warehouse_movements_text.setReadOnly(True)
         self.warehouse_movements_text.hide()
         self.warehouse_movements_table = QTableWidget(0, 8)
         self._configure_table(self.warehouse_movements_table)
+        self._install_record_actions(
+            self.warehouse_movements_table,
+            view=lambda row: self._show_record_details(self.translator.text("warehouse.movements"), row),
+        )
+        self.inventories_table = QTableWidget(0, 6)
+        self._configure_table(self.inventories_table)
+        self._install_record_actions(
+            self.inventories_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.inventories"), row),
+            edit=self.edit_inventory_dialog,
+            lifecycle=self.cancel_inventory_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") in {"draft", "in_progress"},
+            lifecycle_enabled=lambda row: row.get("status") in {"draft", "in_progress"},
+        )
+        self.stock_transfers_table = QTableWidget(0, 6)
+        self._configure_table(self.stock_transfers_table)
+        self._install_record_actions(
+            self.stock_transfers_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.transfers"), row),
+            edit=self.edit_stock_transfer_dialog,
+            lifecycle=self.reject_stock_transfer_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") == "draft",
+            lifecycle_enabled=lambda row: row.get("status") == "in_transit",
+        )
+        self.stock_writeoffs_table = QTableWidget(0, 6)
+        self._configure_table(self.stock_writeoffs_table)
+        self._install_record_actions(
+            self.stock_writeoffs_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.writeoffs"), row),
+            edit=self.edit_stock_writeoff_dialog,
+            lifecycle=self.cancel_stock_writeoff_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") == "draft",
+            lifecycle_enabled=lambda row: row.get("status") != "cancelled",
+        )
+        tabs = QTabWidget()
+        tabs.addTab(self.warehouses_table, self.translator.text("tabs.warehouses"))
+        tabs.addTab(self.warehouse_table, self.translator.text("tabs.balances"))
+        tabs.addTab(self.warehouse_movements_table, self.translator.text("tabs.movements"))
+        tabs.addTab(self.inventories_table, self.translator.text("tabs.inventories"))
+        tabs.addTab(self.stock_transfers_table, self.translator.text("tabs.transfers"))
+        tabs.addTab(self.stock_writeoffs_table, self.translator.text("tabs.writeoffs"))
+        self.warehouse_tabs = tabs
         layout.addLayout(action_row)
-        layout.addWidget(self.warehouse_table, 1)
-        movements_label = QLabel(self.translator.text("warehouse.movements"))
-        movements_label.setProperty("bodyKey", "warehouse.movements")
-        movements_label.setObjectName("SectionTitle")
-        layout.addWidget(movements_label)
-        layout.addWidget(self.warehouse_movements_table, 1)
+        layout.addWidget(tabs, 1)
         return page
 
     def _build_counterparties_page(self) -> QWidget:
@@ -1044,6 +1367,13 @@ class MainWindow(QWidget):
         self.counterparties_table = QTableWidget(0, len(COUNTERPARTY_TABLE_HEADER_KEYS))
         self._configure_table(self.counterparties_table)
         self._set_counterparties_table_headers()
+        self._install_record_actions(
+            self.counterparties_table,
+            view=lambda row: self._show_record_details(self.translator.text("counterparties.title"), row),
+            edit=self.edit_counterparty_dialog,
+            lifecycle=self.toggle_counterparty_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
         layout.addLayout(action_row)
         layout.addWidget(self.counterparties_table, 1)
         return page
@@ -1068,8 +1398,28 @@ class MainWindow(QWidget):
         self.pricing_table = QTableWidget(0, len(PRICING_TABLE_HEADER_KEYS))
         self._configure_table(self.pricing_table)
         self._set_pricing_table_headers()
+        self._install_record_actions(
+            self.pricing_table,
+            view=lambda row: self._show_record_details(self.translator.text("pricing.title"), row),
+            edit=self.edit_price_list_dialog,
+            lifecycle=self.toggle_price_list_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
+        self.price_items_table = QTableWidget(0, 7)
+        self._configure_table(self.price_items_table)
+        self._install_record_actions(
+            self.price_items_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.price_items"), row),
+            edit=self.edit_price_item_dialog,
+            lifecycle=self.delete_price_item_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.delete"),
+        )
+        pricing_tabs = QTabWidget()
+        pricing_tabs.addTab(self.pricing_table, self.translator.text("tabs.price_lists"))
+        pricing_tabs.addTab(self.price_items_table, self.translator.text("tabs.price_items"))
+        self.pricing_tabs = pricing_tabs
         layout.addLayout(action_row)
-        layout.addWidget(self.pricing_table, 1)
+        layout.addWidget(pricing_tabs, 1)
         return page
 
     def _build_purchase_page(self) -> QWidget:
@@ -1098,16 +1448,44 @@ class MainWindow(QWidget):
         self.purchase_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
         self._configure_table(self.purchase_table)
         self._set_purchase_table_headers()
+        self._install_record_actions(
+            self.purchase_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.invoices"), row),
+            edit=self.edit_purchase_invoice_dialog,
+            lifecycle=self.cancel_purchase_invoice_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") == "draft",
+            lifecycle_enabled=lambda row: row.get("status") != "cancelled",
+        )
+        self.purchase_orders_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
+        self._configure_table(self.purchase_orders_table)
+        self._install_record_actions(
+            self.purchase_orders_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.orders"), row),
+            edit=self.edit_purchase_order_dialog,
+            lifecycle=self.cancel_purchase_order_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") in {"draft", "sent"},
+            lifecycle_enabled=lambda row: row.get("status") not in {"cancelled", "received", "partial"},
+        )
         self.purchase_debt_text = QPlainTextEdit()
         self.purchase_debt_text.setReadOnly(True)
         self.purchase_debt_text.hide()
         self.purchase_debt_metrics, self.purchase_debt_metrics_layout = self._metric_area()
         self.purchase_debt_table = QTableWidget(0, 8)
         self._configure_table(self.purchase_debt_table)
+        self._install_record_actions(
+            self.purchase_debt_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.debt"), row),
+        )
+        purchase_tabs = QTabWidget()
+        purchase_tabs.addTab(self.purchase_orders_table, self.translator.text("tabs.orders"))
+        purchase_tabs.addTab(self.purchase_table, self.translator.text("tabs.invoices"))
+        purchase_tabs.addTab(self.purchase_debt_table, self.translator.text("tabs.debt"))
+        self.purchase_tabs = purchase_tabs
         layout.addLayout(action_row)
-        layout.addWidget(self.purchase_table, 1)
         layout.addWidget(self.purchase_debt_metrics)
-        layout.addWidget(self.purchase_debt_table, 1)
+        layout.addWidget(purchase_tabs, 1)
         return page
 
     def _build_sales_page(self) -> QWidget:
@@ -1136,16 +1514,44 @@ class MainWindow(QWidget):
         self.sales_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
         self._configure_table(self.sales_table)
         self._set_sales_table_headers()
+        self._install_record_actions(
+            self.sales_table,
+            view=lambda row: self._show_record_details(self.translator.text("sales.title"), row),
+            edit=self.edit_sale_dialog,
+            lifecycle=self.cancel_sale_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") == "draft",
+            lifecycle_enabled=lambda row: row.get("status") != "cancelled",
+        )
+        self.sale_returns_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
+        self._configure_table(self.sale_returns_table)
+        self._install_record_actions(
+            self.sale_returns_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.returns"), row),
+            edit=self.edit_sale_return_dialog,
+            lifecycle=self.cancel_sale_return_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
+            edit_enabled=lambda row: row.get("status") == "draft",
+            lifecycle_enabled=lambda row: row.get("status") != "cancelled",
+        )
         self.sales_debt_text = QPlainTextEdit()
         self.sales_debt_text.setReadOnly(True)
         self.sales_debt_text.hide()
         self.sales_debt_metrics, self.sales_debt_metrics_layout = self._metric_area()
         self.sales_debt_table = QTableWidget(0, 8)
         self._configure_table(self.sales_debt_table)
+        self._install_record_actions(
+            self.sales_debt_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.debt"), row),
+        )
+        sales_tabs = QTabWidget()
+        sales_tabs.addTab(self.sales_table, self.translator.text("tabs.sales"))
+        sales_tabs.addTab(self.sale_returns_table, self.translator.text("tabs.returns"))
+        sales_tabs.addTab(self.sales_debt_table, self.translator.text("tabs.debt"))
+        self.sales_tabs = sales_tabs
         layout.addLayout(action_row)
-        layout.addWidget(self.sales_table, 1)
         layout.addWidget(self.sales_debt_metrics)
-        layout.addWidget(self.sales_debt_table, 1)
+        layout.addWidget(sales_tabs, 1)
         return page
 
     def _build_cashier_page(self) -> QWidget:
@@ -1175,6 +1581,22 @@ class MainWindow(QWidget):
         self.cashier_table = QTableWidget(0, len(CASHIER_TABLE_HEADER_KEYS))
         self._configure_table(self.cashier_table)
         self._set_cashier_table_headers()
+        self._install_record_actions(
+            self.cashier_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.shifts"), row),
+            lifecycle=self.close_cash_shift_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.close"),
+            lifecycle_enabled=lambda row: row.get("status") == "open",
+        )
+        self.cash_registers_table = QTableWidget(0, 5)
+        self._configure_table(self.cash_registers_table)
+        self._install_record_actions(
+            self.cash_registers_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.registers"), row),
+            edit=self.edit_cash_register_dialog,
+            lifecycle=self.toggle_cash_register_active_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
         self.cashier_text = QPlainTextEdit()
         self.cashier_text.setReadOnly(True)
         self.cashier_text.hide()
@@ -1184,6 +1606,15 @@ class MainWindow(QWidget):
         self.cashier_report_metrics, self.cashier_report_metrics_layout = self._metric_area()
         self.cashier_report_table = QTableWidget(0, 3)
         self._configure_table(self.cashier_report_table)
+        self._install_record_actions(
+            self.cashier_report_table,
+            view=lambda row: self._show_record_details(self.translator.text("ui.cash_flow_snapshot"), row),
+        )
+        cashier_tabs = QTabWidget()
+        cashier_tabs.addTab(self.cash_registers_table, self.translator.text("tabs.registers"))
+        cashier_tabs.addTab(self.cashier_table, self.translator.text("tabs.shifts"))
+        cashier_tabs.addTab(self.cashier_report_table, self.translator.text("tabs.reports"))
+        self.cashier_tabs = cashier_tabs
 
         cart_title = QLabel(self.translator.text("cashier.cart.title"))
         cart_title.setProperty("bodyKey", "cashier.cart.title")
@@ -1303,10 +1734,9 @@ class MainWindow(QWidget):
         self.cashier_receipt_preview.setMinimumHeight(130)
 
         layout.addLayout(action_row)
-        layout.addWidget(self.cashier_table, 1)
         layout.addWidget(self.cashier_report_status)
         layout.addWidget(self.cashier_report_metrics)
-        layout.addWidget(self.cashier_report_table, 1)
+        layout.addWidget(cashier_tabs, 1)
         layout.addWidget(cart_title)
         layout.addLayout(entry_row)
         layout.addWidget(self.cashier_cart_table)
@@ -1385,19 +1815,29 @@ class MainWindow(QWidget):
         self.report_metrics, self.report_metrics_layout = self._metric_area()
         self.report_rows_table = QTableWidget(0, 1)
         self._configure_table(self.report_rows_table)
+        self._install_record_actions(
+            self.report_rows_table,
+            view=lambda row: self._show_record_details(self.translator.text("tabs.report_rows"), row),
+        )
         self.report_saved_filters_table = QTableWidget(0, 4)
         self._configure_table(self.report_saved_filters_table)
         self._set_report_saved_filters_table_headers()
+        self._install_record_actions(
+            self.report_saved_filters_table,
+            view=lambda row: self._show_record_details(self.translator.text("ui.saved_filters"), row),
+            edit=self.edit_report_filter_dialog,
+            lifecycle=self.delete_report_filter_action,
+            lifecycle_label=lambda _row: self.translator.text("crud.delete"),
+        )
+        report_tabs = QTabWidget()
+        report_tabs.addTab(self.report_rows_table, self.translator.text("tabs.report_rows"))
+        report_tabs.addTab(self.report_saved_filters_table, self.translator.text("tabs.saved_filters"))
+        self.report_tabs = report_tabs
         layout.addWidget(filter_card)
         layout.addLayout(actions)
         layout.addWidget(self.report_status_label)
         layout.addWidget(self.report_metrics)
-        layout.addWidget(self.report_rows_table, 1)
-        saved_label = QLabel(self._ui("saved_filters"))
-        saved_label.setProperty("titleKey", "ui.saved_filters")
-        saved_label.setObjectName("SectionTitle")
-        layout.addWidget(saved_label)
-        layout.addWidget(self.report_saved_filters_table, 1)
+        layout.addWidget(report_tabs, 1)
         return page
 
     def _build_placeholder_page(self, page_id: str) -> QWidget:
@@ -1802,11 +2242,17 @@ class MainWindow(QWidget):
 
         def action() -> None:
             users = self.api_client.get_users()
-            self.users_table.setRowCount(len(users))
-            for row, user in enumerate(users):
-                values = [user.get("id"), user.get("username"), user.get("full_name"), user.get("role_name"), user.get("is_active")]
-                for col, value in enumerate(values):
-                    self.users_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.users_table,
+                users,
+                [
+                    ("id", self.translator.text("users.table.id")),
+                    ("username", self.translator.text("users.table.username")),
+                    ("full_name", self.translator.text("users.table.full_name")),
+                    ("role_name", self.translator.text("users.table.role")),
+                    ("is_active", self.translator.text("users.table.active")),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1815,17 +2261,42 @@ class MainWindow(QWidget):
 
         def action() -> None:
             products = self.api_client.get_products(self.catalog_search.text().strip() or None)
-            self.catalog_table.setRowCount(len(products))
-            for row, product in enumerate(products):
-                values = [
-                    product.get("id"),
-                    product.get("sku") or product.get("code"),
-                    product.get("name") or product.get("name_ru"),
-                    product.get("retail_price"),
-                    product.get("is_active"),
-                ]
-                for col, value in enumerate(values):
-                    self.catalog_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.catalog_table,
+                products,
+                [
+                    ("id", self.translator.text("catalog.table.id")),
+                    (lambda row: row.get("sku") or row.get("code"), self.translator.text("catalog.table.code")),
+                    (lambda row: row.get("name") or row.get("name_ru"), self.translator.text("catalog.table.name")),
+                    ("retail_price", self.translator.text("catalog.table.price")),
+                    ("is_active", self.translator.text("catalog.table.active")),
+                ],
+            )
+            groups = self._api_list("get_product_groups")
+            self._populate_table(
+                self.product_groups_table,
+                groups,
+                [
+                    ("id", "ID"),
+                    ("code", self._ui("code")),
+                    ("name_ru", self._ui("name")),
+                    ("parent_id", self._humanize_key("parent_id")),
+                    ("is_active", self._ui("active")),
+                ],
+            )
+            services = self._api_list("get_services")
+            self._populate_table(
+                self.services_table,
+                services,
+                [
+                    ("id", "ID"),
+                    ("code", self._ui("code")),
+                    ("name_ru", self._ui("name")),
+                    ("service_type", self._ui("type")),
+                    ("default_price", self._ui("price")),
+                    ("is_active", self._ui("active")),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1833,18 +2304,30 @@ class MainWindow(QWidget):
         """Refresh warehouse balances and movement log."""
 
         def action() -> None:
+            warehouses = self._api_list("get_warehouses")
+            self._populate_table(
+                self.warehouses_table,
+                warehouses,
+                [
+                    ("id", "ID"),
+                    ("code", self._ui("code")),
+                    ("name", self._ui("name")),
+                    ("location", self._humanize_key("location")),
+                    ("is_active", self._ui("active")),
+                ],
+            )
             balances = self.api_client.get_stock_balances()
-            self.warehouse_table.setRowCount(len(balances))
-            for row, balance in enumerate(balances):
-                values = [
-                    balance.get("id"),
-                    balance.get("warehouse_name") or balance.get("warehouse_code"),
-                    balance.get("product_name") or balance.get("product_sku"),
-                    balance.get("quantity"),
-                    balance.get("avg_cost_tmt"),
-                ]
-                for col, value in enumerate(values):
-                    self.warehouse_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.warehouse_table,
+                balances,
+                [
+                    ("id", self.translator.text("warehouse.table.id")),
+                    (lambda row: row.get("warehouse_name") or row.get("warehouse_code"), self.translator.text("warehouse.table.warehouse")),
+                    (lambda row: row.get("product_name") or row.get("product_sku"), self.translator.text("warehouse.table.product")),
+                    ("quantity", self.translator.text("warehouse.table.quantity")),
+                    ("avg_cost_tmt", self.translator.text("warehouse.table.avg_cost")),
+                ],
+            )
             movements = self.api_client.get_stock_movements()
             self.warehouse_movements_text.setPlainText(json.dumps(movements, indent=2, ensure_ascii=False))
             self._populate_table(
@@ -1861,6 +2344,45 @@ class MainWindow(QWidget):
                     ("amount_tmt", self._ui("amount")),
                 ],
             )
+            inventories = self._api_list("get_inventories")
+            self._populate_table(
+                self.inventories_table,
+                inventories,
+                [
+                    ("id", "ID"),
+                    ("warehouse_name", self._ui("warehouse")),
+                    ("status", self._ui("status")),
+                    ("note", self._ui("note")),
+                    ("posted_at", self._humanize_key("posted_at")),
+                    (lambda row: len(row.get("lines") or []), self._ui("items")),
+                ],
+            )
+            transfers = self._api_list("get_stock_transfers")
+            self._populate_table(
+                self.stock_transfers_table,
+                transfers,
+                [
+                    ("id", "ID"),
+                    ("source_warehouse_name", self._humanize_key("source_warehouse_id")),
+                    ("target_warehouse_name", self._humanize_key("target_warehouse_id")),
+                    ("status", self._ui("status")),
+                    ("sent_at", self._humanize_key("sent_at")),
+                    (lambda row: len(row.get("lines") or []), self._ui("items")),
+                ],
+            )
+            writeoffs = self._api_list("get_stock_writeoffs")
+            self._populate_table(
+                self.stock_writeoffs_table,
+                writeoffs,
+                [
+                    ("id", "ID"),
+                    ("warehouse_name", self._ui("warehouse")),
+                    ("reason_code", self._humanize_key("reason_code")),
+                    ("status", self._ui("status")),
+                    ("posted_at", self._humanize_key("posted_at")),
+                    (lambda row: len(row.get("lines") or []), self._ui("items")),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1869,19 +2391,17 @@ class MainWindow(QWidget):
 
         def action() -> None:
             rows = self.api_client.get_counterparties(self.counterparty_search.text().strip() or None, include_debt=True)
-            self.counterparties_table.setRowCount(len(rows))
-            for row, counterparty in enumerate(rows):
-                debt = counterparty.get("debt") or {}
-                debt_text = f"R {debt.get('receivable', '0.00')} / P {debt.get('payable', '0.00')}"
-                values = [
-                    counterparty.get("id"),
-                    counterparty.get("code"),
-                    counterparty.get("name"),
-                    counterparty.get("role_flags"),
-                    debt_text,
-                ]
-                for col, value in enumerate(values):
-                    self.counterparties_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.counterparties_table,
+                rows,
+                [
+                    ("id", self.translator.text("counterparties.table.id")),
+                    ("code", self.translator.text("counterparties.table.code")),
+                    ("name", self.translator.text("counterparties.table.name")),
+                    ("role_flags", self.translator.text("counterparties.table.role")),
+                    (lambda row: f"R {(row.get('debt') or {}).get('receivable', '0.00')} / P {(row.get('debt') or {}).get('payable', '0.00')}", self.translator.text("counterparties.table.debt")),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1890,16 +2410,37 @@ class MainWindow(QWidget):
 
         def action() -> None:
             rows = self.api_client.get_price_lists()
-            self.pricing_table.setRowCount(len(rows))
-            for row, price_list in enumerate(rows):
-                values = [
-                    price_list.get("id"),
-                    price_list.get("name_ru"),
-                    price_list.get("currency_code") or price_list.get("currency_id"),
-                    price_list.get("is_default"),
-                ]
-                for col, value in enumerate(values):
-                    self.pricing_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.pricing_table,
+                rows,
+                [
+                    ("id", self.translator.text("pricing.table.id")),
+                    ("name_ru", self.translator.text("pricing.table.name")),
+                    (lambda row: row.get("currency_code") or row.get("currency_id"), self.translator.text("pricing.table.currency")),
+                    ("is_default", self.translator.text("pricing.table.default")),
+                ],
+            )
+            items: list[dict[str, object]] = []
+            for price_list in rows:
+                price_list_id = price_list.get("id")
+                if price_list_id is None:
+                    continue
+                for item in self._api_list("get_price_list_items", int(price_list_id)):
+                    item["price_list_name_ru"] = price_list.get("name_ru")
+                    items.append(item)
+            self._populate_table(
+                self.price_items_table,
+                items,
+                [
+                    ("id", "ID"),
+                    ("price_list_name_ru", self._humanize_key("price_list_id")),
+                    (lambda row: row.get("product_name") or row.get("service_name_ru"), self._ui("product")),
+                    ("price_tmt", self._ui("price")),
+                    ("valid_from", self._humanize_key("valid_from")),
+                    ("valid_to", self._humanize_key("valid_to")),
+                    ("uom_code", self._humanize_key("uom_id")),
+                ],
+            )
 
         self._run_api(action)
 
@@ -1907,19 +2448,32 @@ class MainWindow(QWidget):
         """Refresh purchase invoices and payable ledger."""
 
         def action() -> None:
+            orders = self._api_list("get_purchase_orders")
+            self._populate_table(
+                self.purchase_orders_table,
+                orders,
+                [
+                    ("id", self.translator.text("purchase.table.id")),
+                    ("doc_number", self.translator.text("purchase.table.number")),
+                    ("counterparty_name", self.translator.text("purchase.table.supplier")),
+                    ("total_amount_tmt", self.translator.text("purchase.table.total")),
+                    ("status", self.translator.text("purchase.table.status")),
+                    (lambda row: "-", self.translator.text("purchase.table.payment")),
+                ],
+            )
             invoices = self.api_client.get_purchase_invoices()
-            self.purchase_table.setRowCount(len(invoices))
-            for row, invoice in enumerate(invoices):
-                values = [
-                    invoice.get("id"),
-                    invoice.get("doc_number"),
-                    invoice.get("counterparty_name"),
-                    invoice.get("total_amount_tmt"),
-                    invoice.get("status"),
-                    invoice.get("payment_status"),
-                ]
-                for col, value in enumerate(values):
-                    self.purchase_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.purchase_table,
+                invoices,
+                [
+                    ("id", self.translator.text("purchase.table.id")),
+                    ("doc_number", self.translator.text("purchase.table.number")),
+                    ("counterparty_name", self.translator.text("purchase.table.supplier")),
+                    ("total_amount_tmt", self.translator.text("purchase.table.total")),
+                    ("status", self.translator.text("purchase.table.status")),
+                    ("payment_status", self.translator.text("purchase.table.payment")),
+                ],
+            )
             ledger = self.api_client.get_debt_ledger(debt_type="payable")
             self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
             self._render_debt_ledger(ledger, self.purchase_debt_table, self.purchase_debt_metrics_layout, title=self._ui("payable_entries"))
@@ -1931,19 +2485,33 @@ class MainWindow(QWidget):
 
         def action() -> None:
             rows = self.api_client.get_sales()
-            self.sales_table.setRowCount(len(rows))
-            for row, sale in enumerate(rows):
-                values = [
-                    sale.get("id"),
-                    sale.get("doc_number"),
-                    sale.get("sale_type"),
-                    sale.get("counterparty_name"),
-                    sale.get("total_amount_tmt"),
-                    sale.get("status"),
-                    sale.get("payment_type"),
-                ]
-                for col, value in enumerate(values):
-                    self.sales_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.sales_table,
+                rows,
+                [
+                    ("id", self.translator.text("sales.table.id")),
+                    ("doc_number", self.translator.text("sales.table.number")),
+                    ("sale_type", self.translator.text("sales.table.type")),
+                    ("counterparty_name", self.translator.text("sales.table.customer")),
+                    ("total_amount_tmt", self.translator.text("sales.table.total")),
+                    ("status", self.translator.text("sales.table.status")),
+                    ("payment_type", self.translator.text("sales.table.payment")),
+                ],
+            )
+            returns = self._api_list("get_sale_returns")
+            self._populate_table(
+                self.sale_returns_table,
+                returns,
+                [
+                    ("id", self.translator.text("sales.table.id")),
+                    ("doc_number", self.translator.text("sales.table.number")),
+                    (lambda row: "return", self.translator.text("sales.table.type")),
+                    ("counterparty_name", self.translator.text("sales.table.customer")),
+                    ("total_amount_tmt", self.translator.text("sales.table.total")),
+                    ("status", self.translator.text("sales.table.status")),
+                    ("refund_method", self.translator.text("sales.table.payment")),
+                ],
+            )
             ledger = self.api_client.get_debt_ledger(debt_type="receivable")
             self.sales_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
             self._render_debt_ledger(ledger, self.sales_debt_table, self.sales_debt_metrics_layout, title=self._ui("receivable_entries"))
@@ -1954,19 +2522,31 @@ class MainWindow(QWidget):
         """Refresh cashier shifts and cash-flow snapshot."""
 
         def action() -> None:
+            registers = self._api_list("get_cash_registers")
+            self._populate_table(
+                self.cash_registers_table,
+                registers,
+                [
+                    ("id", "ID"),
+                    ("name", self._ui("name")),
+                    ("warehouse_name", self._ui("warehouse")),
+                    ("warehouse_id", self._humanize_key("warehouse_id")),
+                    ("is_active", self._ui("active")),
+                ],
+            )
             rows = self.api_client.get_cash_shifts()
-            self.cashier_table.setRowCount(len(rows))
-            for row, shift in enumerate(rows):
-                values = [
-                    shift.get("id"),
-                    shift.get("cash_register_name") or shift.get("cash_register_id"),
-                    shift.get("opened_at"),
-                    shift.get("opening_amount"),
-                    shift.get("closing_amount"),
-                    shift.get("status"),
-                ]
-                for col, value in enumerate(values):
-                    self.cashier_table.setItem(row, col, self._table_item(value))
+            self._populate_table(
+                self.cashier_table,
+                rows,
+                [
+                    ("id", self.translator.text("cashier.table.id")),
+                    (lambda row: row.get("cash_register_name") or row.get("cash_register_id"), self.translator.text("cashier.table.register")),
+                    ("opened_at", self.translator.text("cashier.table.opened_at")),
+                    ("opening_amount", self.translator.text("cashier.table.opening")),
+                    ("closing_amount", self.translator.text("cashier.table.closing")),
+                    ("status", self.translator.text("cashier.table.status")),
+                ],
+            )
             report = self.api_client.get_cash_flow_report()
             self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
             self._render_cash_report(report)
@@ -2076,6 +2656,495 @@ class MainWindow(QWidget):
         if not currencies:
             raise ValueError(self.translator.text("error.no_currencies"))
         return int(currencies[0]["id"])
+
+    def _first_line(self, row: dict[str, object]) -> dict[str, object]:
+        """Return the first related line from a document row."""
+
+        lines = row.get("lines")
+        if isinstance(lines, list) and lines and isinstance(lines[0], dict):
+            return dict(lines[0])
+        return {}
+
+    def _toggle_active(self, row: dict[str, object], updater: Callable[[int, dict[str, object]], dict[str, object]], refresh: Callable[[], None]) -> None:
+        """Toggle is_active for one master-data row."""
+
+        target_active = not bool(row.get("is_active"))
+        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
+        if self._confirm_record_action(row, label):
+            self._run_api(lambda: (updater(int(row["id"]), {"is_active": target_active}), refresh()))
+
+    def _line_payload_from_flat(self, payload: dict[str, object], *, sale: bool = False) -> dict[str, object]:
+        """Extract a one-line document payload from a flat form payload."""
+
+        keys = {
+            "product_id",
+            "service_id",
+            "expense_category_id",
+            "purchase_order_line_id",
+            "product_uom_id",
+            "uom_id",
+            "quantity",
+            "price_cur",
+            "price_final",
+            "discount_percent",
+            "unit_cost_tmt",
+        }
+        line = {key: payload.pop(key) for key in list(payload) if key in keys}
+        if sale:
+            line.setdefault("line_type", "product" if line.get("product_id") is not None else "service")
+            line.setdefault("price_list_price", line.get("price_final") or "0")
+            line.setdefault("discount_amount", "0")
+            line.setdefault("price_override", False)
+        return line
+
+    def _confirming_api_action(
+        self,
+        row: dict[str, object],
+        label_key: str,
+        api_call: Callable[[], object],
+        refresh: Callable[[], None],
+    ) -> None:
+        """Confirm, run an API call, and refresh the relevant page."""
+
+        label = self.translator.text(label_key)
+        if not self._confirm_record_action(row, label):
+            return
+
+        def action() -> None:
+            api_call()
+            refresh()
+
+        self._run_api(action)
+
+    def create_role_dialog(self) -> None:
+        """Create a custom role."""
+
+        payload = self._simple_record_form(
+            self.translator.text("roles.create"),
+            [("name", self._ui("name"), ""), ("description", self._ui("description"), ""), ("permissions", self._ui("permissions"), "")],
+        )
+        if payload is None:
+            return
+        permissions = [part.strip() for part in str(payload.pop("permissions", "")).replace("\n", ",").split(",") if part.strip()]
+        self._run_api(lambda: (self.api_client.create_role({**payload, "permissions": permissions}), self.refresh_roles()))
+
+    def edit_role_dialog(self, row: dict[str, object]) -> None:
+        """Edit a role description and permissions."""
+
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("description", self._ui("description"), row.get("description")),
+                ("permissions", self._ui("permissions"), ", ".join(str(item) for item in row.get("permissions") or [])),
+            ],
+        )
+        if payload is None:
+            return
+        permissions = [part.strip() for part in str(payload.pop("permissions", "")).replace("\n", ",").split(",") if part.strip()]
+        self._run_api(lambda: (self.api_client.update_role(int(row["id"]), {**payload, "permissions": permissions}), self.refresh_roles()))
+
+    def delete_role_action(self, row: dict[str, object]) -> None:
+        """Delete an unused custom role."""
+
+        label = self.translator.text("crud.delete")
+        if self._confirm_record_action(row, label, hard_delete=True):
+            self._run_api(lambda: (self.api_client.delete_role(int(row["id"])), self.refresh_roles()))
+
+    def edit_user_dialog(self, row: dict[str, object]) -> None:
+        """Edit a user."""
+
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("full_name", self.translator.text("users.form.full_name"), row.get("full_name")),
+                ("password", self.translator.text("users.form.password"), ""),
+                ("role_name", self.translator.text("users.form.role"), row.get("role_name")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+            omit_blank=("password",),
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_user(int(row["id"]), payload), self.refresh_users()))
+
+    def deactivate_user_action(self, row: dict[str, object]) -> None:
+        """Activate or deactivate a user."""
+
+        target_active = not bool(row.get("is_active"))
+        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
+        if not self._confirm_record_action(row, label):
+            return
+        if target_active:
+            self._run_api(lambda: (self.api_client.update_user(int(row["id"]), {"is_active": True}), self.refresh_users()))
+        else:
+            self._run_api(lambda: (self.api_client.deactivate_user(int(row["id"])), self.refresh_users()))
+
+    def edit_product_dialog(self, row: dict[str, object]) -> None:
+        """Edit a product."""
+
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name", self.translator.text("catalog.form.name_ru"), row.get("name") or row.get("name_ru")),
+                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                ("unit", self._humanize_key("unit"), row.get("unit")),
+                ("retail_price", self.translator.text("catalog.form.price"), row.get("retail_price")),
+                ("last_known_cost", self._humanize_key("last_known_cost"), row.get("last_known_cost")),
+                ("min_stock", self._humanize_key("min_stock"), row.get("min_stock")),
+                ("description", self._humanize_key("description"), row.get("description")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_product(int(row["id"]), payload), self.refresh_catalog()))
+
+    def toggle_product_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_product, self.refresh_catalog)
+
+    def edit_product_group_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name_ru", self.translator.text("catalog.form.name_ru"), row.get("name_ru")),
+                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                ("parent_id", self._humanize_key("parent_id"), row.get("parent_id")),
+                ("sort_order", self._humanize_key("sort_order"), row.get("sort_order")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_product_group(int(row["id"]), payload), self.refresh_catalog()))
+
+    def toggle_product_group_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_product_group, self.refresh_catalog)
+
+    def edit_service_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name_ru", self.translator.text("catalog.form.name_ru"), row.get("name_ru")),
+                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                ("service_type", self._ui("type"), row.get("service_type")),
+                ("expense_category_id", self._humanize_key("expense_category_id"), row.get("expense_category_id")),
+                ("default_price", self._ui("price"), row.get("default_price")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_service(int(row["id"]), payload), self.refresh_catalog()))
+
+    def toggle_service_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_service, self.refresh_catalog)
+
+    def edit_warehouse_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name", self.translator.text("warehouse.form.name"), row.get("name")),
+                ("location", self.translator.text("warehouse.form.location"), row.get("location")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_warehouse(int(row["id"]), payload), self.refresh_warehouse()))
+
+    def toggle_warehouse_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_warehouse, self.refresh_warehouse)
+
+    def edit_counterparty_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name", self.translator.text("counterparties.form.name"), row.get("name")),
+                ("role_flags", self.translator.text("counterparties.form.role"), row.get("role_flags")),
+                ("counterparty_type", self._ui("type"), row.get("counterparty_type")),
+                ("phone", self.translator.text("counterparties.form.phone"), row.get("phone")),
+                ("email", self._humanize_key("email"), row.get("email")),
+                ("tax_id", self._humanize_key("tax_id"), row.get("tax_id")),
+                ("address", self.translator.text("counterparties.form.address"), row.get("address")),
+                ("price_list_id", self._humanize_key("price_list_id"), row.get("price_list_id")),
+                ("discount_percent", self._humanize_key("discount_percent"), row.get("discount_percent")),
+                ("credit_limit_tmt", self._humanize_key("credit_limit_tmt"), row.get("credit_limit_tmt")),
+                ("note", self._ui("note"), row.get("note")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_counterparty(int(row["id"]), payload), self.refresh_counterparties()))
+
+    def toggle_counterparty_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_counterparty, self.refresh_counterparties)
+
+    def edit_price_list_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name_ru", self.translator.text("pricing.form.name"), row.get("name_ru")),
+                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                ("currency_id", self.translator.text("pricing.form.currency_id"), row.get("currency_id")),
+                ("is_default", self.translator.text("pricing.table.default"), row.get("is_default")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+                ("note", self._ui("note"), row.get("note")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_price_list(int(row["id"]), payload), self.refresh_pricing()))
+
+    def toggle_price_list_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_price_list, self.refresh_pricing)
+
+    def edit_price_item_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("product_id", self.translator.text("pricing.form.product_id"), row.get("product_id")),
+                ("service_id", self._humanize_key("service_id"), row.get("service_id")),
+                ("uom_id", self._humanize_key("uom_id"), row.get("uom_id")),
+                ("price_tmt", self.translator.text("pricing.form.price"), row.get("price_tmt")),
+                ("valid_from", self.translator.text("pricing.form.valid_from"), row.get("valid_from")),
+                ("valid_to", self._humanize_key("valid_to"), row.get("valid_to")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_price_list_item(int(row["id"]), payload), self.refresh_pricing()))
+
+    def delete_price_item_action(self, row: dict[str, object]) -> None:
+        label = self.translator.text("crud.delete")
+        if self._confirm_record_action(row, label, hard_delete=True):
+            self._run_api(lambda: (self.api_client.delete_price_list_item(int(row["id"])), self.refresh_pricing()))
+
+    def edit_purchase_order_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("doc_date", self._ui("date"), row.get("doc_date")),
+                ("counterparty_id", self.translator.text("purchase.form.supplier_id"), row.get("counterparty_id")),
+                ("warehouse_id", self.translator.text("purchase.form.warehouse_id"), row.get("warehouse_id")),
+                ("currency_id", self.translator.text("purchase.form.currency_id"), row.get("currency_id")),
+                ("currency_rate", self._humanize_key("currency_rate"), row.get("currency_rate")),
+                ("note", self._ui("note"), row.get("note")),
+                ("product_id", self.translator.text("purchase.form.product_id"), line.get("product_id")),
+                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
+                ("expense_category_id", self._humanize_key("expense_category_id"), line.get("expense_category_id")),
+                ("quantity", self.translator.text("purchase.form.quantity"), line.get("quantity_ordered")),
+                ("price_cur", self.translator.text("purchase.form.price"), line.get("price_cur")),
+            ],
+        )
+        if payload is None:
+            return
+        line_payload = self._line_payload_from_flat(payload)
+        update_payload = {**payload, "lines": [line_payload]}
+        self._run_api(lambda: (self.api_client.update_purchase_order(int(row["id"]), update_payload), self.refresh_purchase()))
+
+    def cancel_purchase_order_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_purchase_order(int(row["id"])), self.refresh_purchase)
+
+    def edit_purchase_invoice_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("doc_number", self._ui("number"), row.get("doc_number")),
+                ("doc_date", self._ui("date"), row.get("doc_date")),
+                ("counterparty_id", self.translator.text("purchase.form.supplier_id"), row.get("counterparty_id")),
+                ("warehouse_id", self.translator.text("purchase.form.warehouse_id"), row.get("warehouse_id")),
+                ("currency_id", self.translator.text("purchase.form.currency_id"), row.get("currency_id")),
+                ("currency_rate", self._humanize_key("currency_rate"), row.get("currency_rate")),
+                ("purchase_order_id", self.translator.text("purchase.form.order_id"), row.get("purchase_order_id")),
+                ("return_invoice_id", self.translator.text("purchase.form.return_invoice_id"), row.get("return_invoice_id")),
+                ("is_return", self.translator.text("purchase.create_return"), row.get("is_return")),
+                ("note", self._ui("note"), row.get("note")),
+                ("product_id", self.translator.text("purchase.form.product_id"), line.get("product_id")),
+                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
+                ("expense_category_id", self._humanize_key("expense_category_id"), line.get("expense_category_id")),
+                ("purchase_order_line_id", self.translator.text("purchase.form.order_line_id"), line.get("purchase_order_line_id")),
+                ("quantity", self.translator.text("purchase.form.quantity"), line.get("quantity")),
+                ("price_cur", self.translator.text("purchase.form.price"), line.get("price_cur")),
+            ],
+        )
+        if payload is None:
+            return
+        line_payload = self._line_payload_from_flat(payload)
+        update_payload = {**payload, "lines": [line_payload]}
+        self._run_api(lambda: (self.api_client.update_purchase_invoice(int(row["id"]), update_payload), self.refresh_purchase()))
+
+    def cancel_purchase_invoice_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_purchase_invoice(int(row["id"])), self.refresh_purchase)
+
+    def edit_inventory_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
+                ("qty_actual", self.translator.text("warehouse.form.quantity"), line.get("qty_actual")),
+                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.replace_inventory_lines(int(row["id"]), [payload]), self.refresh_warehouse()))
+
+    def cancel_inventory_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_inventory(int(row["id"])), self.refresh_warehouse)
+
+    def edit_stock_transfer_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("source_warehouse_id", self.translator.text("warehouse.form.source_warehouse_id"), row.get("source_warehouse_id")),
+                ("target_warehouse_id", self.translator.text("warehouse.form.target_warehouse_id"), row.get("target_warehouse_id")),
+                ("note", self._ui("note"), row.get("note")),
+                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
+                ("quantity", self.translator.text("warehouse.form.quantity"), line.get("quantity")),
+                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+            ],
+        )
+        if payload is None:
+            return
+        line_payload = self._line_payload_from_flat(payload)
+        update_payload = {**payload, "lines": [line_payload]}
+        self._run_api(lambda: (self.api_client.update_stock_transfer(int(row["id"]), update_payload), self.refresh_warehouse()))
+
+    def reject_stock_transfer_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.reject_stock_transfer(int(row["id"])), self.refresh_warehouse)
+
+    def edit_stock_writeoff_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("warehouse_id", self.translator.text("warehouse.form.warehouse_id"), row.get("warehouse_id")),
+                ("reason_code", self.translator.text("warehouse.form.reason"), row.get("reason_code")),
+                ("note", self._ui("note"), row.get("note")),
+                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
+                ("quantity", self.translator.text("warehouse.form.quantity"), line.get("quantity")),
+                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+            ],
+        )
+        if payload is None:
+            return
+        line_payload = self._line_payload_from_flat(payload)
+        update_payload = {**payload, "lines": [line_payload]}
+        self._run_api(lambda: (self.api_client.update_stock_writeoff(int(row["id"]), update_payload), self.refresh_warehouse()))
+
+    def cancel_stock_writeoff_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_stock_writeoff(int(row["id"])), self.refresh_warehouse)
+
+    def edit_cash_register_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name", self.translator.text("cashier.form.register_name"), row.get("name")),
+                ("warehouse_id", self.translator.text("cashier.form.warehouse_id"), row.get("warehouse_id")),
+                ("is_active", self._ui("active"), row.get("is_active")),
+            ],
+        )
+        if payload is not None:
+            self._run_api(lambda: (self.api_client.update_cash_register(int(row["id"]), payload), self.refresh_cashier()))
+
+    def toggle_cash_register_active_action(self, row: dict[str, object]) -> None:
+        self._toggle_active(row, self.api_client.update_cash_register, self.refresh_cashier)
+
+    def close_cash_shift_action(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.close"),
+            [("closing_amount", self.translator.text("cashier.form.closing_amount"), row.get("closing_amount") or row.get("opening_amount") or "0")],
+        )
+        if payload is not None:
+            self._confirming_api_action(row, "crud.close", lambda: self.api_client.close_cash_shift(int(row["id"]), payload), self.refresh_cashier)
+
+    def edit_sale_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("doc_number", self._ui("number"), row.get("doc_number")),
+                ("doc_date", self._ui("date"), row.get("doc_date")),
+                ("sale_type", self.translator.text("sales.table.type"), row.get("sale_type")),
+                ("cash_register_id", self.translator.text("sales.form.cash_register_id"), row.get("cash_register_id")),
+                ("cash_shift_id", self.translator.text("sales.form.cash_shift_id"), row.get("cash_shift_id")),
+                ("counterparty_id", self.translator.text("sales.form.customer_id"), row.get("counterparty_id")),
+                ("warehouse_id", self.translator.text("sales.form.warehouse_id"), row.get("warehouse_id")),
+                ("currency_id", self.translator.text("sales.form.currency_id"), row.get("currency_id")),
+                ("payment_type", self.translator.text("sales.form.payment_type"), row.get("payment_type")),
+                ("paid_cash_tmt", self.translator.text("sales.form.paid_cash"), row.get("paid_cash_tmt")),
+                ("paid_transfer_tmt", self.translator.text("sales.form.paid_transfer"), row.get("paid_transfer_tmt")),
+                ("debt_amount_tmt", self.translator.text("sales.form.debt_amount"), row.get("debt_amount_tmt")),
+                ("product_id", self.translator.text("sales.form.product_id"), line.get("product_id")),
+                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
+                ("quantity", self.translator.text("sales.form.quantity"), line.get("quantity")),
+                ("price_final", self.translator.text("sales.form.price"), line.get("price_final")),
+                ("discount_percent", self._humanize_key("discount_percent"), line.get("discount_percent")),
+            ],
+        )
+        if payload is None:
+            return
+        line_payload = self._line_payload_from_flat(payload, sale=True)
+        payload.setdefault("currency_rate", row.get("currency_rate") or "1")
+        payload.setdefault("discount_percent", row.get("discount_percent") or "0")
+        payload.setdefault("discount_amount_tmt", row.get("discount_amount_tmt") or "0")
+        payload["lines"] = [line_payload]
+        self._run_api(lambda: (self.api_client.update_sale(int(row["id"]), payload), self.refresh_sales()))
+
+    def cancel_sale_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_sale(int(row["id"])), self.refresh_sales)
+
+    def edit_sale_return_dialog(self, row: dict[str, object]) -> None:
+        line = self._first_line(row)
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("doc_number", self._ui("number"), row.get("doc_number")),
+                ("doc_date", self._ui("date"), row.get("doc_date")),
+                ("sale_id", self.translator.text("sales.form.sale_id"), row.get("sale_id")),
+                ("cash_register_id", self.translator.text("sales.form.cash_register_id"), row.get("cash_register_id")),
+                ("cash_shift_id", self.translator.text("sales.form.cash_shift_id"), row.get("cash_shift_id")),
+                ("refund_method", self.translator.text("sales.form.refund_method"), row.get("refund_method")),
+                ("refund_cash_tmt", self.translator.text("sales.form.refund_cash"), row.get("refund_cash_tmt")),
+                ("refund_transfer_tmt", self.translator.text("sales.form.refund_transfer"), row.get("refund_transfer_tmt")),
+                ("receivable_correction_tmt", self.translator.text("sales.form.receivable_correction"), row.get("receivable_correction_tmt")),
+                ("source_sale_line_id", self.translator.text("sales.form.sale_line_id"), line.get("source_sale_line_id")),
+                ("quantity", self.translator.text("sales.form.quantity"), line.get("quantity")),
+                ("price_final", self.translator.text("sales.form.price"), line.get("price_final")),
+            ],
+        )
+        if payload is None:
+            return
+        try:
+            source_sale_line_id = int(payload.pop("source_sale_line_id"))
+        except (TypeError, ValueError):
+            QMessageBox.critical(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_line_id"))
+            return
+        line_payload = {"source_sale_line_id": source_sale_line_id, "quantity": payload.pop("quantity"), "price_final": payload.pop("price_final")}
+        payload["lines"] = [line_payload]
+        self._run_api(lambda: (self.api_client.update_sale_return(int(row["id"]), payload), self.refresh_sales()))
+
+    def cancel_sale_return_action(self, row: dict[str, object]) -> None:
+        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_sale_return(int(row["id"])), self.refresh_sales)
+
+    def edit_report_filter_dialog(self, row: dict[str, object]) -> None:
+        payload = self._simple_record_form(
+            self.translator.text("crud.edit"),
+            [
+                ("name", self._ui("name"), row.get("name")),
+                ("filters", self._ui("filters"), json.dumps(row.get("filters") or {}, ensure_ascii=False)),
+                ("is_shared", self._ui("shared"), row.get("is_shared")),
+            ],
+        )
+        if payload is None:
+            return
+        try:
+            payload["filters"] = json.loads(str(payload["filters"] or "{}"))
+        except json.JSONDecodeError as exc:
+            QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
+            return
+        self._run_api(lambda: (self.api_client.update_report_filter(int(row["id"]), payload), self.refresh_reports()))
+
+    def delete_report_filter_action(self, row: dict[str, object]) -> None:
+        label = self.translator.text("crud.delete")
+        if self._confirm_record_action(row, label, hard_delete=True):
+            self._run_api(lambda: (self.api_client.delete_report_filter(int(row["id"])), self.refresh_reports()))
 
     def create_product_group_dialog(self) -> None:
         """Create a product group."""
@@ -3518,6 +4587,26 @@ class MainWindow(QWidget):
                 value = self.report_debt_type.itemData(index)
                 self.report_debt_type.setItemText(index, self._debt_type_text(str(value) if value else None))
 
+    def _set_tab_labels(self) -> None:
+        """Apply translated labels to tab widgets."""
+
+        tab_sets: tuple[tuple[str, tuple[str, ...]], ...] = (
+            ("catalog_tabs", ("tabs.products", "tabs.product_groups", "tabs.services")),
+            ("warehouse_tabs", ("tabs.warehouses", "tabs.balances", "tabs.movements", "tabs.inventories", "tabs.transfers", "tabs.writeoffs")),
+            ("pricing_tabs", ("tabs.price_lists", "tabs.price_items")),
+            ("purchase_tabs", ("tabs.orders", "tabs.invoices", "tabs.debt")),
+            ("sales_tabs", ("tabs.sales", "tabs.returns", "tabs.debt")),
+            ("cashier_tabs", ("tabs.registers", "tabs.shifts", "tabs.reports")),
+            ("report_tabs", ("tabs.report_rows", "tabs.saved_filters")),
+        )
+        for attr, keys in tab_sets:
+            tabs = getattr(self, attr, None)
+            if not isinstance(tabs, QTabWidget):
+                continue
+            for index, key in enumerate(keys):
+                if index < tabs.count():
+                    tabs.setTabText(index, self.translator.text(key))
+
     def retranslate(self) -> None:
         """Apply active translations to visible labels."""
 
@@ -3536,6 +4625,7 @@ class MainWindow(QWidget):
             self._set_role_permissions_table_headers()
         if hasattr(self, "report_saved_filters_table"):
             self._set_report_saved_filters_table_headers()
+        self._set_tab_labels()
         self._set_report_combo_labels()
         if hasattr(self, "cashier_cart_table"):
             self._set_cashier_cart_table_headers()
@@ -3596,6 +4686,7 @@ class MainWindow(QWidget):
 
         action_permissions: dict[str, tuple[str, ...]] = {
             "users.create": ("admin.manage_users",),
+            "roles.create": ("admin.manage_roles",),
             "settings.save": ("settings.edit",),
             "catalog.create_group": ("goods.create",),
             "catalog.create_product": ("goods.create",),

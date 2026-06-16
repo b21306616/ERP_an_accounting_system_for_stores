@@ -54,6 +54,21 @@ class V1UserUpdate(BaseModel):
     is_active: bool | None = None
 
 
+class V1RoleCreate(BaseModel):
+    """Payload for creating a custom role."""
+
+    name: str = Field(min_length=1, max_length=50)
+    description: str | None = Field(default=None, max_length=255)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class V1RoleUpdate(BaseModel):
+    """Payload for updating a role description and permissions."""
+
+    description: str | None = Field(default=None, max_length=255)
+    permissions: list[str] | None = None
+
+
 class V1WorkplaceCreate(BaseModel):
     """Payload for creating a workplace."""
 
