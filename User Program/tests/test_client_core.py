@@ -442,6 +442,278 @@ class ClientCoreTests(unittest.TestCase):
         window.close()
         app.processEvents()
 
+    def test_users_page_renders_filters_and_empty_state_offscreen(self) -> None:
+        """Users list should render KPIs, search, status, role filtering, and empty state."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Admin", role_name="Super Admin", permissions=["admin.manage_users"])
+                self.users = [
+                    {"id": 1, "username": "admin", "full_name": "Admin Person", "role_name": "Administrator", "is_active": True},
+                    {"id": 2, "username": "cashier", "full_name": "Cashier Person", "role_name": "Cashier", "is_active": False},
+                ]
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_users(self) -> list[dict[str, object]]:
+                return [dict(user) for user in self.users]
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [{"name": "Administrator"}, {"name": "Cashier"}]
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        try:
+            window.refresh_users()
+
+            self.assertEqual(window.stat_total_val.text(), "2")
+            self.assertEqual(window.stat_active_val.text(), "1")
+            self.assertEqual(window.stat_inactive_val.text(), "1")
+            self.assertEqual(window.users_table.rowCount(), 2)
+
+            window.users_search.setText("cashier")
+            self.assertEqual(window.users_table.rowCount(), 1)
+            self.assertIn("cashier", window.users_table.item(0, 1).text())
+
+            window.users_status_buttons["active"].click()
+            self.assertEqual(window.users_table.rowCount(), 0)
+            self.assertIs(window.users_table_stack.currentWidget(), window.users_empty_state)
+
+            window.users_search.clear()
+            window.users_status_buttons["all"].click()
+            role_index = window.users_role_filter.findData("Administrator")
+            window.users_role_filter.setCurrentIndex(role_index)
+            self.assertEqual(window.users_table.rowCount(), 1)
+            self.assertEqual(window.users_table.item(0, 1).text(), "admin")
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_users_page_switches_full_page_states_offscreen(self) -> None:
+        """View, create, and edit wrappers should switch the Users internal stack."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Admin", role_name="Super Admin", permissions=["admin.manage_users"])
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_users(self) -> list[dict[str, object]]:
+                return []
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [{"name": "Administrator"}, {"name": "Cashier"}]
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        row = {"id": 1, "username": "admin", "full_name": "Admin Person", "role_name": "Administrator", "is_active": True}
+        try:
+            window._show_user_details_dialog(row)
+            self.assertIs(window.users_stack.currentWidget(), window.users_detail_page)
+
+            window.edit_user_dialog(row)
+            self.assertIs(window.users_stack.currentWidget(), window.users_edit_page)
+
+            window.create_user_dialog()
+            self.assertIs(window.users_stack.currentWidget(), window.users_create_page)
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_users_create_and_edit_validate_and_submit_payloads_offscreen(self) -> None:
+        """Users forms should validate inline and submit existing API payload shapes."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Admin", role_name="Super Admin", permissions=["admin.manage_users"])
+                self.users = [
+                    {"id": 1, "username": "admin", "full_name": "Admin Person", "role_name": "Administrator", "is_active": True},
+                ]
+                self.created_payload: dict[str, object] | None = None
+                self.updated_payload: dict[str, object] | None = None
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_users(self) -> list[dict[str, object]]:
+                return [dict(user) for user in self.users]
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [{"name": "Administrator"}, {"name": "Cashier"}]
+
+            def create_user(self, payload: dict[str, object]) -> dict[str, object]:
+                self.created_payload = dict(payload)
+                created = {
+                    "id": 2,
+                    "username": payload["username"],
+                    "full_name": payload["full_name"],
+                    "role_name": payload["role_name"],
+                    "is_active": payload["is_active"],
+                }
+                self.users.append(created)
+                return dict(created)
+
+            def update_user(self, user_id: int, payload: dict[str, object]) -> dict[str, object]:
+                self.updated_payload = dict(payload)
+                self.users[0].update(payload)
+                return dict(self.users[0], id=user_id)
+
+        app = QApplication.instance() or QApplication([])
+        api_client = FakeApiClient()
+        window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
+        try:
+            window.create_user_dialog()
+            window.user_form_save_button.click()
+            self.assertIsNone(api_client.created_payload)
+            self.assertIn("Enter a username.", window.user_form_error_label.text())
+
+            window.user_form_username.setText("cashier")
+            window.user_form_full_name.setText("Cashier Person")
+            window.user_form_password.setText("123")
+            window.user_form_save_button.click()
+            self.assertIsNone(api_client.created_payload)
+
+            window.user_form_password.setText("secret1")
+            window.user_form_role_combo.setCurrentIndex(window.user_form_role_combo.findData("Cashier"))
+            window.user_form_active_check.setChecked(False)
+            window.user_form_save_button.click()
+            self.assertEqual(
+                api_client.created_payload,
+                {
+                    "username": "cashier",
+                    "full_name": "Cashier Person",
+                    "password": "secret1",
+                    "role_name": "Cashier",
+                    "is_active": False,
+                },
+            )
+            self.assertIs(window.users_stack.currentWidget(), window.users_detail_page)
+
+            window.edit_user_dialog(api_client.users[0])
+            window.user_form_full_name.setText("Admin Updated")
+            window.user_form_password.setText("123")
+            window.user_form_save_button.click()
+            self.assertIsNone(api_client.updated_payload)
+
+            window.user_form_password.setText("updated1")
+            window.user_form_role_combo.setCurrentIndex(window.user_form_role_combo.findData("Cashier"))
+            window.user_form_active_check.setChecked(False)
+            window.user_form_save_button.click()
+            self.assertEqual(
+                api_client.updated_payload,
+                {
+                    "full_name": "Admin Updated",
+                    "role_name": "Cashier",
+                    "is_active": False,
+                    "password": "updated1",
+                },
+            )
+            self.assertIs(window.users_stack.currentWidget(), window.users_detail_page)
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_users_deactivate_uses_existing_api_action_offscreen(self) -> None:
+        """Users deactivate action should call the existing API and refresh rows."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(full_name="Admin", role_name="Super Admin", permissions=["admin.manage_users"])
+                self.users = [
+                    {"id": 1, "username": "admin", "full_name": "Admin Person", "role_name": "Administrator", "is_active": True},
+                ]
+                self.deactivated_user_id: int | None = None
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_users(self) -> list[dict[str, object]]:
+                return [dict(user) for user in self.users]
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [{"name": "Administrator"}]
+
+            def update_user(self, user_id: int, payload: dict[str, object]) -> dict[str, object]:
+                self.users[0].update(payload)
+                return dict(self.users[0], id=user_id)
+
+            def deactivate_user(self, user_id: int) -> dict[str, object]:
+                self.deactivated_user_id = user_id
+                self.users[0]["is_active"] = False
+                return dict(self.users[0])
+
+        app = QApplication.instance() or QApplication([])
+        api_client = FakeApiClient()
+        window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
+        try:
+            window.refresh_users()
+            with patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+                window.deactivate_user_action(api_client.users[0])
+
+            self.assertEqual(api_client.deactivated_user_id, 1)
+            self.assertEqual(window.stat_inactive_val.text(), "1")
+            self.assertEqual(window.users_table.item(0, 4).text(), "Inactive")
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_users_redesign_translation_keys_exist(self) -> None:
+        """New Users UI labels should be translated in every supported language."""
+
+        keys = [
+            "users.subtitle",
+            "users.search_placeholder",
+            "users.stats.total",
+            "users.stats.active",
+            "users.stats.inactive",
+            "users.filter.all",
+            "users.filter.active",
+            "users.filter.inactive",
+            "users.filter.role_all",
+            "users.status.active",
+            "users.status.inactive",
+            "users.details",
+            "users.edit_title",
+            "users.back_to_list",
+            "users.save",
+            "users.table.actions",
+            "users.visible_count",
+            "users.empty.title",
+            "users.empty.body",
+            "users.empty.no_users_title",
+            "users.empty.no_users_body",
+            "users.form.password_hint",
+            "users.form.show_password",
+            "users.form.hide_password",
+            "users.validation.username_required",
+            "users.validation.full_name_required",
+            "users.validation.password_required",
+            "users.validation.password_short",
+        ]
+
+        for language in ("ru", "tk", "en"):
+            translator = Translator(language)  # type: ignore[arg-type]
+            for key in keys:
+                self.assertNotEqual(translator.text(key), key)
+
     def test_settings_page_uses_editable_form_offscreen(self) -> None:
         """Settings should render as editable fields and save key/value payloads."""
 

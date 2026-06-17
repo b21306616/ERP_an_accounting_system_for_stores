@@ -11,6 +11,8 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -30,10 +32,12 @@ from PyQt6.QtWidgets import (
     QLayout,
     QPlainTextEdit,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -219,6 +223,112 @@ class MainWindow(QWidget):
                 background: #cbd5e1;
                 border-radius: 5px;
                 min-height: 28px;
+            }
+            QFrame#UsersToolbar,
+            QFrame#UsersStatCard,
+            QFrame#UsersProfileCard,
+            QFrame#UsersDetailsCard,
+            QFrame#UsersFormCard,
+            QFrame#UsersEmptyState {
+                background: #ffffff;
+                border: 1px solid #dce5ef;
+                border-radius: 8px;
+            }
+            QLabel#UsersPageHeading {
+                color: #0f172a;
+                font-size: 22px;
+                font-weight: 800;
+            }
+            QLabel#UsersSubtitle,
+            QLabel#UsersVisibleCount {
+                color: #64748b;
+                font-size: 9pt;
+            }
+            QLabel#UsersStatTitle,
+            QLabel#UsersFieldLabel {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 700;
+            }
+            QLabel#UsersStatValue {
+                color: #0f172a;
+                font-size: 22px;
+                font-weight: 800;
+            }
+            QLabel#UsersAvatar {
+                background: #e0edff;
+                border: 1px solid #bfdbfe;
+                border-radius: 28px;
+                color: #1557c0;
+                font-size: 18px;
+                font-weight: 800;
+                min-height: 56px;
+                max-height: 56px;
+                min-width: 56px;
+                max-width: 56px;
+            }
+            QLabel#UsersBadgeActive,
+            QLabel#UsersBadgeInactive,
+            QLabel#UsersRoleBadge {
+                border-radius: 8px;
+                font-size: 9pt;
+                font-weight: 800;
+                padding: 4px 9px;
+            }
+            QLabel#UsersBadgeActive {
+                background: #dcfce7;
+                color: #166534;
+            }
+            QLabel#UsersBadgeInactive {
+                background: #f1f5f9;
+                color: #475569;
+            }
+            QLabel#UsersRoleBadge {
+                background: #fff7ed;
+                color: #9a3412;
+            }
+            QLabel#UsersFormError {
+                background: #fef2f2;
+                border: 1px solid #fecaca;
+                border-radius: 8px;
+                color: #991b1b;
+                font-weight: 700;
+                padding: 8px 10px;
+            }
+            QPushButton#UsersFilterButton {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #475569;
+                padding: 7px 11px;
+            }
+            QPushButton#UsersFilterButton:hover {
+                background: #f8fafc;
+            }
+            QPushButton#UsersFilterButton:checked {
+                background: #e0edff;
+                border-color: #93c5fd;
+                color: #1557c0;
+            }
+            QPushButton#UsersInlineButton,
+            QPushButton#UsersInlineDangerButton,
+            QToolButton#UsersPasswordToggle {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #1557c0;
+                padding: 6px 9px;
+            }
+            QPushButton#UsersInlineButton:hover,
+            QToolButton#UsersPasswordToggle:hover {
+                background: #f8fafc;
+                border-color: #94a3b8;
+            }
+            QPushButton#UsersInlineDangerButton {
+                color: #b91c1c;
+            }
+            QTableWidget#UsersTable {
+                border-radius: 8px;
             }
             """
         )
@@ -1070,7 +1180,7 @@ class MainWindow(QWidget):
         layout.addWidget(scroll, 1)
         return page
 
-    def _build_users_page(self) -> QWidget:
+    def _legacy_build_users_page(self) -> QWidget:
         """Build users page with a modernized visual design and dynamic stats."""
 
         page, layout, _title = self._page("users.title")
@@ -1200,7 +1310,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.users_table, 1)
         return page
 
-    def _filter_users_table(self, text: str) -> None:
+    def _legacy_filter_users_table(self, text: str) -> None:
         """Filter the users table based on search input in real time."""
         search_query = text.strip().lower()
         for row in range(self.users_table.rowCount()):
@@ -1212,7 +1322,7 @@ class MainWindow(QWidget):
                     break
             self.users_table.setRowHidden(row, not match)
 
-    def _make_status_badge(self, active: bool, lang: str) -> QWidget:
+    def _legacy_make_status_badge(self, active: bool, lang: str) -> QWidget:
         """Create a styled badge representing active/inactive status."""
         container = QWidget()
         layout = QHBoxLayout(container)
@@ -1244,7 +1354,7 @@ class MainWindow(QWidget):
         layout.addWidget(badge)
         return container
 
-    def _show_user_details_dialog(self, row: dict[str, object]) -> None:
+    def _legacy_show_user_details_dialog(self, row: dict[str, object]) -> None:
         """Show a modern, styled user details profile dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle(self.translator.text("users.details"))
@@ -2592,7 +2702,7 @@ class MainWindow(QWidget):
         elif page_id == "reports":
             self.refresh_reports()
 
-    def refresh_users(self) -> None:
+    def _legacy_refresh_users(self) -> None:
         """Refresh users table and update stats cards."""
 
         def action() -> None:
@@ -3158,7 +3268,7 @@ class MainWindow(QWidget):
         if self._confirm_record_action(row, label, hard_delete=True):
             self._run_api(lambda: (self.api_client.delete_role(int(row["id"])), self.refresh_roles()))
 
-    def edit_user_dialog(self, row: dict[str, object]) -> None:
+    def _legacy_edit_user_dialog(self, row: dict[str, object]) -> None:
         """Open a modern edit-user dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle(self.translator.text("crud.edit"))
@@ -3334,7 +3444,7 @@ class MainWindow(QWidget):
             
         self._run_api(lambda: (self.api_client.update_user(int(row["id"]), payload), self.refresh_users()))
 
-    def deactivate_user_action(self, row: dict[str, object]) -> None:
+    def _legacy_deactivate_user_action(self, row: dict[str, object]) -> None:
         """Activate or deactivate a user."""
 
         target_active = not bool(row.get("is_active"))
@@ -5011,7 +5121,7 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-    def create_user_dialog(self) -> None:
+    def _legacy_create_user_dialog(self) -> None:
         """Open a modern create-user dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle(self.translator.text("users.create"))
@@ -5220,7 +5330,7 @@ class MainWindow(QWidget):
         except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
 
-    def _set_users_table_headers(self) -> None:
+    def _legacy_set_users_table_headers(self) -> None:
         """Apply translated column headers to the users table."""
 
         self.users_table.setHorizontalHeaderLabels([self.translator.text(key) for key in USER_TABLE_HEADER_KEYS])
@@ -5367,6 +5477,781 @@ class MainWindow(QWidget):
                 button.setText(self.translator.text(str(text_key)))
         if hasattr(self, "settings_values") and self.settings_values:
             self._render_settings_forms(self.settings_values)
+        if hasattr(self, "users_role_filter"):
+            self._populate_users_role_filter()
+        if hasattr(self, "users_table") and hasattr(self, "users_rows"):
+            self._apply_users_filters()
+        if (
+            hasattr(self, "users_stack")
+            and self.users_stack.currentWidget() == getattr(self, "users_detail_page", None)
+            and self.users_current_detail_row
+        ):
+            self._render_user_detail(self.users_current_detail_row)
+
+    def _build_users_page(self) -> QWidget:
+        """Build the full-page Users workflow."""
+
+        page, layout, _title = self._page("users.title")
+        _title.hide()
+
+        self.users_rows: list[dict[str, object]] = []
+        self.users_filtered_rows: list[dict[str, object]] = []
+        self.users_status_filter = "all"
+        self.users_current_detail_row: dict[str, object] | None = None
+        self.users_stat_columns = 0
+
+        self.users_stack = QStackedWidget()
+        self.users_stack.setObjectName("UsersStack")
+
+        self.users_list_page = self._build_users_list_page()
+        self.users_detail_page, self.users_detail_layout = self._make_users_state_page()
+        self.users_create_page, self.users_create_layout = self._make_users_state_page()
+        self.users_edit_page, self.users_edit_layout = self._make_users_state_page()
+
+        self.users_stack.addWidget(self.users_list_page)
+        self.users_stack.addWidget(self.users_detail_page)
+        self.users_stack.addWidget(self.users_create_page)
+        self.users_stack.addWidget(self.users_edit_page)
+        layout.addWidget(self.users_stack, 1)
+        self._update_users_responsive_layout()
+        return page
+
+    def _make_users_state_page(self) -> tuple[QWidget, QVBoxLayout]:
+        """Create one page for the Users internal stack."""
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        return page, layout
+
+    def _build_users_list_page(self) -> QWidget:
+        """Create the responsive Users list surface."""
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        page_layout.setSpacing(14)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("UsersToolbar")
+        self.users_toolbar_grid = QGridLayout(toolbar)
+        self.users_toolbar_grid.setContentsMargins(16, 14, 16, 14)
+        self.users_toolbar_grid.setHorizontalSpacing(12)
+        self.users_toolbar_grid.setVerticalSpacing(12)
+
+        self.users_header_title_box = QWidget()
+        title_layout = QVBoxLayout(self.users_header_title_box)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(3)
+        title = QLabel(self.translator.text("users.title"))
+        title.setObjectName("UsersPageHeading")
+        title.setProperty("titleKey", "users.title")
+        subtitle = QLabel(self.translator.text("users.subtitle"))
+        subtitle.setObjectName("UsersSubtitle")
+        subtitle.setProperty("titleKey", "users.subtitle")
+        subtitle.setWordWrap(True)
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+
+        self.users_header_actions_box = QWidget()
+        actions_layout = QHBoxLayout(self.users_header_actions_box)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+        actions_layout.addStretch(1)
+        refresh = QPushButton()
+        refresh.setProperty("textKey", "users.refresh")
+        refresh.setText(self.translator.text("users.refresh"))
+        refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        refresh.clicked.connect(self.refresh_users)
+        create = QPushButton()
+        create.setObjectName("PrimaryButton")
+        create.setProperty("textKey", "users.create")
+        create.setText(self.translator.text("users.create"))
+        create.setCursor(Qt.CursorShape.PointingHandCursor)
+        create.clicked.connect(self.create_user_dialog)
+        actions_layout.addWidget(refresh)
+        actions_layout.addWidget(create)
+
+        self.users_filter_box = QWidget()
+        filters_layout = QHBoxLayout(self.users_filter_box)
+        filters_layout.setContentsMargins(0, 0, 0, 0)
+        filters_layout.setSpacing(8)
+        self.users_search = QLineEdit()
+        self.users_search.setProperty("placeholderKey", "users.search_placeholder")
+        self.users_search.setPlaceholderText(self.translator.text("users.search_placeholder"))
+        self.users_search.setClearButtonEnabled(True)
+        self.users_search.setMinimumWidth(180)
+        self.users_search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.users_search.textChanged.connect(self._filter_users_table)
+        filters_layout.addWidget(self.users_search, 2)
+
+        self.users_role_filter = QComboBox()
+        self.users_role_filter.setMinimumWidth(150)
+        self.users_role_filter.currentIndexChanged.connect(lambda _index: self._apply_users_filters())
+        filters_layout.addWidget(self.users_role_filter, 1)
+
+        self.users_status_group = QButtonGroup(self)
+        self.users_status_group.setExclusive(True)
+        self.users_status_buttons: dict[str, QPushButton] = {}
+        for status, key in (
+            ("all", "users.filter.all"),
+            ("active", "users.filter.active"),
+            ("inactive", "users.filter.inactive"),
+        ):
+            button = QPushButton(self.translator.text(key))
+            button.setObjectName("UsersFilterButton")
+            button.setProperty("textKey", key)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            if status == "all":
+                button.setChecked(True)
+            button.clicked.connect(lambda _checked, value=status: self._set_users_status_filter(value))
+            self.users_status_group.addButton(button)
+            self.users_status_buttons[status] = button
+            filters_layout.addWidget(button)
+
+        self.users_stats_widget = QWidget()
+        self.users_stats_grid = QGridLayout(self.users_stats_widget)
+        self.users_stats_grid.setContentsMargins(0, 0, 0, 0)
+        self.users_stats_grid.setSpacing(10)
+        self.stat_total_card, self.stat_total_val = self._make_user_stat_card("users.stats.total")
+        self.stat_active_card, self.stat_active_val = self._make_user_stat_card("users.stats.active")
+        self.stat_inactive_card, self.stat_inactive_val = self._make_user_stat_card("users.stats.inactive")
+        self.users_stat_cards = [self.stat_total_card, self.stat_active_card, self.stat_inactive_card]
+
+        list_meta = QHBoxLayout()
+        list_meta.setContentsMargins(0, 0, 0, 0)
+        self.users_visible_count_label = QLabel()
+        self.users_visible_count_label.setObjectName("UsersVisibleCount")
+        list_meta.addWidget(self.users_visible_count_label)
+        list_meta.addStretch(1)
+
+        self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS) + 1)
+        self.users_table.setObjectName("UsersTable")
+        self._configure_table(self.users_table)
+        self.users_table.verticalHeader().setDefaultSectionSize(46)
+        self._set_users_table_headers()
+        self._install_record_actions(
+            self.users_table,
+            view=self._show_user_details_dialog,
+            edit=self.edit_user_dialog,
+            lifecycle=self.deactivate_user_action,
+            lifecycle_label=self._active_lifecycle_label,
+        )
+
+        self.users_empty_state = self._build_users_empty_state()
+        self.users_table_stack = QStackedWidget()
+        self.users_table_stack.addWidget(self.users_table)
+        self.users_table_stack.addWidget(self.users_empty_state)
+
+        page_layout.addWidget(toolbar)
+        page_layout.addWidget(self.users_stats_widget)
+        page_layout.addLayout(list_meta)
+        page_layout.addWidget(self.users_table_stack, 1)
+        self._populate_users_role_filter()
+        return page
+
+    def _make_user_stat_card(self, title_key: str) -> tuple[QFrame, QLabel]:
+        """Create one Users KPI card."""
+
+        card = QFrame()
+        card.setObjectName("UsersStatCard")
+        card.setMinimumHeight(76)
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(12)
+        shadow.setColor(QColor(15, 23, 42, 12))
+        shadow.setOffset(0, 3)
+        card.setGraphicsEffect(shadow)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(3)
+        title = QLabel(self.translator.text(title_key))
+        title.setObjectName("UsersStatTitle")
+        title.setProperty("titleKey", title_key)
+        value = QLabel("0")
+        value.setObjectName("UsersStatValue")
+        layout.addWidget(title)
+        layout.addWidget(value)
+        layout.addStretch(1)
+        return card, value
+
+    def _build_users_empty_state(self) -> QFrame:
+        """Create the empty state shown when the filtered list has no rows."""
+
+        frame = QFrame()
+        frame.setObjectName("UsersEmptyState")
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(6)
+        layout.addStretch(1)
+        self.users_empty_title = QLabel()
+        self.users_empty_title.setObjectName("UsersPageHeading")
+        self.users_empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.users_empty_body = QLabel()
+        self.users_empty_body.setObjectName("UsersSubtitle")
+        self.users_empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.users_empty_body.setWordWrap(True)
+        layout.addWidget(self.users_empty_title)
+        layout.addWidget(self.users_empty_body)
+        layout.addStretch(1)
+        return frame
+
+    def _show_users_list_page(self) -> None:
+        """Return to the Users list state."""
+
+        self.users_stack.setCurrentWidget(self.users_list_page)
+        self._apply_users_filters()
+
+    def _filter_users_table(self, _text: str) -> None:
+        """Filter the users table based on search input in real time."""
+
+        self._apply_users_filters()
+
+    def _set_users_status_filter(self, status: str) -> None:
+        """Apply one of the segmented status filters."""
+
+        self.users_status_filter = status
+        self._apply_users_filters()
+
+    def _populate_users_role_filter(self) -> None:
+        """Refresh the role filter from the loaded user rows."""
+
+        if not hasattr(self, "users_role_filter"):
+            return
+        selected = self.users_role_filter.currentData() if self.users_role_filter.count() else "all"
+        roles = sorted({str(row.get("role_name") or "") for row in self.users_rows if row.get("role_name")})
+        self.users_role_filter.blockSignals(True)
+        self.users_role_filter.clear()
+        self.users_role_filter.addItem(self.translator.text("users.filter.role_all"), "all")
+        for role in roles:
+            self.users_role_filter.addItem(role, role)
+        index = self.users_role_filter.findData(selected)
+        self.users_role_filter.setCurrentIndex(index if index >= 0 else 0)
+        self.users_role_filter.blockSignals(False)
+
+    def _apply_users_filters(self) -> None:
+        """Re-render the table from the current search, role, and status filters."""
+
+        if not hasattr(self, "users_table"):
+            return
+        query = self.users_search.text().strip().casefold() if hasattr(self, "users_search") else ""
+        role_filter = self.users_role_filter.currentData() if hasattr(self, "users_role_filter") else "all"
+        filtered: list[dict[str, object]] = []
+        for row in self.users_rows:
+            active = bool(row.get("is_active"))
+            if self.users_status_filter == "active" and not active:
+                continue
+            if self.users_status_filter == "inactive" and active:
+                continue
+            if role_filter not in (None, "all") and str(row.get("role_name") or "") != str(role_filter):
+                continue
+            haystack = " ".join(
+                str(row.get(key) or "")
+                for key in ("id", "username", "full_name", "role_name", "is_active")
+            ).casefold()
+            if query and query not in haystack:
+                continue
+            filtered.append(row)
+        self.users_filtered_rows = filtered
+        self._render_users_table(filtered)
+
+    def _render_users_table(self, rows: list[dict[str, object]]) -> None:
+        """Render the filtered Users rows."""
+
+        self.users_table.setSortingEnabled(False)
+        self.users_table.setRowCount(0)
+        self.users_table.setRowCount(len(rows))
+        for row_index, user in enumerate(rows):
+            values = (
+                user.get("id"),
+                user.get("username"),
+                user.get("full_name"),
+                user.get("role_name"),
+                self.translator.text("users.status.active" if user.get("is_active") else "users.status.inactive"),
+            )
+            for column_index, value in enumerate(values):
+                item = self._table_item(value)
+                item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, column_index, item)
+            badge = self._make_status_badge(bool(user.get("is_active")), self.translator.language)
+            self.users_table.setCellWidget(row_index, 4, badge)
+            action_item = QTableWidgetItem("")
+            action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            action_item.setData(Qt.ItemDataRole.UserRole, user)
+            self.users_table.setItem(row_index, 5, action_item)
+            self.users_table.setCellWidget(row_index, 5, self._make_user_row_actions(user))
+            self.users_table.setRowHeight(row_index, 46)
+        self._configure_users_table_columns()
+        self.users_table.setSortingEnabled(True)
+        self._update_users_visible_count()
+        self._update_users_empty_state(len(rows))
+
+    def _make_user_row_actions(self, row: dict[str, object]) -> QWidget:
+        """Create compact inline actions for one Users table row."""
+
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(4, 3, 4, 3)
+        layout.setSpacing(5)
+        layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        for text, callback, object_name in (
+            (self.translator.text("crud.view"), lambda _checked=False, current=row: self._show_user_details_dialog(current), "UsersInlineButton"),
+            (self.translator.text("crud.edit"), lambda _checked=False, current=row: self.edit_user_dialog(current), "UsersInlineButton"),
+            (self._active_lifecycle_label(row), lambda _checked=False, current=row: self.deactivate_user_action(current), "UsersInlineDangerButton"),
+        ):
+            button = QPushButton(text)
+            button.setObjectName(object_name)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(callback)
+            layout.addWidget(button)
+        return widget
+
+    def _update_users_visible_count(self) -> None:
+        """Update visible/total count text."""
+
+        if not hasattr(self, "users_visible_count_label"):
+            return
+        self.users_visible_count_label.setText(
+            self.translator.text("users.visible_count").format(
+                visible=len(self.users_filtered_rows),
+                total=len(self.users_rows),
+            )
+        )
+
+    def _update_users_empty_state(self, visible_count: int) -> None:
+        """Switch between table and empty state."""
+
+        has_any_users = bool(self.users_rows)
+        if visible_count > 0:
+            self.users_table_stack.setCurrentWidget(self.users_table)
+            return
+        self.users_empty_title.setText(self.translator.text("users.empty.title" if has_any_users else "users.empty.no_users_title"))
+        self.users_empty_body.setText(self.translator.text("users.empty.body" if has_any_users else "users.empty.no_users_body"))
+        self.users_table_stack.setCurrentWidget(self.users_empty_state)
+
+    def _make_status_badge(self, active: bool, _lang: str) -> QWidget:
+        """Create a styled active/inactive status badge."""
+
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge = QLabel(self.translator.text("users.status.active" if active else "users.status.inactive"))
+        badge.setObjectName("UsersBadgeActive" if active else "UsersBadgeInactive")
+        layout.addWidget(badge)
+        return container
+
+    def _make_role_badge(self, role_name: object) -> QLabel:
+        """Create a compact role badge."""
+
+        role = QLabel(str(role_name or "-"))
+        role.setObjectName("UsersRoleBadge")
+        role.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return role
+
+    def _user_initials(self, row: dict[str, object]) -> str:
+        """Return initials for a Users profile avatar."""
+
+        full_name = str(row.get("full_name") or "").strip()
+        username = str(row.get("username") or "").strip()
+        parts = [part for part in full_name.split() if part]
+        if len(parts) >= 2:
+            return (parts[0][0] + parts[1][0]).upper()
+        if parts:
+            return parts[0][0].upper()
+        if username:
+            return username[:2].upper()
+        return "U"
+
+    def _show_user_details_dialog(self, row: dict[str, object]) -> None:
+        """Compatibility wrapper: show the full-page Users detail view."""
+
+        self._render_user_detail(row)
+        self.users_stack.setCurrentWidget(self.users_detail_page)
+
+    def _render_user_detail(self, row: dict[str, object]) -> None:
+        """Render one user in the full-page detail state."""
+
+        self.users_current_detail_row = dict(row)
+        self._clear_layout(self.users_detail_layout)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        back = QPushButton(self.translator.text("users.back_to_list"))
+        back.setCursor(Qt.CursorShape.PointingHandCursor)
+        back.clicked.connect(self._show_users_list_page)
+        title = QLabel(self.translator.text("users.details"))
+        title.setObjectName("UsersPageHeading")
+        header.addWidget(back)
+        header.addWidget(title)
+        header.addStretch(1)
+        edit = QPushButton(self.translator.text("crud.edit"))
+        edit.setObjectName("PrimaryButton")
+        edit.clicked.connect(lambda _checked=False, current=row: self.edit_user_dialog(current))
+        toggle = QPushButton(self._active_lifecycle_label(row))
+        toggle.clicked.connect(lambda _checked=False, current=row: self.deactivate_user_action(current))
+        header.addWidget(toggle)
+        header.addWidget(edit)
+        self.users_detail_layout.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(14)
+
+        profile = QFrame()
+        profile.setObjectName("UsersProfileCard")
+        profile_layout = QHBoxLayout(profile)
+        profile_layout.setContentsMargins(18, 18, 18, 18)
+        profile_layout.setSpacing(14)
+        avatar = QLabel(self._user_initials(row))
+        avatar.setObjectName("UsersAvatar")
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        profile_text = QVBoxLayout()
+        profile_text.setSpacing(5)
+        name = QLabel(str(row.get("full_name") or row.get("username") or "-"))
+        name.setObjectName("UsersPageHeading")
+        name.setWordWrap(True)
+        username = QLabel(f"@{row.get('username') or '-'}")
+        username.setObjectName("UsersSubtitle")
+        badges = QHBoxLayout()
+        badges.setSpacing(8)
+        badges.addWidget(self._make_role_badge(row.get("role_name")))
+        badges.addWidget(self._make_status_badge(bool(row.get("is_active")), self.translator.language))
+        badges.addStretch(1)
+        profile_text.addWidget(name)
+        profile_text.addWidget(username)
+        profile_text.addLayout(badges)
+        profile_layout.addWidget(avatar)
+        profile_layout.addLayout(profile_text, 1)
+        content_layout.addWidget(profile)
+
+        details = QFrame()
+        details.setObjectName("UsersDetailsCard")
+        details_layout = QGridLayout(details)
+        details_layout.setContentsMargins(18, 18, 18, 18)
+        details_layout.setHorizontalSpacing(18)
+        details_layout.setVerticalSpacing(12)
+        fields = (
+            ("users.table.id", row.get("id")),
+            ("users.table.username", row.get("username")),
+            ("users.table.full_name", row.get("full_name")),
+            ("users.table.role", row.get("role_name")),
+            ("users.table.active", self.translator.text("users.status.active" if row.get("is_active") else "users.status.inactive")),
+        )
+        for index, (key, value) in enumerate(fields):
+            label = QLabel(self.translator.text(key))
+            label.setObjectName("UsersFieldLabel")
+            value_label = QLabel(self._format_value(value))
+            value_label.setWordWrap(True)
+            value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            details_layout.addWidget(label, index, 0)
+            details_layout.addWidget(value_label, index, 1)
+        details_layout.setColumnStretch(1, 1)
+        content_layout.addWidget(details)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        self.users_detail_layout.addWidget(scroll, 1)
+
+    def _user_role_options(self, selected_role: str | None = None) -> list[tuple[str, str]]:
+        """Return role combo options using the API when available."""
+
+        options: list[tuple[str, str]] = []
+        try:
+            roles = self.api_client.get_roles()
+        except Exception:
+            roles = []
+        for role in roles:
+            role_name = str(role.get("name") or "")
+            if not role_name:
+                continue
+            description = str(role.get("description") or "")
+            label = f"{role_name} ({description})" if description else role_name
+            options.append((label, role_name))
+        if not options:
+            options = [("Cashier", "Cashier"), ("Administrator", "Administrator")]
+        if selected_role and all(value != selected_role for _label, value in options):
+            options.insert(0, (selected_role, selected_role))
+        return options
+
+    def create_user_dialog(self) -> None:
+        """Compatibility wrapper: show the full-page create user form."""
+
+        self._show_user_form("create")
+
+    def edit_user_dialog(self, row: dict[str, object]) -> None:
+        """Compatibility wrapper: show the full-page edit user form."""
+
+        self._show_user_form("edit", row)
+
+    def _show_user_form(self, mode: str, row: dict[str, object] | None = None) -> None:
+        """Render the full-page create or edit user form."""
+
+        is_edit = mode == "edit"
+        row = dict(row or {})
+        page = self.users_edit_page if is_edit else self.users_create_page
+        layout = self.users_edit_layout if is_edit else self.users_create_layout
+        self._clear_layout(layout)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        back = QPushButton(self.translator.text("users.back_to_list"))
+        back.setCursor(Qt.CursorShape.PointingHandCursor)
+        back.clicked.connect(self._show_users_list_page)
+        title_key = "users.edit_title" if is_edit else "users.create"
+        title = QLabel(self.translator.text(title_key))
+        title.setObjectName("UsersPageHeading")
+        header.addWidget(back)
+        header.addWidget(title)
+        header.addStretch(1)
+        layout.addLayout(header)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+        form_card = QFrame()
+        form_card.setObjectName("UsersFormCard")
+        form_layout = QFormLayout(form_card)
+        form_layout.setContentsMargins(18, 18, 18, 18)
+        form_layout.setHorizontalSpacing(18)
+        form_layout.setVerticalSpacing(12)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self.user_form_error_label = QLabel()
+        self.user_form_error_label.setObjectName("UsersFormError")
+        self.user_form_error_label.setWordWrap(True)
+        self.user_form_error_label.hide()
+        form_layout.addRow(self.user_form_error_label)
+
+        self.user_form_username = QLineEdit(str(row.get("username") or ""))
+        self.user_form_username.setPlaceholderText(self.translator.text("users.form.username"))
+        self.user_form_username.setReadOnly(is_edit)
+        self.user_form_full_name = QLineEdit(str(row.get("full_name") or ""))
+        self.user_form_full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        self.user_form_password = QLineEdit()
+        self.user_form_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.user_form_password.setPlaceholderText(
+            self.translator.text("users.form.password_hint" if is_edit else "users.form.password")
+        )
+
+        password_box = QWidget()
+        password_layout = QHBoxLayout(password_box)
+        password_layout.setContentsMargins(0, 0, 0, 0)
+        password_layout.setSpacing(8)
+        self.user_form_password_toggle = QToolButton()
+        self.user_form_password_toggle.setObjectName("UsersPasswordToggle")
+        self.user_form_password_toggle.setText(self.translator.text("users.form.show_password"))
+        self.user_form_password_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        def toggle_password() -> None:
+            visible = self.user_form_password.echoMode() == QLineEdit.EchoMode.Password
+            self.user_form_password.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
+            self.user_form_password_toggle.setText(
+                self.translator.text("users.form.hide_password" if visible else "users.form.show_password")
+            )
+
+        self.user_form_password_toggle.clicked.connect(toggle_password)
+        password_layout.addWidget(self.user_form_password, 1)
+        password_layout.addWidget(self.user_form_password_toggle)
+
+        self.user_form_role_combo = QComboBox()
+        current_role = str(row.get("role_name") or "")
+        for label, value in self._user_role_options(current_role or None):
+            self.user_form_role_combo.addItem(label, value)
+        selected_role = self.user_form_role_combo.findData(current_role)
+        if selected_role >= 0:
+            self.user_form_role_combo.setCurrentIndex(selected_role)
+
+        self.user_form_active_check = QCheckBox(self.translator.text("users.status.active"))
+        self.user_form_active_check.setChecked(bool(row.get("is_active", True)))
+        self.user_form_active_check.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        form_layout.addRow(self.translator.text("users.form.username"), self.user_form_username)
+        form_layout.addRow(self.translator.text("users.form.full_name"), self.user_form_full_name)
+        form_layout.addRow(self.translator.text("users.form.password"), password_box)
+        form_layout.addRow(self.translator.text("users.form.role"), self.user_form_role_combo)
+        form_layout.addRow(self.translator.text("ui.active"), self.user_form_active_check)
+        content_layout.addWidget(form_card)
+        content_layout.addStretch(1)
+        scroll.setWidget(content)
+        layout.addWidget(scroll, 1)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        cancel = QPushButton(self.translator.text("crud.cancel"))
+        cancel.clicked.connect(self._show_users_list_page)
+        self.user_form_save_button = QPushButton(self.translator.text("users.save"))
+        self.user_form_save_button.setObjectName("PrimaryButton")
+        self.user_form_save_button.clicked.connect(lambda _checked=False: self._submit_user_form(mode, row))
+        button_row.addStretch(1)
+        button_row.addWidget(cancel)
+        button_row.addWidget(self.user_form_save_button)
+        layout.addLayout(button_row)
+
+        self.users_stack.setCurrentWidget(page)
+
+    def _submit_user_form(self, mode: str, row: dict[str, object]) -> None:
+        """Validate and submit the current full-page Users form."""
+
+        is_edit = mode == "edit"
+        errors: list[str] = []
+        username = self.user_form_username.text().strip()
+        full_name = self.user_form_full_name.text().strip()
+        password = self.user_form_password.text()
+        if not is_edit and not username:
+            errors.append(self.translator.text("users.validation.username_required"))
+        if not full_name:
+            errors.append(self.translator.text("users.validation.full_name_required"))
+        if not is_edit and not password:
+            errors.append(self.translator.text("users.validation.password_required"))
+        if password and len(password) < 6:
+            errors.append(self.translator.text("users.validation.password_short"))
+        if errors:
+            self.user_form_error_label.setText("\n".join(errors))
+            self.user_form_error_label.show()
+            return
+        self.user_form_error_label.hide()
+
+        role_name = str(self.user_form_role_combo.currentData() or "Cashier")
+        if is_edit:
+            payload: dict[str, object] = {
+                "full_name": full_name,
+                "role_name": role_name,
+                "is_active": self.user_form_active_check.isChecked(),
+            }
+            if password:
+                payload["password"] = password
+
+            def action() -> None:
+                updated = self.api_client.update_user(int(row["id"]), payload)
+                self._refresh_users_data()
+                detail = self._find_user_by_id(row.get("id")) or dict(updated)
+                self._show_user_details_dialog(detail)
+
+            self._run_api(action)
+            return
+
+        payload = {
+            "username": username,
+            "full_name": full_name,
+            "password": password,
+            "role_name": role_name,
+            "is_active": self.user_form_active_check.isChecked(),
+        }
+
+        def action() -> None:
+            created = self.api_client.create_user(payload)
+            self._refresh_users_data()
+            detail = self._find_user_by_id(created.get("id")) if isinstance(created, dict) else None
+            self._show_user_details_dialog(detail or dict(created))
+
+        self._run_api(action)
+
+    def _find_user_by_id(self, user_id: object) -> dict[str, object] | None:
+        """Find one loaded user row by ID."""
+
+        for row in self.users_rows:
+            if str(row.get("id")) == str(user_id):
+                return row
+        return None
+
+    def refresh_users(self) -> None:
+        """Refresh Users data and keep the full-page workflow state."""
+
+        self._run_api(self._refresh_users_data)
+
+    def _refresh_users_data(self) -> None:
+        """Load Users rows and refresh list widgets without opening dialogs."""
+
+        users = self.api_client.get_users()
+        self.users_rows = [dict(user) for user in users]
+        total_count = len(self.users_rows)
+        active_count = sum(1 for user in self.users_rows if user.get("is_active"))
+        inactive_count = total_count - active_count
+        if hasattr(self, "stat_total_val"):
+            self.stat_total_val.setText(str(total_count))
+        if hasattr(self, "stat_active_val"):
+            self.stat_active_val.setText(str(active_count))
+        if hasattr(self, "stat_inactive_val"):
+            self.stat_inactive_val.setText(str(inactive_count))
+        self._populate_users_role_filter()
+        self._apply_users_filters()
+
+    def deactivate_user_action(self, row: dict[str, object]) -> None:
+        """Activate or deactivate a user and preserve the relevant Users state."""
+
+        target_active = not bool(row.get("is_active"))
+        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
+        if not self._confirm_record_action(row, label):
+            return
+        user_id = row.get("id")
+        current_widget = self.users_stack.currentWidget() if hasattr(self, "users_stack") else None
+
+        def action() -> None:
+            if target_active:
+                updated = self.api_client.update_user(int(row["id"]), {"is_active": True})
+            else:
+                updated = self.api_client.deactivate_user(int(row["id"]))
+            self._refresh_users_data()
+            refreshed = self._find_user_by_id(user_id) or {**row, **dict(updated), "is_active": target_active}
+            if current_widget in (getattr(self, "users_detail_page", None), getattr(self, "users_edit_page", None)):
+                self._show_user_details_dialog(refreshed)
+
+        self._run_api(action)
+
+    def _configure_users_table_columns(self) -> None:
+        """Apply practical resize policies for the Users table."""
+
+        if not hasattr(self, "users_table") or self.users_table.columnCount() < 6:
+            return
+        header = self.users_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+
+    def _set_users_table_headers(self) -> None:
+        """Apply translated column headers to the users table."""
+
+        if not hasattr(self, "users_table"):
+            return
+        headers = [self.translator.text(key) for key in USER_TABLE_HEADER_KEYS]
+        headers.append(self.translator.text("users.table.actions"))
+        self.users_table.setColumnCount(len(headers))
+        self.users_table.setHorizontalHeaderLabels(headers)
+        self._configure_users_table_columns()
+
+    def _update_users_responsive_layout(self) -> None:
+        """Reflow Users controls and KPI cards for the current window width."""
+
+        if not hasattr(self, "users_toolbar_grid"):
+            return
+        compact = self.width() < 1180
+        for widget in (self.users_header_title_box, self.users_header_actions_box, self.users_filter_box):
+            self.users_toolbar_grid.removeWidget(widget)
+        if compact:
+            self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0, 1, 2)
+            self.users_toolbar_grid.addWidget(self.users_header_actions_box, 1, 0, 1, 2)
+            self.users_toolbar_grid.addWidget(self.users_filter_box, 2, 0, 1, 2)
+        else:
+            self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0)
+            self.users_toolbar_grid.addWidget(self.users_header_actions_box, 0, 1)
+            self.users_toolbar_grid.addWidget(self.users_filter_box, 1, 0, 1, 2)
+        columns = 1 if self.width() < 1120 else 3
+        if columns != self.users_stat_columns:
+            self.users_stat_columns = columns
+            for card in self.users_stat_cards:
+                self.users_stats_grid.removeWidget(card)
+            for index, card in enumerate(self.users_stat_cards):
+                self.users_stats_grid.addWidget(card, index // columns, index % columns)
 
     def _apply_permissions(self) -> None:
         """Hide unavailable pages and disable actions blocked by role permissions."""
@@ -5440,3 +6325,4 @@ class MainWindow(QWidget):
         super().resizeEvent(event)
         # Auto-hide the navigation sidebar if the window width is below 1100 pixels
         self.nav.setHidden(self.width() < 1100)
+        self._update_users_responsive_layout()
