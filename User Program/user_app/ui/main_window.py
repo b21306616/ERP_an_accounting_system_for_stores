@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 import json
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QResizeEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -58,6 +58,11 @@ from user_app.core.i18n import (
 from user_app.hardware.simulator import HardwareSimulator
 from user_app.ui.selectors import ReferenceSelectorDialog
 
+ApiRow = dict[str, object]
+TableColumn = tuple[str | Callable[[ApiRow], object], str]
+Metric = tuple[str, object]
+SelectorColumn = tuple[str, str]
+
 
 class MainWindow(QWidget):
     """Role-aware main shell for the endpoint client."""
@@ -70,7 +75,7 @@ class MainWindow(QWidget):
         self.api_client = api_client
         self.translator = translator
         self.hardware = HardwareSimulator()
-        self.cashier_cart: list[dict[str, object]] = []
+        self.cashier_cart: list[ApiRow] = []
         self.setObjectName("MainWindow")
         self.setMinimumSize(980, 620)
         self.nav = QListWidget()
@@ -454,7 +459,9 @@ class MainWindow(QWidget):
         """Connect shell actions."""
 
         self.logout_button.clicked.connect(self.logout_requested.emit)
-        self.language_combo.currentIndexChanged.connect(lambda: self.language_changed.emit(str(self.language_combo.currentData())))
+        self.language_combo.currentIndexChanged.connect(
+            lambda: self.language_changed.emit(str(self.language_combo.currentData()))
+        )
         self.nav.currentRowChanged.connect(self._on_page_changed)
 
     def _add_page(self, page_id: str, page: QWidget) -> None:
@@ -480,7 +487,9 @@ class MainWindow(QWidget):
         layout.addWidget(title)
         return page, layout, title
 
-    def _make_card(self, title: str | None = None, *, title_key: str | None = None) -> tuple[QFrame, QVBoxLayout]:
+    def _make_card(
+        self, title: str | None = None, *, title_key: str | None = None
+    ) -> tuple[QFrame, QVBoxLayout]:
         """Create one reusable content card."""
 
         card = QFrame()
@@ -526,6 +535,8 @@ class MainWindow(QWidget):
 
         while layout.count():
             item = layout.takeAt(0)
+            if item is None:
+                continue
             widget = item.widget()
             if widget is not None:
                 widget.setParent(None)
@@ -543,11 +554,17 @@ class MainWindow(QWidget):
         table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(34)
-        table.horizontalHeader().setStretchLastSection(True)
-        table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        vertical_header = table.verticalHeader()
+        if vertical_header is not None:
+            vertical_header.setVisible(False)
+            vertical_header.setDefaultSectionSize(34)
+        horizontal_header = table.horizontalHeader()
+        if horizontal_header is not None:
+            horizontal_header.setStretchLastSection(True)
+            horizontal_header.setDefaultAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            horizontal_header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
 
     def _table_item(self, value: object) -> QTableWidgetItem:
         """Return a non-editable table item with formatted text."""
@@ -559,8 +576,8 @@ class MainWindow(QWidget):
     def _populate_table(
         self,
         table: QTableWidget,
-        rows: list[dict[str, object]],
-        columns: list[tuple[str | Callable[[dict[str, object]], object], str]],
+        rows: Sequence[ApiRow],
+        columns: Sequence[TableColumn],
     ) -> None:
         """Render a list of API dictionaries into a table."""
 
@@ -577,7 +594,9 @@ class MainWindow(QWidget):
         table.resizeColumnsToContents()
         table.setSortingEnabled(True)
 
-    def _api_list(self, method_name: str, *args: object, **kwargs: object) -> list[dict[str, object]]:
+    def _api_list(
+        self, method_name: str, *args: object, **kwargs: object
+    ) -> list[ApiRow]:
         """Return an API list when the staged client/server method exists."""
 
         method = getattr(self.api_client, method_name, None)
@@ -586,7 +605,7 @@ class MainWindow(QWidget):
         rows = method(*args, **kwargs)
         return rows if isinstance(rows, list) else []
 
-    def _selected_table_row(self, table: QTableWidget) -> dict[str, object] | None:
+    def _selected_table_row(self, table: QTableWidget) -> ApiRow | None:
         """Return the API row attached to the selected table row."""
 
         selected = table.selectedItems()
@@ -595,10 +614,19 @@ class MainWindow(QWidget):
         row_data = selected[0].data(Qt.ItemDataRole.UserRole)
         return row_data if isinstance(row_data, dict) else None
 
-    def _record_name(self, row: dict[str, object]) -> str:
+    def _record_name(self, row: ApiRow) -> str:
         """Return a compact human name for a row."""
 
-        for key in ("name", "name_ru", "username", "full_name", "doc_number", "code", "sku", "number"):
+        for key in (
+            "name",
+            "name_ru",
+            "username",
+            "full_name",
+            "doc_number",
+            "code",
+            "sku",
+            "number",
+        ):
             value = row.get(key)
             if value not in (None, ""):
                 return str(value)
@@ -608,12 +636,12 @@ class MainWindow(QWidget):
         self,
         table: QTableWidget,
         *,
-        view: Callable[[dict[str, object]], None],
-        edit: Callable[[dict[str, object]], None] | None = None,
-        lifecycle: Callable[[dict[str, object]], None] | None = None,
-        lifecycle_label: Callable[[dict[str, object]], str] | None = None,
-        edit_enabled: Callable[[dict[str, object]], bool] | None = None,
-        lifecycle_enabled: Callable[[dict[str, object]], bool] | None = None,
+        view: Callable[[ApiRow], None],
+        edit: Callable[[ApiRow], None] | None = None,
+        lifecycle: Callable[[ApiRow], None] | None = None,
+        lifecycle_label: Callable[[ApiRow], str] | None = None,
+        edit_enabled: Callable[[ApiRow], bool] | None = None,
+        lifecycle_enabled: Callable[[ApiRow], bool] | None = None,
     ) -> None:
         """Attach a localized right-click menu and double-click view action."""
 
@@ -630,19 +658,23 @@ class MainWindow(QWidget):
                 lifecycle_enabled=lifecycle_enabled,
             )
         )
-        table.itemDoubleClicked.connect(lambda _item, current_table=table: self._view_selected_record(current_table, view))
+        table.itemDoubleClicked.connect(
+            lambda _item, current_table=table: self._view_selected_record(
+                current_table, view
+            )
+        )
 
     def _show_record_context_menu(
         self,
         table: QTableWidget,
-        position: object,
+        position: QPoint,
         *,
-        view: Callable[[dict[str, object]], None],
-        edit: Callable[[dict[str, object]], None] | None,
-        lifecycle: Callable[[dict[str, object]], None] | None,
-        lifecycle_label: Callable[[dict[str, object]], str] | None,
-        edit_enabled: Callable[[dict[str, object]], bool] | None,
-        lifecycle_enabled: Callable[[dict[str, object]], bool] | None,
+        view: Callable[[ApiRow], None],
+        edit: Callable[[ApiRow], None] | None,
+        lifecycle: Callable[[ApiRow], None] | None,
+        lifecycle_label: Callable[[ApiRow], str] | None,
+        edit_enabled: Callable[[ApiRow], bool] | None,
+        lifecycle_enabled: Callable[[ApiRow], bool] | None,
     ) -> None:
         """Show the context menu for one record table."""
 
@@ -654,10 +686,18 @@ class MainWindow(QWidget):
             return
         menu = QMenu(table)
         view_action = menu.addAction(self.translator.text("crud.view"))
-        edit_action = menu.addAction(self.translator.text("crud.edit")) if edit is not None else None
+        edit_action = (
+            menu.addAction(self.translator.text("crud.edit"))
+            if edit is not None
+            else None
+        )
         lifecycle_action = None
         if lifecycle is not None:
-            label = lifecycle_label(row) if lifecycle_label else self.translator.text("crud.deactivate")
+            label = (
+                lifecycle_label(row)
+                if lifecycle_label
+                else self.translator.text("crud.deactivate")
+            )
             lifecycle_action = menu.addAction(label)
         if edit_action is not None:
             can_edit = edit_enabled(row) if edit_enabled else True
@@ -666,16 +706,27 @@ class MainWindow(QWidget):
                 edit_action.setToolTip(self.translator.text("crud.edit_disabled"))
                 edit_action.setStatusTip(self.translator.text("crud.edit_disabled"))
         if lifecycle_action is not None:
-            lifecycle_action.setEnabled(lifecycle_enabled(row) if lifecycle_enabled else True)
-        chosen = menu.exec(table.viewport().mapToGlobal(position))
+            lifecycle_action.setEnabled(
+                lifecycle_enabled(row) if lifecycle_enabled else True
+            )
+        viewport = table.viewport()
+        if viewport is None:
+            return
+        chosen = menu.exec(viewport.mapToGlobal(position))
         if chosen == view_action:
             view(row)
-        elif edit_action is not None and chosen == edit_action:
+        elif edit_action is not None and chosen == edit_action and edit is not None:
             edit(row)
-        elif lifecycle_action is not None and chosen == lifecycle_action:
+        elif (
+            lifecycle_action is not None
+            and chosen == lifecycle_action
+            and lifecycle is not None
+        ):
             lifecycle(row)
 
-    def _view_selected_record(self, table: QTableWidget, view: Callable[[dict[str, object]], None]) -> None:
+    def _view_selected_record(
+        self, table: QTableWidget, view: Callable[[ApiRow], None]
+    ) -> None:
         """Open the selected row in the detail dialog."""
 
         row = self._selected_table_row(table)
@@ -700,27 +751,44 @@ class MainWindow(QWidget):
         ]
         table = QTableWidget(0, 2)
         self._configure_table(table)
-        self._populate_table(table, scalar_rows, [("field", self._ui("field")), ("value", self._ui("value"))])
+        self._populate_table(
+            table,
+            scalar_rows,
+            [("field", self._ui("field")), ("value", self._ui("value"))],
+        )
         layout.addWidget(table, 1)
 
         for key, value in row.items():
-            if isinstance(value, list) and all(isinstance(item, dict) for item in value):
+            if isinstance(value, list) and all(
+                isinstance(item, dict) for item in value
+            ):
                 label = QLabel(self._humanize_key(key))
                 label.setObjectName("SectionTitle")
                 layout.addWidget(label)
                 nested_rows = [dict(item) for item in value]
                 nested = QTableWidget(0, 1)
                 self._configure_table(nested)
-                self._populate_table(nested, nested_rows, self._columns_from_rows(nested_rows) or [("id", "ID")])
+                self._populate_table(
+                    nested,
+                    nested_rows,
+                    self._columns_from_rows(nested_rows) or [("id", "ID")],
+                )
                 layout.addWidget(nested, 1)
             elif isinstance(value, dict):
                 label = QLabel(self._humanize_key(key))
                 label.setObjectName("SectionTitle")
                 layout.addWidget(label)
-                nested_rows = [{"field": self._humanize_key(str(child_key)), "value": child_value} for child_key, child_value in value.items()]
+                nested_rows = [
+                    {"field": self._humanize_key(str(child_key)), "value": child_value}
+                    for child_key, child_value in value.items()
+                ]
                 nested = QTableWidget(0, 2)
                 self._configure_table(nested)
-                self._populate_table(nested, nested_rows, [("field", self._ui("field")), ("value", self._ui("value"))])
+                self._populate_table(
+                    nested,
+                    nested_rows,
+                    [("field", self._ui("field")), ("value", self._ui("value"))],
+                )
                 layout.addWidget(nested, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
@@ -747,7 +815,10 @@ class MainWindow(QWidget):
             field.setPlaceholderText(label)
             widgets[key] = (field, value)
             form.addRow(label, field)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -764,7 +835,11 @@ class MainWindow(QWidget):
     def _parse_record_field(self, text: str, original: object, key: str) -> object:
         """Parse one string from a CRUD form into a practical API value."""
 
-        if isinstance(original, bool) or key.startswith("is_") or key in {"active", "is_shared"}:
+        if (
+            isinstance(original, bool)
+            or key.startswith("is_")
+            or key in {"active", "is_shared"}
+        ):
             return text.casefold() in {"1", "true", "yes", "y", "on", "да", "hawa"}
         if key.endswith("_id") or key in {"role_flags", "sort_order"}:
             return int(text) if text else None
@@ -772,14 +847,18 @@ class MainWindow(QWidget):
             return text or None
         return text
 
-    def _confirm_record_action(self, row: dict[str, object], action_label: str, *, hard_delete: bool = False) -> bool:
+    def _confirm_record_action(
+        self, row: dict[str, object], action_label: str, *, hard_delete: bool = False
+    ) -> bool:
         """Ask the user to confirm a lifecycle or delete action."""
 
         name = self._record_name(row)
         if hard_delete:
             message = self.translator.text("crud.confirm_delete").format(name=name)
         else:
-            message = self.translator.text("crud.confirm_action").format(action=action_label.lower(), name=name)
+            message = self.translator.text("crud.confirm_action").format(
+                action=action_label.lower(), name=name
+            )
         result = QMessageBox.question(
             self,
             action_label,
@@ -792,7 +871,9 @@ class MainWindow(QWidget):
     def _active_lifecycle_label(self, row: dict[str, object]) -> str:
         """Return Activate or Deactivate for rows with is_active."""
 
-        return self.translator.text("crud.deactivate" if row.get("is_active") else "crud.activate")
+        return self.translator.text(
+            "crud.deactivate" if row.get("is_active") else "crud.activate"
+        )
 
     def _format_value(self, value: object) -> str:
         """Format API values for human-facing widgets."""
@@ -828,12 +909,14 @@ class MainWindow(QWidget):
         except Exception:
             return Decimal("0")
 
-    def _sum_rows(self, rows: list[dict[str, object]], key: str) -> Decimal:
+    def _sum_rows(self, rows: Sequence[ApiRow], key: str) -> Decimal:
         """Sum one numeric field from API rows."""
 
         return sum((self._safe_decimal(row.get(key)) for row in rows), Decimal("0"))
 
-    def _render_metric_cards(self, layout: QHBoxLayout, metrics: list[tuple[str, object]]) -> None:
+    def _render_metric_cards(
+        self, layout: QHBoxLayout, metrics: Sequence[Metric]
+    ) -> None:
         """Render metric cards into an existing horizontal layout."""
 
         self._clear_layout(layout)
@@ -879,9 +962,9 @@ class MainWindow(QWidget):
     def _select_reference(
         self,
         title: str,
-        rows_provider: Callable[[], list[dict[str, object]]],
+        rows_provider: Callable[[], list[ApiRow]],
         target: QLineEdit,
-        columns: list[tuple[str, str]],
+        columns: Sequence[SelectorColumn],
         *,
         display_target: QLineEdit | None = None,
         display_fields: tuple[str, ...] = (),
@@ -896,7 +979,13 @@ class MainWindow(QWidget):
         except ApiClientError as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
             return
-        dialog = ReferenceSelectorDialog(title, rows, columns, search_placeholder=self.translator.text("common.search"), parent=self)
+        dialog = ReferenceSelectorDialog(
+            title,
+            rows,
+            list(columns),
+            search_placeholder=self.translator.text("common.search"),
+            parent=self,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         selected = dialog.selected_row()
@@ -904,19 +993,37 @@ class MainWindow(QWidget):
             return
         target.setText(str(selected.get(id_field, "") or ""))
         if display_target is not None and display_fields:
-            values = [str(selected.get(field, "") or "") for field in display_fields if selected.get(field) not in (None, "")]
+            values = [
+                str(selected.get(field, "") or "")
+                for field in display_fields
+                if selected.get(field) not in (None, "")
+            ]
             display_target.setText(" - ".join(values))
-        if price_target is not None and price_field is not None and selected.get(price_field) is not None:
+        if (
+            price_target is not None
+            and price_field is not None
+            and selected.get(price_field) is not None
+        ):
             price_target.setText(str(selected.get(price_field)))
 
-    def _select_product_id(self, target: QLineEdit, name_target: QLineEdit | None = None, price_target: QLineEdit | None = None) -> None:
+    def _select_product_id(
+        self,
+        target: QLineEdit,
+        name_target: QLineEdit | None = None,
+        price_target: QLineEdit | None = None,
+    ) -> None:
         """Select a product and copy its id to a line edit."""
 
         self._select_reference(
             self.translator.text("catalog.title"),
             lambda: self.api_client.get_products(),
             target,
-            [("id", "ID"), ("sku", self._ui("sku")), ("name", self._ui("name")), ("retail_price", self._ui("price"))],
+            [
+                ("id", "ID"),
+                ("sku", self._ui("sku")),
+                ("name", self._ui("name")),
+                ("retail_price", self._ui("price")),
+            ],
             display_target=name_target,
             display_fields=("sku", "name"),
             price_target=price_target,
@@ -924,109 +1031,236 @@ class MainWindow(QWidget):
         )
 
     def _select_warehouse_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("warehouse.title"), lambda: self.api_client.get_warehouses(), target, [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))])
+        self._select_reference(
+            self.translator.text("warehouse.title"),
+            lambda: self.api_client.get_warehouses(),
+            target,
+            [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))],
+        )
 
     def _select_counterparty_id(self, target: QLineEdit) -> None:
         self._select_reference(
             self.translator.text("counterparties.title"),
             lambda: self.api_client.get_counterparties(include_debt=True),
             target,
-            [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name")), ("counterparty_type", self._ui("type")), ("debt_balance_tmt", self._ui("debt"))],
+            [
+                ("id", "ID"),
+                ("code", self._ui("code")),
+                ("name", self._ui("name")),
+                ("counterparty_type", self._ui("type")),
+                ("debt_balance_tmt", self._ui("debt")),
+            ],
         )
 
     def _select_currency_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("pricing.form.currency_id"), lambda: self.api_client.get_currencies(), target, [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))])
+        self._select_reference(
+            self.translator.text("pricing.form.currency_id"),
+            lambda: self.api_client.get_currencies(),
+            target,
+            [("id", "ID"), ("code", self._ui("code")), ("name", self._ui("name"))],
+        )
 
     def _select_price_list_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("pricing.create_price_list"), lambda: self.api_client.get_price_lists(), target, [("id", "ID"), ("name_ru", self._ui("name")), ("currency_code", self._ui("currency")), ("is_default", self._ui("default"))])
+        self._select_reference(
+            self.translator.text("pricing.create_price_list"),
+            lambda: self.api_client.get_price_lists(),
+            target,
+            [
+                ("id", "ID"),
+                ("name_ru", self._ui("name")),
+                ("currency_code", self._ui("currency")),
+                ("is_default", self._ui("default")),
+            ],
+        )
 
     def _select_cash_register_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("cashier.create_register"), lambda: self.api_client.get_cash_registers(), target, [("id", "ID"), ("name", self._ui("name")), ("warehouse_id", self._ui("warehouse")), ("is_active", self._ui("active"))])
+        self._select_reference(
+            self.translator.text("cashier.create_register"),
+            lambda: self.api_client.get_cash_registers(),
+            target,
+            [
+                ("id", "ID"),
+                ("name", self._ui("name")),
+                ("warehouse_id", self._ui("warehouse")),
+                ("is_active", self._ui("active")),
+            ],
+        )
 
     def _select_cash_shift_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("cashier.form.shift_id"), lambda: self.api_client.get_cash_shifts(), target, [("id", "ID"), ("cash_register_name", self._ui("register")), ("opened_at", self._ui("opened")), ("status", self._ui("status"))])
+        self._select_reference(
+            self.translator.text("cashier.form.shift_id"),
+            lambda: self.api_client.get_cash_shifts(),
+            target,
+            [
+                ("id", "ID"),
+                ("cash_register_name", self._ui("register")),
+                ("opened_at", self._ui("opened")),
+                ("status", self._ui("status")),
+            ],
+        )
 
     def _select_purchase_invoice_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("purchase.create_invoice"), lambda: self.api_client.get_purchase_invoices(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("supplier")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
+        self._select_reference(
+            self.translator.text("purchase.create_invoice"),
+            lambda: self.api_client.get_purchase_invoices(),
+            target,
+            [
+                ("id", "ID"),
+                ("doc_number", self._ui("number")),
+                ("counterparty_name", self._ui("supplier")),
+                ("total_amount_tmt", self._ui("total")),
+                ("status", self._ui("status")),
+            ],
+        )
 
     def _select_purchase_order_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("purchase.create_order"), lambda: self.api_client.get_purchase_orders(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("supplier")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
+        self._select_reference(
+            self.translator.text("purchase.create_order"),
+            lambda: self.api_client.get_purchase_orders(),
+            target,
+            [
+                ("id", "ID"),
+                ("doc_number", self._ui("number")),
+                ("counterparty_name", self._ui("supplier")),
+                ("total_amount_tmt", self._ui("total")),
+                ("status", self._ui("status")),
+            ],
+        )
 
-    def _select_purchase_order_line_id(self, target: QLineEdit, order_id: QLineEdit) -> None:
+    def _select_purchase_order_line_id(
+        self, target: QLineEdit, order_id: QLineEdit
+    ) -> None:
         """Select a line from the selected purchase order."""
 
         order_text = order_id.text().strip()
         if not order_text:
-            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("purchase.form.order_id"))
+            QMessageBox.warning(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("purchase.form.order_id"),
+            )
             return
         try:
-            order = next((row for row in self.api_client.get_purchase_orders() if int(row.get("id", 0)) == int(order_text)), None)
+            order = next(
+                (
+                    row
+                    for row in self.api_client.get_purchase_orders()
+                    if int(row.get("id", 0)) == int(order_text)
+                ),
+                None,
+            )
         except (ApiClientError, ValueError) as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
             return
         if not order:
-            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("purchase.form.order_id"))
+            QMessageBox.warning(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("purchase.form.order_id"),
+            )
             return
         lines = list(order.get("lines", []))
         self._select_reference(
             self.translator.text("purchase.form.order_line_id"),
             lambda: lines,
             target,
-            [("id", "ID"), ("product_name", self._ui("product")), ("quantity_ordered", self._ui("quantity_short")), ("amount_tmt", self._ui("amount"))],
+            [
+                ("id", "ID"),
+                ("product_name", self._ui("product")),
+                ("quantity_ordered", self._ui("quantity_short")),
+                ("amount_tmt", self._ui("amount")),
+            ],
         )
 
     def _select_sale_id(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("sales.create_sale"), lambda: self.api_client.get_sales(), target, [("id", "ID"), ("doc_number", self._ui("number")), ("counterparty_name", self._ui("customer")), ("total_amount_tmt", self._ui("total")), ("status", self._ui("status"))])
+        self._select_reference(
+            self.translator.text("sales.create_sale"),
+            lambda: self.api_client.get_sales(),
+            target,
+            [
+                ("id", "ID"),
+                ("doc_number", self._ui("number")),
+                ("counterparty_name", self._ui("customer")),
+                ("total_amount_tmt", self._ui("total")),
+                ("status", self._ui("status")),
+            ],
+        )
 
     def _select_sale_line_id(self, target: QLineEdit, sale_id: QLineEdit) -> None:
         """Select a line from the selected sale document."""
 
         sale_text = sale_id.text().strip()
         if not sale_text:
-            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_id"))
+            QMessageBox.warning(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("sales.form.sale_id"),
+            )
             return
         try:
-            sale = next((row for row in self.api_client.get_sales() if int(row.get("id", 0)) == int(sale_text)), None)
+            sale = next(
+                (
+                    row
+                    for row in self.api_client.get_sales()
+                    if int(row.get("id", 0)) == int(sale_text)
+                ),
+                None,
+            )
         except (ApiClientError, ValueError) as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
             return
         if not sale:
-            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_id"))
+            QMessageBox.warning(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("sales.form.sale_id"),
+            )
             return
         lines = list(sale.get("lines", []))
         self._select_reference(
             self.translator.text("sales.form.sale_line_id"),
             lambda: lines,
             target,
-            [("id", "ID"), ("product_name", self._ui("product")), ("quantity", self._ui("quantity_short")), ("amount_tmt", self._ui("amount"))],
+            [
+                ("id", "ID"),
+                ("product_name", self._ui("product")),
+                ("quantity", self._ui("quantity_short")),
+                ("amount_tmt", self._ui("amount")),
+            ],
         )
 
     def _select_role_name(self, target: QLineEdit) -> None:
-        self._select_reference(self.translator.text("roles.title"), lambda: self.api_client.get_roles(), target, [("name", self._ui("role")), ("description", self._ui("description"))], id_field="name")
+        self._select_reference(
+            self.translator.text("roles.title"),
+            lambda: self.api_client.get_roles(),
+            target,
+            [("name", self._ui("role")), ("description", self._ui("description"))],
+            id_field="name",
+        )
 
     def _build_dashboard_page(self) -> QWidget:
         """Build dashboard page."""
 
         page, layout, _title = self._page("dashboard.title")
-        
+
         # Define self.dashboard_text as a hidden/dummy variable to prevent any attribute error
         self.dashboard_text = QPlainTextEdit()
         self.dashboard_text.setReadOnly(True)
         self.dashboard_text.hide()
-        
+
         # Responsive Scroll Area container
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setStyleSheet("background: transparent;")
-        
+
         container = QWidget()
         container.setStyleSheet("background: transparent;")
         container_layout = QVBoxLayout(container)
         container_layout.setContentsMargins(0, 0, 16, 0)
         container_layout.setSpacing(16)
-        
+
         # Header Status Banner
         self.status_banner = QFrame()
         self.status_banner.setObjectName("DashboardStatusBanner")
@@ -1043,20 +1277,22 @@ class MainWindow(QWidget):
         banner_shadow.setColor(QColor(0, 0, 0, 15))
         banner_shadow.setOffset(0, 4)
         self.status_banner.setGraphicsEffect(banner_shadow)
-        
+
         banner_layout = QHBoxLayout(self.status_banner)
         banner_layout.setContentsMargins(16, 16, 16, 16)
-        
+
         banner_text_layout = QVBoxLayout()
         self.banner_app_name = QLabel("ERP Accounting Server")
-        self.banner_app_name.setStyleSheet("font-size: 20px; font-weight: bold; color: #0f172a;")
-        
+        self.banner_app_name.setStyleSheet(
+            "font-size: 20px; font-weight: bold; color: #0f172a;"
+        )
+
         status_sub_layout = QHBoxLayout()
         status_sub_layout.setSpacing(8)
         self.banner_status_label = QLabel()
         self.banner_status_label.setProperty("titleKey", "sales.table.status")
         self.banner_status_label.setStyleSheet("font-size: 13px; color: #64748b;")
-        
+
         self.banner_status_badge = QLabel("RUNNING")
         self.banner_status_badge.setObjectName("StatusBadge")
         self.banner_status_badge.setStyleSheet("""
@@ -1072,10 +1308,10 @@ class MainWindow(QWidget):
         status_sub_layout.addWidget(self.banner_status_label)
         status_sub_layout.addWidget(self.banner_status_badge)
         status_sub_layout.addStretch(1)
-        
+
         banner_text_layout.addWidget(self.banner_app_name)
         banner_text_layout.addLayout(status_sub_layout)
-        
+
         self.dashboard_refresh_btn = QPushButton()
         self.dashboard_refresh_btn.setObjectName("DashboardRefreshBtn")
         self.dashboard_refresh_btn.setProperty("textKey", "dashboard.refresh")
@@ -1098,16 +1334,16 @@ class MainWindow(QWidget):
                 background-color: #1e3a8a;
             }
         """)
-        
+
         banner_layout.addLayout(banner_text_layout, 1)
         banner_layout.addWidget(self.dashboard_refresh_btn)
-        
+
         container_layout.addWidget(self.status_banner)
-        
+
         # Grid of cards
         grid_layout = QGridLayout()
         grid_layout.setSpacing(16)
-        
+
         def create_card(title_prop_key: str) -> tuple[QFrame, QLabel, QVBoxLayout]:
             card = QFrame()
             card.setObjectName("DashboardCard")
@@ -1124,23 +1360,27 @@ class MainWindow(QWidget):
             card_shadow.setColor(QColor(0, 0, 0, 10))
             card_shadow.setOffset(0, 4)
             card.setGraphicsEffect(card_shadow)
-            
+
             card_layout = QVBoxLayout(card)
             card_layout.setContentsMargins(16, 16, 16, 16)
             card_layout.setSpacing(8)
-            
+
             card_title = QLabel()
             card_title.setProperty("titleKey", title_prop_key)
-            card_title.setStyleSheet("font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;")
+            card_title.setStyleSheet(
+                "font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;"
+            )
             card_layout.addWidget(card_title)
-            
+
             return card, card_title, card_layout
-            
+
         # Card 1: User Card
-        self.user_card, self.user_card_title, user_layout = create_card("dashboard.current_user")
+        self.user_card, self.user_card_title, user_layout = create_card(
+            "dashboard.current_user"
+        )
         user_info_layout = QHBoxLayout()
         user_info_layout.setSpacing(12)
-        
+
         self.user_avatar = QLabel("U")
         self.user_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.user_avatar.setStyleSheet("""
@@ -1154,76 +1394,86 @@ class MainWindow(QWidget):
             min-height: 40px;
             max-height: 40px;
         """)
-        
+
         user_text_layout = QVBoxLayout()
         self.user_name_val = QLabel("Unknown User")
-        self.user_name_val.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        self.user_name_val.setStyleSheet(
+            "font-size: 16px; font-weight: bold; color: #0f172a;"
+        )
         self.user_id_val = QLabel("ID: -")
         self.user_id_val.setStyleSheet("font-size: 12px; color: #64748b;")
-        
+
         user_text_layout.addWidget(self.user_name_val)
         user_text_layout.addWidget(self.user_id_val)
-        
+
         user_info_layout.addWidget(self.user_avatar)
         user_info_layout.addLayout(user_text_layout, 1)
         user_layout.addLayout(user_info_layout)
         user_layout.addStretch(1)
-        
+
         # Card 2: Server Time Card
-        self.time_card, self.time_card_title, time_layout = create_card("dashboard.server_time")
+        self.time_card, self.time_card_title, time_layout = create_card(
+            "dashboard.server_time"
+        )
         time_info_layout = QHBoxLayout()
         time_info_layout.setSpacing(12)
-        
+
         self.time_icon = QLabel("🕒")
         self.time_icon.setStyleSheet("font-size: 24px;")
-        
+
         time_text_layout = QVBoxLayout()
         self.time_val = QLabel("--:--:--")
-        self.time_val.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a;")
+        self.time_val.setStyleSheet(
+            "font-size: 18px; font-weight: bold; color: #0f172a;"
+        )
         self.date_val = QLabel("----- -- --")
         self.date_val.setStyleSheet("font-size: 12px; color: #64748b;")
-        
+
         time_text_layout.addWidget(self.time_val)
         time_text_layout.addWidget(self.date_val)
-        
+
         time_info_layout.addWidget(self.time_icon)
         time_info_layout.addLayout(time_text_layout, 1)
         time_layout.addLayout(time_info_layout)
         time_layout.addStretch(1)
-        
+
         # Card 3: Permissions Card
-        self.perm_card, self.perm_card_title, perm_layout = create_card("dashboard.permissions")
+        self.perm_card, self.perm_card_title, perm_layout = create_card(
+            "dashboard.permissions"
+        )
         perm_info_layout = QHBoxLayout()
         perm_info_layout.setSpacing(12)
-        
+
         self.perm_icon = QLabel("🔑")
         self.perm_icon.setStyleSheet("font-size: 24px;")
-        
+
         perm_text_layout = QVBoxLayout()
         self.perm_val = QLabel("Authorized")
-        self.perm_val.setStyleSheet("font-size: 16px; font-weight: bold; color: #0f172a;")
+        self.perm_val.setStyleSheet(
+            "font-size: 16px; font-weight: bold; color: #0f172a;"
+        )
         self.perm_desc = QLabel("Verified Session")
         self.perm_desc.setStyleSheet("font-size: 12px; color: #64748b;")
-        
+
         perm_text_layout.addWidget(self.perm_val)
         perm_text_layout.addWidget(self.perm_desc)
-        
+
         perm_info_layout.addWidget(self.perm_icon)
         perm_info_layout.addLayout(perm_text_layout, 1)
         perm_layout.addLayout(perm_info_layout)
         perm_layout.addStretch(1)
-        
+
         grid_layout.addWidget(self.user_card, 0, 0)
         grid_layout.addWidget(self.time_card, 0, 1)
         grid_layout.addWidget(self.perm_card, 0, 2)
-        
+
         container_layout.addLayout(grid_layout)
-        
+
         # Dynamic responsive layout adjustments for grid spacing on resizing
         grid_layout.setColumnStretch(0, 1)
         grid_layout.setColumnStretch(1, 1)
         grid_layout.setColumnStretch(2, 1)
-        
+
         # Informational Banner
         self.tip_frame = QFrame()
         self.tip_frame.setObjectName("TipFrame")
@@ -1238,403 +1488,22 @@ class MainWindow(QWidget):
         tip_layout = QVBoxLayout(self.tip_frame)
         self.tip_title = QLabel()
         self.tip_title.setProperty("titleKey", "dashboard.tip_title")
-        self.tip_title.setStyleSheet("font-weight: bold; color: #1e40af; font-size: 13px;")
+        self.tip_title.setStyleSheet(
+            "font-weight: bold; color: #1e40af; font-size: 13px;"
+        )
         self.tip_desc = QLabel()
         self.tip_desc.setProperty("titleKey", "dashboard.tip_desc")
         self.tip_desc.setWordWrap(True)
         self.tip_desc.setStyleSheet("color: #1e3a8a; font-size: 12px;")
         tip_layout.addWidget(self.tip_title)
         tip_layout.addWidget(self.tip_desc)
-        
+
         container_layout.addWidget(self.tip_frame)
         container_layout.addStretch(1)
-        
+
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
-
-    def _legacy_build_users_page(self) -> QWidget:
-        """Build users page with a modernized visual design and dynamic stats."""
-
-        page, layout, _title = self._page("users.title")
-        
-        # Hide the default title added by self._page to avoid duplicates and look more modern
-        _title.hide()
-
-        # Top banner with Title and Action buttons
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        
-        users_title_lbl = QLabel(self.translator.text("users.title"))
-        users_title_lbl.setObjectName("PageTitle")
-        users_title_lbl.setProperty("titleKey", "users.title")
-        top_bar.addWidget(users_title_lbl)
-        
-        top_bar.addStretch(1)
-        
-        # Real-time search/filter input
-        self.users_search = QLineEdit()
-        self.users_search.setProperty("placeholderKey", "common.search")
-        self.users_search.setPlaceholderText(self.translator.text("common.search"))
-        self.users_search.setClearButtonEnabled(True)
-        self.users_search.setFixedWidth(240)
-        self.users_search.textChanged.connect(self._filter_users_table)
-        top_bar.addWidget(self.users_search)
-        
-        refresh = QPushButton()
-        refresh.setProperty("textKey", "users.refresh")
-        refresh.setText(self.translator.text("users.refresh"))
-        refresh.clicked.connect(self.refresh_users)
-        refresh.setCursor(Qt.CursorShape.PointingHandCursor)
-        refresh.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                color: #475569;
-                font-weight: bold;
-                padding: 8px 14px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        top_bar.addWidget(refresh)
-        
-        create = QPushButton()
-        create.setProperty("textKey", "users.create")
-        create.setText(self.translator.text("users.create"))
-        create.clicked.connect(self.create_user_dialog)
-        create.setObjectName("PrimaryButton")
-        create.setCursor(Qt.CursorShape.PointingHandCursor)
-        create.setStyleSheet("""
-            QPushButton#PrimaryButton {
-                background-color: #2563eb;
-                border: none;
-                border-radius: 8px;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton#PrimaryButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
-        top_bar.addWidget(create)
-        
-        # Stats Cards Row
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(14)
-        
-        def make_stat_card(title_key: str, color_hex: str) -> tuple[QFrame, QLabel, QLabel]:
-            card = QFrame()
-            card.setObjectName("UsersStatCard")
-            card.setStyleSheet("""
-                QFrame#UsersStatCard {
-                    background-color: #ffffff;
-                    border: 1px solid #e2e8f0;
-                    border-radius: 12px;
-                    padding: 12px 16px;
-                }
-            """)
-            shadow = QGraphicsDropShadowEffect(card)
-            shadow.setBlurRadius(10)
-            shadow.setColor(QColor(0, 0, 0, 8))
-            shadow.setOffset(0, 3)
-            card.setGraphicsEffect(shadow)
-            
-            l = QVBoxLayout(card)
-            l.setSpacing(4)
-            
-            title = QLabel()
-            title.setProperty("titleKey", title_key)
-            title.setText(self.translator.text(title_key))
-            title.setStyleSheet("font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;")
-            
-            value = QLabel("0")
-            value.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color_hex};")
-            
-            l.addWidget(title)
-            l.addWidget(value)
-            return card, title, value
-            
-        self.stat_total_card, _, self.stat_total_val = make_stat_card("users.stats.total", "#0f172a")
-        self.stat_active_card, _, self.stat_active_val = make_stat_card("users.stats.active", "#15803d")
-        self.stat_inactive_card, _, self.stat_inactive_val = make_stat_card("users.stats.inactive", "#b91c1c")
-        
-        stats_layout.addWidget(self.stat_total_card, 1)
-        stats_layout.addWidget(self.stat_active_card, 1)
-        stats_layout.addWidget(self.stat_inactive_card, 1)
-        
-        # Users Table
-        self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
-        self._configure_table(self.users_table)
-        self._set_users_table_headers()
-        self._install_record_actions(
-            self.users_table,
-            view=self._show_user_details_dialog,
-            edit=self.edit_user_dialog,
-            lifecycle=self.deactivate_user_action,
-            lifecycle_label=self._active_lifecycle_label,
-        )
-        
-        layout.addLayout(top_bar)
-        layout.addLayout(stats_layout)
-        layout.addWidget(self.users_table, 1)
-        return page
-
-    def _legacy_filter_users_table(self, text: str) -> None:
-        """Filter the users table based on search input in real time."""
-        search_query = text.strip().lower()
-        for row in range(self.users_table.rowCount()):
-            match = False
-            for col in range(self.users_table.columnCount()):
-                item = self.users_table.item(row, col)
-                if item and search_query in item.text().lower():
-                    match = True
-                    break
-            self.users_table.setRowHidden(row, not match)
-
-    def _legacy_make_status_badge(self, active: bool, lang: str) -> QWidget:
-        """Create a styled badge representing active/inactive status."""
-        container = QWidget()
-        layout = QHBoxLayout(container)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        badge = QLabel()
-        if active:
-            text = "АКТИВЕН" if lang == "ru" else "IŞJEŇ" if lang == "tk" else "ACTIVE"
-            badge.setStyleSheet("""
-                background-color: #dcfce7;
-                color: #15803d;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-                border-radius: 6px;
-            """)
-        else:
-            text = "НЕАКТИВЕН" if lang == "ru" else "IŞJEŇ DÄL" if lang == "tk" else "INACTIVE"
-            badge.setStyleSheet("""
-                background-color: #f3f4f6;
-                color: #4b5563;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 4px 8px;
-                border-radius: 6px;
-            """)
-        badge.setText(text)
-        layout.addWidget(badge)
-        return container
-
-    def _legacy_show_user_details_dialog(self, row: dict[str, object]) -> None:
-        """Show a modern, styled user details profile dialog."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self.translator.text("users.details"))
-        dialog.setMinimumSize(450, 360)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #f8fafc;
-            }
-        """)
-        
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        main_layout.setSpacing(16)
-        
-        # Profile Header Card
-        header_card = QFrame()
-        header_card.setStyleSheet("""
-            background-color: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-        """)
-        header_shadow = QGraphicsDropShadowEffect(header_card)
-        header_shadow.setBlurRadius(8)
-        header_shadow.setColor(QColor(0, 0, 0, 8))
-        header_shadow.setOffset(0, 2)
-        header_card.setGraphicsEffect(header_shadow)
-        
-        header_layout = QHBoxLayout(header_card)
-        header_layout.setContentsMargins(16, 16, 16, 16)
-        header_layout.setSpacing(16)
-        
-        # Generate initials
-        full_name = str(row.get("full_name") or "")
-        username = str(row.get("username") or "")
-        initials = ""
-        if full_name:
-            parts = full_name.split()
-            if len(parts) >= 2:
-                initials = (parts[0][0] + parts[1][0]).upper()
-            elif parts:
-                initials = parts[0][0].upper()
-        if not initials and username:
-            initials = username[:2].upper()
-        if not initials:
-            initials = "U"
-            
-        avatar = QLabel(initials)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet("""
-            background-color: #eff6ff;
-            color: #2563eb;
-            font-size: 18px;
-            font-weight: bold;
-            border-radius: 25px;
-            min-width: 50px;
-            max-width: 50px;
-            min-height: 50px;
-            max-height: 50px;
-            border: 2px solid #bfdbfe;
-        """)
-        
-        text_layout = QVBoxLayout()
-        text_layout.setSpacing(4)
-        
-        name_label = QLabel(full_name or username)
-        name_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a;")
-        name_label.setWordWrap(True)
-        
-        # Role badge layout
-        role_layout = QHBoxLayout()
-        role_label = QLabel(str(row.get("role_name") or "User"))
-        role_label.setStyleSheet("""
-            background-color: #f1f5f9;
-            color: #475569;
-            font-size: 11px;
-            font-weight: bold;
-            padding: 3px 8px;
-            border-radius: 5px;
-        """)
-        role_layout.addWidget(role_label)
-        role_layout.addStretch(1)
-        
-        text_layout.addWidget(name_label)
-        text_layout.addLayout(role_layout)
-        
-        header_layout.addWidget(avatar)
-        header_layout.addLayout(text_layout, 1)
-        main_layout.addWidget(header_card)
-        
-        # Details Fields Card
-        fields_card = QFrame()
-        fields_card.setStyleSheet("""
-            background-color: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-        """)
-        fields_shadow = QGraphicsDropShadowEffect(fields_card)
-        fields_shadow.setBlurRadius(8)
-        fields_shadow.setColor(QColor(0, 0, 0, 8))
-        fields_shadow.setOffset(0, 2)
-        fields_card.setGraphicsEffect(fields_shadow)
-        
-        fields_layout = QGridLayout(fields_card)
-        fields_layout.setContentsMargins(16, 16, 16, 16)
-        fields_layout.setSpacing(12)
-        
-        def add_detail_row(grid: QGridLayout, r: int, label_text: str, val_widget: QWidget) -> None:
-            lbl = QLabel(label_text)
-            lbl.setStyleSheet("font-weight: bold; color: #64748b; font-size: 12px;")
-            grid.addWidget(lbl, r, 0)
-            grid.addWidget(val_widget, r, 1)
-            
-        # Row 0: ID
-        id_lbl = QLabel(str(row.get("id") or "-"))
-        id_lbl.setStyleSheet("color: #0f172a; font-size: 13px;")
-        add_detail_row(fields_layout, 0, "ID:", id_lbl)
-        
-        # Row 1: Username
-        uname_lbl = QLabel(username)
-        uname_lbl.setStyleSheet("color: #0f172a; font-size: 13px; font-weight: 500;")
-        add_detail_row(fields_layout, 1, self.translator.text("users.table.username") + ":", uname_lbl)
-        
-        # Row 2: Status badge
-        is_active = bool(row.get("is_active"))
-        status_widget = self._make_status_badge(is_active, self.translator.language)
-        status_widget.layout().setContentsMargins(0, 0, 0, 0)
-        status_widget.layout().setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        add_detail_row(fields_layout, 2, self.translator.text("users.table.active") + ":", status_widget)
-        
-        main_layout.addWidget(fields_card)
-        main_layout.addStretch(1)
-        
-        # Actions Layout
-        buttons_layout = QHBoxLayout()
-        
-        # Edit action directly
-        edit_btn = QPushButton(self.translator.text("crud.edit"))
-        edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        edit_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                color: #2563eb;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #f8fafc;
-                border-color: #cbd5e1;
-            }
-        """)
-        
-        def handle_edit() -> None:
-            dialog.accept()
-            self.edit_user_dialog(row)
-            
-        edit_btn.clicked.connect(handle_edit)
-        
-        # Toggle status directly
-        toggle_btn = QPushButton(self._active_lifecycle_label(row))
-        toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        toggle_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                color: #475569;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        
-        def handle_toggle() -> None:
-            dialog.accept()
-            self.deactivate_user_action(row)
-            
-        toggle_btn.clicked.connect(handle_toggle)
-        
-        close_btn = QPushButton(self.translator.text("crud.close"))
-        close_btn.setObjectName("PrimaryButton")
-        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                border: none;
-                border-radius: 8px;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
-        close_btn.clicked.connect(dialog.accept)
-        
-        buttons_layout.addWidget(edit_btn)
-        buttons_layout.addWidget(toggle_btn)
-        buttons_layout.addStretch(1)
-        buttons_layout.addWidget(close_btn)
-        
-        main_layout.addLayout(buttons_layout)
-        dialog.exec()
 
     def _build_roles_page(self) -> QWidget:
         """Build roles page."""
@@ -1652,10 +1521,14 @@ class MainWindow(QWidget):
         self.roles_table = QTableWidget(0, 3)
         self._configure_table(self.roles_table)
         self._set_roles_table_headers()
-        self.roles_table.itemSelectionChanged.connect(self._render_selected_role_permissions)
+        self.roles_table.itemSelectionChanged.connect(
+            self._render_selected_role_permissions
+        )
         self._install_record_actions(
             self.roles_table,
-            view=lambda row: self._show_record_details(self.translator.text("roles.title"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("roles.title"), row
+            ),
             edit=self.edit_role_dialog,
             lifecycle=self.delete_role_action,
             lifecycle_label=lambda _row: self.translator.text("crud.delete"),
@@ -1751,7 +1624,14 @@ class MainWindow(QWidget):
         find_barcode = QPushButton()
         find_barcode.setProperty("textKey", "catalog.find_barcode")
         find_barcode.clicked.connect(self.find_barcode_dialog)
-        for widget in (self.catalog_search, refresh, create_group, create_product, create_service, find_barcode):
+        for widget in (
+            self.catalog_search,
+            refresh,
+            create_group,
+            create_product,
+            create_service,
+            find_barcode,
+        ):
             action_row.addWidget(widget)
         action_row.addStretch(1)
 
@@ -1760,7 +1640,9 @@ class MainWindow(QWidget):
         self._set_catalog_table_headers()
         self._install_record_actions(
             self.catalog_table,
-            view=lambda row: self._show_record_details(self.translator.text("catalog.title"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("catalog.title"), row
+            ),
             edit=self.edit_product_dialog,
             lifecycle=self.toggle_product_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -1769,7 +1651,9 @@ class MainWindow(QWidget):
         self._configure_table(self.product_groups_table)
         self._install_record_actions(
             self.product_groups_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.product_groups"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.product_groups"), row
+            ),
             edit=self.edit_product_group_dialog,
             lifecycle=self.toggle_product_group_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -1778,14 +1662,18 @@ class MainWindow(QWidget):
         self._configure_table(self.services_table)
         self._install_record_actions(
             self.services_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.services"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.services"), row
+            ),
             edit=self.edit_service_dialog,
             lifecycle=self.toggle_service_active_action,
             lifecycle_label=self._active_lifecycle_label,
         )
         tabs = QTabWidget()
         tabs.addTab(self.catalog_table, self.translator.text("tabs.products"))
-        tabs.addTab(self.product_groups_table, self.translator.text("tabs.product_groups"))
+        tabs.addTab(
+            self.product_groups_table, self.translator.text("tabs.product_groups")
+        )
         tabs.addTab(self.services_table, self.translator.text("tabs.services"))
         self.catalog_tabs = tabs
         layout.addLayout(action_row)
@@ -1812,7 +1700,13 @@ class MainWindow(QWidget):
         writeoff = QPushButton()
         writeoff.setProperty("textKey", "warehouse.writeoff")
         writeoff.clicked.connect(self.writeoff_dialog)
-        for widget in (refresh, create_warehouse, opening_inventory, transfer, writeoff):
+        for widget in (
+            refresh,
+            create_warehouse,
+            opening_inventory,
+            transfer,
+            writeoff,
+        ):
             action_row.addWidget(widget)
         action_row.addStretch(1)
 
@@ -1821,13 +1715,17 @@ class MainWindow(QWidget):
         self._set_warehouse_table_headers()
         self._install_record_actions(
             self.warehouse_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.balances"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.balances"), row
+            ),
         )
         self.warehouses_table = QTableWidget(0, 5)
         self._configure_table(self.warehouses_table)
         self._install_record_actions(
             self.warehouses_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.warehouses"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.warehouses"), row
+            ),
             edit=self.edit_warehouse_dialog,
             lifecycle=self.toggle_warehouse_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -1839,13 +1737,17 @@ class MainWindow(QWidget):
         self._configure_table(self.warehouse_movements_table)
         self._install_record_actions(
             self.warehouse_movements_table,
-            view=lambda row: self._show_record_details(self.translator.text("warehouse.movements"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("warehouse.movements"), row
+            ),
         )
         self.inventories_table = QTableWidget(0, 6)
         self._configure_table(self.inventories_table)
         self._install_record_actions(
             self.inventories_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.inventories"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.inventories"), row
+            ),
             edit=self.edit_inventory_dialog,
             lifecycle=self.cancel_inventory_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -1856,7 +1758,9 @@ class MainWindow(QWidget):
         self._configure_table(self.stock_transfers_table)
         self._install_record_actions(
             self.stock_transfers_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.transfers"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.transfers"), row
+            ),
             edit=self.edit_stock_transfer_dialog,
             lifecycle=self.reject_stock_transfer_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -1867,7 +1771,9 @@ class MainWindow(QWidget):
         self._configure_table(self.stock_writeoffs_table)
         self._install_record_actions(
             self.stock_writeoffs_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.writeoffs"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.writeoffs"), row
+            ),
             edit=self.edit_stock_writeoff_dialog,
             lifecycle=self.cancel_stock_writeoff_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -1877,7 +1783,9 @@ class MainWindow(QWidget):
         tabs = QTabWidget()
         tabs.addTab(self.warehouses_table, self.translator.text("tabs.warehouses"))
         tabs.addTab(self.warehouse_table, self.translator.text("tabs.balances"))
-        tabs.addTab(self.warehouse_movements_table, self.translator.text("tabs.movements"))
+        tabs.addTab(
+            self.warehouse_movements_table, self.translator.text("tabs.movements")
+        )
         tabs.addTab(self.inventories_table, self.translator.text("tabs.inventories"))
         tabs.addTab(self.stock_transfers_table, self.translator.text("tabs.transfers"))
         tabs.addTab(self.stock_writeoffs_table, self.translator.text("tabs.writeoffs"))
@@ -1892,7 +1800,9 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("counterparties.title")
         action_row = QHBoxLayout()
         self.counterparty_search = QLineEdit()
-        self.counterparty_search.setPlaceholderText(self.translator.text("counterparties.search"))
+        self.counterparty_search.setPlaceholderText(
+            self.translator.text("counterparties.search")
+        )
         refresh = QPushButton()
         refresh.setProperty("textKey", "counterparties.refresh")
         refresh.clicked.connect(self.refresh_counterparties)
@@ -1907,7 +1817,9 @@ class MainWindow(QWidget):
         self._set_counterparties_table_headers()
         self._install_record_actions(
             self.counterparties_table,
-            view=lambda row: self._show_record_details(self.translator.text("counterparties.title"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("counterparties.title"), row
+            ),
             edit=self.edit_counterparty_dialog,
             lifecycle=self.toggle_counterparty_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -1938,7 +1850,9 @@ class MainWindow(QWidget):
         self._set_pricing_table_headers()
         self._install_record_actions(
             self.pricing_table,
-            view=lambda row: self._show_record_details(self.translator.text("pricing.title"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("pricing.title"), row
+            ),
             edit=self.edit_price_list_dialog,
             lifecycle=self.toggle_price_list_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -1947,14 +1861,20 @@ class MainWindow(QWidget):
         self._configure_table(self.price_items_table)
         self._install_record_actions(
             self.price_items_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.price_items"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.price_items"), row
+            ),
             edit=self.edit_price_item_dialog,
             lifecycle=self.delete_price_item_action,
             lifecycle_label=lambda _row: self.translator.text("crud.delete"),
         )
         pricing_tabs = QTabWidget()
-        pricing_tabs.addTab(self.pricing_table, self.translator.text("tabs.price_lists"))
-        pricing_tabs.addTab(self.price_items_table, self.translator.text("tabs.price_items"))
+        pricing_tabs.addTab(
+            self.pricing_table, self.translator.text("tabs.price_lists")
+        )
+        pricing_tabs.addTab(
+            self.price_items_table, self.translator.text("tabs.price_items")
+        )
         self.pricing_tabs = pricing_tabs
         layout.addLayout(action_row)
         layout.addWidget(pricing_tabs, 1)
@@ -1980,7 +1900,13 @@ class MainWindow(QWidget):
         create_payment = QPushButton()
         create_payment.setProperty("textKey", "purchase.create_payment")
         create_payment.clicked.connect(self.create_supplier_payment_dialog)
-        for widget in (refresh, create_order, create_invoice, create_return, create_payment):
+        for widget in (
+            refresh,
+            create_order,
+            create_invoice,
+            create_return,
+            create_payment,
+        ):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.purchase_table = QTableWidget(0, len(PURCHASE_TABLE_HEADER_KEYS))
@@ -1988,7 +1914,9 @@ class MainWindow(QWidget):
         self._set_purchase_table_headers()
         self._install_record_actions(
             self.purchase_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.invoices"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.invoices"), row
+            ),
             edit=self.edit_purchase_invoice_dialog,
             lifecycle=self.cancel_purchase_invoice_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -1999,27 +1927,39 @@ class MainWindow(QWidget):
         self._configure_table(self.purchase_orders_table)
         self._install_record_actions(
             self.purchase_orders_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.orders"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.orders"), row
+            ),
             edit=self.edit_purchase_order_dialog,
             lifecycle=self.cancel_purchase_order_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
             edit_enabled=lambda row: row.get("status") in {"draft", "sent"},
-            lifecycle_enabled=lambda row: row.get("status") not in {"cancelled", "received", "partial"},
+            lifecycle_enabled=lambda row: (
+                row.get("status") not in {"cancelled", "received", "partial"}
+            ),
         )
         self.purchase_debt_text = QPlainTextEdit()
         self.purchase_debt_text.setReadOnly(True)
         self.purchase_debt_text.hide()
-        self.purchase_debt_metrics, self.purchase_debt_metrics_layout = self._metric_area()
+        self.purchase_debt_metrics, self.purchase_debt_metrics_layout = (
+            self._metric_area()
+        )
         self.purchase_debt_table = QTableWidget(0, 8)
         self._configure_table(self.purchase_debt_table)
         self._install_record_actions(
             self.purchase_debt_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.debt"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.debt"), row
+            ),
         )
         purchase_tabs = QTabWidget()
-        purchase_tabs.addTab(self.purchase_orders_table, self.translator.text("tabs.orders"))
+        purchase_tabs.addTab(
+            self.purchase_orders_table, self.translator.text("tabs.orders")
+        )
         purchase_tabs.addTab(self.purchase_table, self.translator.text("tabs.invoices"))
-        purchase_tabs.addTab(self.purchase_debt_table, self.translator.text("tabs.debt"))
+        purchase_tabs.addTab(
+            self.purchase_debt_table, self.translator.text("tabs.debt")
+        )
         self.purchase_tabs = purchase_tabs
         layout.addLayout(action_row)
         layout.addWidget(self.purchase_debt_metrics)
@@ -2046,7 +1986,13 @@ class MainWindow(QWidget):
         cancel_sale = QPushButton()
         cancel_sale.setProperty("textKey", "sales.cancel")
         cancel_sale.clicked.connect(self.cancel_sale_dialog)
-        for widget in (refresh, create_sale, create_return, create_payment, cancel_sale):
+        for widget in (
+            refresh,
+            create_sale,
+            create_return,
+            create_payment,
+            cancel_sale,
+        ):
             action_row.addWidget(widget)
         action_row.addStretch(1)
         self.sales_table = QTableWidget(0, len(SALES_TABLE_HEADER_KEYS))
@@ -2054,7 +2000,9 @@ class MainWindow(QWidget):
         self._set_sales_table_headers()
         self._install_record_actions(
             self.sales_table,
-            view=lambda row: self._show_record_details(self.translator.text("sales.title"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("sales.title"), row
+            ),
             edit=self.edit_sale_dialog,
             lifecycle=self.cancel_sale_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -2065,7 +2013,9 @@ class MainWindow(QWidget):
         self._configure_table(self.sale_returns_table)
         self._install_record_actions(
             self.sale_returns_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.returns"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.returns"), row
+            ),
             edit=self.edit_sale_return_dialog,
             lifecycle=self.cancel_sale_return_action,
             lifecycle_label=lambda _row: self.translator.text("crud.cancel"),
@@ -2080,7 +2030,9 @@ class MainWindow(QWidget):
         self._configure_table(self.sales_debt_table)
         self._install_record_actions(
             self.sales_debt_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.debt"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.debt"), row
+            ),
         )
         sales_tabs = QTabWidget()
         sales_tabs.addTab(self.sales_table, self.translator.text("tabs.sales"))
@@ -2112,7 +2064,13 @@ class MainWindow(QWidget):
         cash_operation = QPushButton()
         cash_operation.setProperty("textKey", "cashier.cash_operation")
         cash_operation.clicked.connect(self.cash_operation_dialog)
-        for widget in (refresh, create_register, open_shift, close_shift, cash_operation):
+        for widget in (
+            refresh,
+            create_register,
+            open_shift,
+            close_shift,
+            cash_operation,
+        ):
             action_row.addWidget(widget)
         action_row.addStretch(1)
 
@@ -2121,7 +2079,9 @@ class MainWindow(QWidget):
         self._set_cashier_table_headers()
         self._install_record_actions(
             self.cashier_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.shifts"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.shifts"), row
+            ),
             lifecycle=self.close_cash_shift_action,
             lifecycle_label=lambda _row: self.translator.text("crud.close"),
             lifecycle_enabled=lambda row: row.get("status") == "open",
@@ -2130,7 +2090,9 @@ class MainWindow(QWidget):
         self._configure_table(self.cash_registers_table)
         self._install_record_actions(
             self.cash_registers_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.registers"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.registers"), row
+            ),
             edit=self.edit_cash_register_dialog,
             lifecycle=self.toggle_cash_register_active_action,
             lifecycle_label=self._active_lifecycle_label,
@@ -2141,17 +2103,25 @@ class MainWindow(QWidget):
         self.cashier_report_status = QLabel(self._ui("cash_flow_snapshot"))
         self.cashier_report_status.setProperty("titleKey", "ui.cash_flow_snapshot")
         self.cashier_report_status.setObjectName("SectionTitle")
-        self.cashier_report_metrics, self.cashier_report_metrics_layout = self._metric_area()
+        self.cashier_report_metrics, self.cashier_report_metrics_layout = (
+            self._metric_area()
+        )
         self.cashier_report_table = QTableWidget(0, 3)
         self._configure_table(self.cashier_report_table)
         self._install_record_actions(
             self.cashier_report_table,
-            view=lambda row: self._show_record_details(self.translator.text("ui.cash_flow_snapshot"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("ui.cash_flow_snapshot"), row
+            ),
         )
         cashier_tabs = QTabWidget()
-        cashier_tabs.addTab(self.cash_registers_table, self.translator.text("tabs.registers"))
+        cashier_tabs.addTab(
+            self.cash_registers_table, self.translator.text("tabs.registers")
+        )
         cashier_tabs.addTab(self.cashier_table, self.translator.text("tabs.shifts"))
-        cashier_tabs.addTab(self.cashier_report_table, self.translator.text("tabs.reports"))
+        cashier_tabs.addTab(
+            self.cashier_report_table, self.translator.text("tabs.reports")
+        )
         self.cashier_tabs = cashier_tabs
 
         cart_title = QLabel(self.translator.text("cashier.cart.title"))
@@ -2207,7 +2177,9 @@ class MainWindow(QWidget):
         self.cashier_cart_table = QTableWidget(0, len(CASHIER_CART_HEADER_KEYS))
         self._configure_table(self.cashier_cart_table)
         self.cashier_cart_table.setMinimumHeight(170)
-        self.cashier_cart_table.itemSelectionChanged.connect(self.cashier_load_selected_cart_item)
+        self.cashier_cart_table.itemSelectionChanged.connect(
+            self.cashier_load_selected_cart_item
+        )
         self._set_cashier_cart_table_headers()
 
         payment_row = QHBoxLayout()
@@ -2246,7 +2218,9 @@ class MainWindow(QWidget):
         ):
             picker = QPushButton("...")
             picker.setFixedWidth(34)
-            picker.clicked.connect(lambda _checked=False, field=target, pick=selector: pick(field))
+            picker.clicked.connect(
+                lambda _checked=False, field=target, pick=selector: pick(field)
+            )
             payment_row.addWidget(picker)
         checkout = QPushButton()
         checkout.setObjectName("PrimaryButton")
@@ -2290,7 +2264,15 @@ class MainWindow(QWidget):
 
         page, layout, _title = self._page("reports.title")
         self.report_code = QComboBox()
-        for code in ("dashboard", "stock", "sales", "purchases", "debts", "cash-flow", "profit-loss"):
+        for code in (
+            "dashboard",
+            "stock",
+            "sales",
+            "purchases",
+            "debts",
+            "cash-flow",
+            "profit-loss",
+        ):
             self.report_code.addItem(self._report_code_text(code), code)
         self.report_date_from = QLineEdit()
         self.report_date_to = QLineEdit()
@@ -2320,13 +2302,40 @@ class MainWindow(QWidget):
         filters.addRow(self.translator.text("reports.report_code"), self.report_code)
         filters.addRow(self.translator.text("reports.date_from"), self.report_date_from)
         filters.addRow(self.translator.text("reports.date_to"), self.report_date_to)
-        self._add_selector_row(filters, "reports.warehouse_id", self.report_warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(filters, "reports.counterparty_id", self.report_counterparty_id, self._select_counterparty_id)
-        self._add_selector_row(filters, "reports.product_id", self.report_product_id, self._select_product_id)
-        self._add_selector_row(filters, "reports.cash_register_id", self.report_cash_register_id, self._select_cash_register_id)
-        self._add_selector_row(filters, "reports.cash_shift_id", self.report_cash_shift_id, self._select_cash_shift_id)
+        self._add_selector_row(
+            filters,
+            "reports.warehouse_id",
+            self.report_warehouse_id,
+            self._select_warehouse_id,
+        )
+        self._add_selector_row(
+            filters,
+            "reports.counterparty_id",
+            self.report_counterparty_id,
+            self._select_counterparty_id,
+        )
+        self._add_selector_row(
+            filters,
+            "reports.product_id",
+            self.report_product_id,
+            self._select_product_id,
+        )
+        self._add_selector_row(
+            filters,
+            "reports.cash_register_id",
+            self.report_cash_register_id,
+            self._select_cash_register_id,
+        )
+        self._add_selector_row(
+            filters,
+            "reports.cash_shift_id",
+            self.report_cash_shift_id,
+            self._select_cash_shift_id,
+        )
         filters.addRow(self.translator.text("reports.debt_type"), self.report_debt_type)
-        filters.addRow(self.translator.text("reports.filter_name"), self.report_filter_name)
+        filters.addRow(
+            self.translator.text("reports.filter_name"), self.report_filter_name
+        )
 
         actions = QHBoxLayout()
         refresh = QPushButton()
@@ -2355,21 +2364,29 @@ class MainWindow(QWidget):
         self._configure_table(self.report_rows_table)
         self._install_record_actions(
             self.report_rows_table,
-            view=lambda row: self._show_record_details(self.translator.text("tabs.report_rows"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("tabs.report_rows"), row
+            ),
         )
         self.report_saved_filters_table = QTableWidget(0, 4)
         self._configure_table(self.report_saved_filters_table)
         self._set_report_saved_filters_table_headers()
         self._install_record_actions(
             self.report_saved_filters_table,
-            view=lambda row: self._show_record_details(self.translator.text("ui.saved_filters"), row),
+            view=lambda row: self._show_record_details(
+                self.translator.text("ui.saved_filters"), row
+            ),
             edit=self.edit_report_filter_dialog,
             lifecycle=self.delete_report_filter_action,
             lifecycle_label=lambda _row: self.translator.text("crud.delete"),
         )
         report_tabs = QTabWidget()
-        report_tabs.addTab(self.report_rows_table, self.translator.text("tabs.report_rows"))
-        report_tabs.addTab(self.report_saved_filters_table, self.translator.text("tabs.saved_filters"))
+        report_tabs.addTab(
+            self.report_rows_table, self.translator.text("tabs.report_rows")
+        )
+        report_tabs.addTab(
+            self.report_saved_filters_table, self.translator.text("tabs.saved_filters")
+        )
         self.report_tabs = report_tabs
         layout.addWidget(filter_card)
         layout.addLayout(actions)
@@ -2390,7 +2407,9 @@ class MainWindow(QWidget):
         page.setProperty("moduleId", page_id)
         return page
 
-    def _columns_from_rows(self, rows: list[dict[str, object]], preferred: tuple[str, ...] = ()) -> list[tuple[str, str]]:
+    def _columns_from_rows(
+        self, rows: Sequence[ApiRow], preferred: tuple[str, ...] = ()
+    ) -> list[SelectorColumn]:
         """Build readable table columns from API row dictionaries."""
 
         keys: list[str] = []
@@ -2454,7 +2473,9 @@ class MainWindow(QWidget):
             self.settings_forms_layout.addWidget(card)
         self.settings_forms_layout.addStretch(1)
 
-    def _add_settings_field(self, form: QFormLayout, path: tuple[str, ...], value: object) -> None:
+    def _add_settings_field(
+        self, form: QFormLayout, path: tuple[str, ...], value: object
+    ) -> None:
         """Add one editable or read-only settings field."""
 
         label = self._humanize_key(path[-1])
@@ -2530,21 +2551,38 @@ class MainWindow(QWidget):
             ],
         )
 
-    def _render_cash_report(self, report: dict[str, object], *, title: str | None = None) -> None:
+    def _render_cash_report(
+        self, report: dict[str, object], *, title: str | None = None
+    ) -> None:
         """Render cashier cash-flow or shift report data."""
 
         self.cashier_report_status.setText(title or self._ui("cash_flow_snapshot"))
-        metric_keys = [key for key, value in report.items() if key != "rows" and not isinstance(value, (dict, list, tuple))]
-        metrics = [(self._humanize_key(key), report.get(key)) for key in metric_keys[:6]]
+        metric_keys = [
+            key
+            for key, value in report.items()
+            if key != "rows" and not isinstance(value, (dict, list, tuple))
+        ]
+        metrics = [
+            (self._humanize_key(key), report.get(key)) for key in metric_keys[:6]
+        ]
         self._render_metric_cards(self.cashier_report_metrics_layout, metrics)
         rows = report.get("rows")
         if isinstance(rows, list) and all(isinstance(row, dict) for row in rows):
             typed_rows = [dict(row) for row in rows]
-            columns = self._columns_from_rows(typed_rows, ("metric", "label", "amount_tmt", "value")) or [("message", self._ui("message"))]
+            columns = self._columns_from_rows(
+                typed_rows, ("metric", "label", "amount_tmt", "value")
+            ) or [("message", self._ui("message"))]
             self._populate_table(self.cashier_report_table, typed_rows, columns)
         else:
-            summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
-            self._populate_table(self.cashier_report_table, summary_rows, [("metric", self._ui("metric")), ("value", self._ui("value"))])
+            summary_rows = [
+                {"metric": self._humanize_key(key), "value": report.get(key)}
+                for key in metric_keys
+            ]
+            self._populate_table(
+                self.cashier_report_table,
+                summary_rows,
+                [("metric", self._ui("metric")), ("value", self._ui("value"))],
+            )
 
     def _render_report_view(
         self,
@@ -2556,57 +2594,110 @@ class MainWindow(QWidget):
     ) -> None:
         """Render report data as metrics, rows, and saved-filter tables."""
 
-        filter_text = ", ".join(f"{self._humanize_key(key)}={value}" for key, value in filters.items()) or self._ui("no_filters")
-        self.report_status_label.setText(f"{self._report_code_text(code)} {self._ui('report_suffix')} - {filter_text}")
+        filter_text = ", ".join(
+            f"{self._humanize_key(key)}={value}" for key, value in filters.items()
+        ) or self._ui("no_filters")
+        self.report_status_label.setText(
+            f"{self._report_code_text(code)} {self._ui('report_suffix')} - {filter_text}"
+        )
         self._populate_table(
             self.report_saved_filters_table,
             saved_filters,
             [
                 ("name", self._ui("name")),
                 ("report_code", self._ui("report")),
-                (lambda row: self._ui("shared") if row.get("is_shared") else self._ui("private"), self._ui("scope")),
+                (
+                    lambda row: (
+                        self._ui("shared")
+                        if row.get("is_shared")
+                        else self._ui("private")
+                    ),
+                    self._ui("scope"),
+                ),
                 ("updated_at", self._ui("updated")),
             ],
         )
 
         if isinstance(report, list):
             rows = [dict(row) for row in report if isinstance(row, dict)]
-            self._render_metric_cards(self.report_metrics_layout, [(self._ui("rows"), len(rows))])
-            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows) or [("message", self._ui("message"))])
+            self._render_metric_cards(
+                self.report_metrics_layout, [(self._ui("rows"), len(rows))]
+            )
+            self._populate_table(
+                self.report_rows_table,
+                rows,
+                self._columns_from_rows(rows) or [("message", self._ui("message"))],
+            )
             return
 
         if isinstance(report, dict):
-            metric_keys = [key for key, value in report.items() if key != "rows" and not isinstance(value, (dict, list, tuple))]
-            metrics = [(self._humanize_key(key), report.get(key)) for key in metric_keys]
+            metric_keys = [
+                key
+                for key, value in report.items()
+                if key != "rows" and not isinstance(value, (dict, list, tuple))
+            ]
+            metrics = [
+                (self._humanize_key(key), report.get(key)) for key in metric_keys
+            ]
             rows_payload = report.get("rows")
-            rows = [dict(row) for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+            rows = (
+                [dict(row) for row in rows_payload if isinstance(row, dict)]
+                if isinstance(rows_payload, list)
+                else []
+            )
             if not metrics:
                 metrics = [(self._ui("rows"), len(rows))]
             self._render_metric_cards(self.report_metrics_layout, metrics)
             if rows:
-                self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows))
+                self._populate_table(
+                    self.report_rows_table, rows, self._columns_from_rows(rows)
+                )
             else:
-                summary_rows = [{"metric": self._humanize_key(key), "value": report.get(key)} for key in metric_keys]
-                self._populate_table(self.report_rows_table, summary_rows, [("metric", self._ui("metric")), ("value", self._ui("value"))])
+                summary_rows = [
+                    {"metric": self._humanize_key(key), "value": report.get(key)}
+                    for key in metric_keys
+                ]
+                self._populate_table(
+                    self.report_rows_table,
+                    summary_rows,
+                    [("metric", self._ui("metric")), ("value", self._ui("value"))],
+                )
             return
 
-        self._render_metric_cards(self.report_metrics_layout, [(self._ui("result"), self._format_value(report))])
-        self._populate_table(self.report_rows_table, [], [("message", self._ui("message"))])
+        self._render_metric_cards(
+            self.report_metrics_layout,
+            [(self._ui("result"), self._format_value(report))],
+        )
+        self._populate_table(
+            self.report_rows_table, [], [("message", self._ui("message"))]
+        )
 
     def _render_report_result(self, payload: dict[str, object], *, title: str) -> None:
         """Render export/save responses without showing JSON."""
 
         self.report_status_label.setText(title)
         rows_payload = payload.get("rows")
-        rows = [dict(row) for row in rows_payload if isinstance(row, dict)] if isinstance(rows_payload, list) else []
+        rows = (
+            [dict(row) for row in rows_payload if isinstance(row, dict)]
+            if isinstance(rows_payload, list)
+            else []
+        )
         metric_keys = [key for key in payload if key not in {"rows", "xlsx_base64"}]
-        self._render_metric_cards(self.report_metrics_layout, [(self._humanize_key(key), payload.get(key)) for key in metric_keys])
+        self._render_metric_cards(
+            self.report_metrics_layout,
+            [(self._humanize_key(key), payload.get(key)) for key in metric_keys],
+        )
         if rows:
-            self._populate_table(self.report_rows_table, rows, self._columns_from_rows(rows))
+            self._populate_table(
+                self.report_rows_table, rows, self._columns_from_rows(rows)
+            )
         else:
             self._populate_table(
                 self.report_rows_table,
-                [{"field": self._humanize_key(key), "value": payload.get(key)} for key in metric_keys],
+                [
+                    {"field": self._humanize_key(key), "value": payload.get(key)}
+                    for key in metric_keys
+                ],
                 [("field", self._ui("field")), ("value", self._ui("value"))],
             )
 
@@ -2634,10 +2725,12 @@ class MainWindow(QWidget):
 
         # Update application banner status
         self.banner_app_name.setText(app_name)
-        
+
         lang = self.translator.language
         if status.lower() == "running":
-            status_text = "РАБОТАЕТ" if lang == "ru" else "DEŇIZ" if lang == "tk" else "RUNNING"
+            status_text = (
+                "РАБОТАЕТ" if lang == "ru" else "DEŇIZ" if lang == "tk" else "RUNNING"
+            )
             self.banner_status_badge.setText(status_text)
             self.banner_status_badge.setStyleSheet("""
                 background-color: #dcfce7;
@@ -2662,8 +2755,10 @@ class MainWindow(QWidget):
         # User details card
         user_name_text = str(current_username) if current_username else "Unknown User"
         self.user_name_val.setText(user_name_text)
-        self.user_id_val.setText(f"ID: {current_user_id}" if current_user_id != "" else "ID: -")
-        
+        self.user_id_val.setText(
+            f"ID: {current_user_id}" if current_user_id != "" else "ID: -"
+        )
+
         avatar_letter = user_name_text[0].upper() if user_name_text else "U"
         self.user_avatar.setText(avatar_letter)
         colors = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"]
@@ -2687,6 +2782,7 @@ class MainWindow(QWidget):
         if server_time_raw:
             try:
                 from datetime import datetime
+
                 dt = datetime.fromisoformat(server_time_raw)
                 formatted_time = dt.strftime("%H:%M:%S")
                 formatted_date = dt.strftime("%Y-%m-%d")
@@ -2706,14 +2802,28 @@ class MainWindow(QWidget):
         self.date_val.setText(formatted_date)
 
         # Authorization card
-        self.perm_val.setText("AUTHORIZED" if lang == "en" else "АВТОРИЗОВАН" if lang == "ru" else "YGTYYARLY")
-        self.perm_desc.setText("Session Token Valid" if lang == "en" else "Токен сессии действителен" if lang == "ru" else "Sessiýa tokeni dogry")
+        self.perm_val.setText(
+            "AUTHORIZED"
+            if lang == "en"
+            else "АВТОРИЗОВАН"
+            if lang == "ru"
+            else "YGTYYARLY"
+        )
+        self.perm_desc.setText(
+            "Session Token Valid"
+            if lang == "en"
+            else "Токен сессии действителен"
+            if lang == "ru"
+            else "Sessiýa tokeni dogry"
+        )
 
     def _set_dashboard_offline(self, error_msg: str) -> None:
         """Adjust dashboard to represent offline/error state."""
 
         lang = self.translator.language
-        offline_text = "ОФФЛАЙН" if lang == "ru" else "OFLAYN" if lang == "tk" else "OFFLINE"
+        offline_text = (
+            "ОФФЛАЙН" if lang == "ru" else "OFLAYN" if lang == "tk" else "OFFLINE"
+        )
         self.banner_status_badge.setText(offline_text)
         self.banner_status_badge.setStyleSheet("""
             background-color: #fee2e2;
@@ -2727,7 +2837,7 @@ class MainWindow(QWidget):
         self.date_val.setText("----- -- --")
         self.user_name_val.setText("-")
         self.user_id_val.setText("ID: -")
-        
+
         self.user_avatar.setText("?")
         self.user_avatar.setStyleSheet("""
             background-color: #94a3b8;
@@ -2740,8 +2850,10 @@ class MainWindow(QWidget):
             min-height: 40px;
             max-height: 40px;
         """)
-        
-        self.perm_val.setText("OFFLINE" if lang == "en" else "ОФФЛАЙН" if lang == "ru" else "OFLAYN")
+
+        self.perm_val.setText(
+            "OFFLINE" if lang == "en" else "ОФФЛАЙН" if lang == "ru" else "OFLAYN"
+        )
         self.perm_desc.setText(error_msg)
 
     def _on_page_changed(self, row: int) -> None:
@@ -2775,86 +2887,26 @@ class MainWindow(QWidget):
         elif page_id == "reports":
             self.refresh_reports()
 
-    def _legacy_refresh_users(self) -> None:
-        """Refresh users table and update stats cards."""
-
-        def action() -> None:
-            users = self.api_client.get_users()
-            
-            # Update stats
-            total_count = len(users)
-            active_count = sum(1 for u in users if u.get("is_active"))
-            inactive_count = total_count - active_count
-            
-            if hasattr(self, "stat_total_val"):
-                self.stat_total_val.setText(str(total_count))
-            if hasattr(self, "stat_active_val"):
-                self.stat_active_val.setText(str(active_count))
-            if hasattr(self, "stat_inactive_val"):
-                self.stat_inactive_val.setText(str(inactive_count))
-                
-            # Populate table with custom badge widgets
-            self.users_table.setSortingEnabled(False)
-            self.users_table.setColumnCount(5)
-            self.users_table.setHorizontalHeaderLabels([
-                self.translator.text("users.table.id"),
-                self.translator.text("users.table.username"),
-                self.translator.text("users.table.full_name"),
-                self.translator.text("users.table.role"),
-                self.translator.text("users.table.active"),
-            ])
-            self.users_table.setRowCount(len(users))
-            lang = self.translator.language
-            
-            for row_index, user in enumerate(users):
-                # ID
-                id_item = self._table_item(user.get("id"))
-                id_item.setData(Qt.ItemDataRole.UserRole, user)
-                self.users_table.setItem(row_index, 0, id_item)
-                
-                # Username
-                username_item = self._table_item(user.get("username"))
-                username_item.setData(Qt.ItemDataRole.UserRole, user)
-                self.users_table.setItem(row_index, 1, username_item)
-                
-                # Full Name
-                fullname_item = self._table_item(user.get("full_name"))
-                fullname_item.setData(Qt.ItemDataRole.UserRole, user)
-                self.users_table.setItem(row_index, 2, fullname_item)
-                
-                # Role
-                role_item = self._table_item(user.get("role_name"))
-                role_item.setData(Qt.ItemDataRole.UserRole, user)
-                self.users_table.setItem(row_index, 3, role_item)
-                
-                # Active
-                is_active = bool(user.get("is_active"))
-                active_text = self.translator.text("users.status.active" if is_active else "users.status.inactive")
-                active_item = self._table_item(active_text)
-                active_item.setData(Qt.ItemDataRole.UserRole, user)
-                self.users_table.setItem(row_index, 4, active_item)
-                
-            self.users_table.resizeColumnsToContents()
-            self.users_table.setSortingEnabled(True)
-            
-            # Apply search filter if search contains text
-            if hasattr(self, "users_search") and self.users_search.text():
-                self._filter_users_table(self.users_search.text())
-
-        self._run_api(action)
-
     def refresh_catalog(self) -> None:
         """Refresh product catalog table."""
 
         def action() -> None:
-            products = self.api_client.get_products(self.catalog_search.text().strip() or None)
+            products = self.api_client.get_products(
+                self.catalog_search.text().strip() or None
+            )
             self._populate_table(
                 self.catalog_table,
                 products,
                 [
                     ("id", self.translator.text("catalog.table.id")),
-                    (lambda row: row.get("sku") or row.get("code"), self.translator.text("catalog.table.code")),
-                    (lambda row: row.get("name") or row.get("name_ru"), self.translator.text("catalog.table.name")),
+                    (
+                        lambda row: row.get("sku") or row.get("code"),
+                        self.translator.text("catalog.table.code"),
+                    ),
+                    (
+                        lambda row: row.get("name") or row.get("name_ru"),
+                        self.translator.text("catalog.table.name"),
+                    ),
                     ("retail_price", self.translator.text("catalog.table.price")),
                     ("is_active", self.translator.text("catalog.table.active")),
                 ],
@@ -2909,14 +2961,24 @@ class MainWindow(QWidget):
                 balances,
                 [
                     ("id", self.translator.text("warehouse.table.id")),
-                    (lambda row: row.get("warehouse_name") or row.get("warehouse_code"), self.translator.text("warehouse.table.warehouse")),
-                    (lambda row: row.get("product_name") or row.get("product_sku"), self.translator.text("warehouse.table.product")),
+                    (
+                        lambda row: (
+                            row.get("warehouse_name") or row.get("warehouse_code")
+                        ),
+                        self.translator.text("warehouse.table.warehouse"),
+                    ),
+                    (
+                        lambda row: row.get("product_name") or row.get("product_sku"),
+                        self.translator.text("warehouse.table.product"),
+                    ),
                     ("quantity", self.translator.text("warehouse.table.quantity")),
                     ("avg_cost_tmt", self.translator.text("warehouse.table.avg_cost")),
                 ],
             )
             movements = self.api_client.get_stock_movements()
-            self.warehouse_movements_text.setPlainText(json.dumps(movements, indent=2, ensure_ascii=False))
+            self.warehouse_movements_text.setPlainText(
+                json.dumps(movements, indent=2, ensure_ascii=False)
+            )
             self._populate_table(
                 self.warehouse_movements_table,
                 movements,
@@ -2925,7 +2987,12 @@ class MainWindow(QWidget):
                     ("warehouse_name", self._ui("warehouse")),
                     ("product_name", self._ui("product")),
                     ("movement_type", self._ui("type")),
-                    (lambda row: f"{row.get('document_type') or '-'} #{row.get('document_id') or '-'}", self._ui("document")),
+                    (
+                        lambda row: (
+                            f"{row.get('document_type') or '-'} #{row.get('document_id') or '-'}"
+                        ),
+                        self._ui("document"),
+                    ),
                     ("quantity", self._ui("quantity_short")),
                     ("unit_cost_tmt", self._ui("unit_cost")),
                     ("amount_tmt", self._ui("amount")),
@@ -2950,8 +3017,14 @@ class MainWindow(QWidget):
                 transfers,
                 [
                     ("id", "ID"),
-                    ("source_warehouse_name", self._humanize_key("source_warehouse_id")),
-                    ("target_warehouse_name", self._humanize_key("target_warehouse_id")),
+                    (
+                        "source_warehouse_name",
+                        self._humanize_key("source_warehouse_id"),
+                    ),
+                    (
+                        "target_warehouse_name",
+                        self._humanize_key("target_warehouse_id"),
+                    ),
                     ("status", self._ui("status")),
                     ("sent_at", self._humanize_key("sent_at")),
                     (lambda row: len(row.get("lines") or []), self._ui("items")),
@@ -2977,7 +3050,9 @@ class MainWindow(QWidget):
         """Refresh counterparties table with debt balances."""
 
         def action() -> None:
-            rows = self.api_client.get_counterparties(self.counterparty_search.text().strip() or None, include_debt=True)
+            rows = self.api_client.get_counterparties(
+                self.counterparty_search.text().strip() or None, include_debt=True
+            )
             self._populate_table(
                 self.counterparties_table,
                 rows,
@@ -2986,7 +3061,12 @@ class MainWindow(QWidget):
                     ("code", self.translator.text("counterparties.table.code")),
                     ("name", self.translator.text("counterparties.table.name")),
                     ("role_flags", self.translator.text("counterparties.table.role")),
-                    (lambda row: f"R {(row.get('debt') or {}).get('receivable', '0.00')} / P {(row.get('debt') or {}).get('payable', '0.00')}", self.translator.text("counterparties.table.debt")),
+                    (
+                        lambda row: (
+                            f"R {(row.get('debt') or {}).get('receivable', '0.00')} / P {(row.get('debt') or {}).get('payable', '0.00')}"
+                        ),
+                        self.translator.text("counterparties.table.debt"),
+                    ),
                 ],
             )
 
@@ -3003,7 +3083,10 @@ class MainWindow(QWidget):
                 [
                     ("id", self.translator.text("pricing.table.id")),
                     ("name_ru", self.translator.text("pricing.table.name")),
-                    (lambda row: row.get("currency_code") or row.get("currency_id"), self.translator.text("pricing.table.currency")),
+                    (
+                        lambda row: row.get("currency_code") or row.get("currency_id"),
+                        self.translator.text("pricing.table.currency"),
+                    ),
                     ("is_default", self.translator.text("pricing.table.default")),
                 ],
             )
@@ -3021,7 +3104,12 @@ class MainWindow(QWidget):
                 [
                     ("id", "ID"),
                     ("price_list_name_ru", self._humanize_key("price_list_id")),
-                    (lambda row: row.get("product_name") or row.get("service_name_ru"), self._ui("product")),
+                    (
+                        lambda row: (
+                            row.get("product_name") or row.get("service_name_ru")
+                        ),
+                        self._ui("product"),
+                    ),
                     ("price_tmt", self._ui("price")),
                     ("valid_from", self._humanize_key("valid_from")),
                     ("valid_to", self._humanize_key("valid_to")),
@@ -3042,7 +3130,10 @@ class MainWindow(QWidget):
                 [
                     ("id", self.translator.text("purchase.table.id")),
                     ("doc_number", self.translator.text("purchase.table.number")),
-                    ("counterparty_name", self.translator.text("purchase.table.supplier")),
+                    (
+                        "counterparty_name",
+                        self.translator.text("purchase.table.supplier"),
+                    ),
                     ("total_amount_tmt", self.translator.text("purchase.table.total")),
                     ("status", self.translator.text("purchase.table.status")),
                     (lambda row: "-", self.translator.text("purchase.table.payment")),
@@ -3055,15 +3146,25 @@ class MainWindow(QWidget):
                 [
                     ("id", self.translator.text("purchase.table.id")),
                     ("doc_number", self.translator.text("purchase.table.number")),
-                    ("counterparty_name", self.translator.text("purchase.table.supplier")),
+                    (
+                        "counterparty_name",
+                        self.translator.text("purchase.table.supplier"),
+                    ),
                     ("total_amount_tmt", self.translator.text("purchase.table.total")),
                     ("status", self.translator.text("purchase.table.status")),
                     ("payment_status", self.translator.text("purchase.table.payment")),
                 ],
             )
             ledger = self.api_client.get_debt_ledger(debt_type="payable")
-            self.purchase_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
-            self._render_debt_ledger(ledger, self.purchase_debt_table, self.purchase_debt_metrics_layout, title=self._ui("payable_entries"))
+            self.purchase_debt_text.setPlainText(
+                json.dumps(ledger, indent=2, ensure_ascii=False)
+            )
+            self._render_debt_ledger(
+                ledger,
+                self.purchase_debt_table,
+                self.purchase_debt_metrics_layout,
+                title=self._ui("payable_entries"),
+            )
 
         self._run_api(action)
 
@@ -3100,8 +3201,15 @@ class MainWindow(QWidget):
                 ],
             )
             ledger = self.api_client.get_debt_ledger(debt_type="receivable")
-            self.sales_debt_text.setPlainText(json.dumps(ledger, indent=2, ensure_ascii=False))
-            self._render_debt_ledger(ledger, self.sales_debt_table, self.sales_debt_metrics_layout, title=self._ui("receivable_entries"))
+            self.sales_debt_text.setPlainText(
+                json.dumps(ledger, indent=2, ensure_ascii=False)
+            )
+            self._render_debt_ledger(
+                ledger,
+                self.sales_debt_table,
+                self.sales_debt_metrics_layout,
+                title=self._ui("receivable_entries"),
+            )
 
         self._run_api(action)
 
@@ -3127,7 +3235,12 @@ class MainWindow(QWidget):
                 rows,
                 [
                     ("id", self.translator.text("cashier.table.id")),
-                    (lambda row: row.get("cash_register_name") or row.get("cash_register_id"), self.translator.text("cashier.table.register")),
+                    (
+                        lambda row: (
+                            row.get("cash_register_name") or row.get("cash_register_id")
+                        ),
+                        self.translator.text("cashier.table.register"),
+                    ),
                     ("opened_at", self.translator.text("cashier.table.opened_at")),
                     ("opening_amount", self.translator.text("cashier.table.opening")),
                     ("closing_amount", self.translator.text("cashier.table.closing")),
@@ -3135,7 +3248,9 @@ class MainWindow(QWidget):
                 ],
             )
             report = self.api_client.get_cash_flow_report()
-            self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
+            self.cashier_text.setPlainText(
+                json.dumps(report, indent=2, ensure_ascii=False)
+            )
             self._render_cash_report(report)
 
         self._run_api(action)
@@ -3187,7 +3302,12 @@ class MainWindow(QWidget):
             filters = self._current_report_filters()
             report = self._fetch_selected_report(code, filters)
             saved_filters = self.api_client.get_report_filters(code)
-            payload = {"report_code": code, "filters": filters, "saved_filters": saved_filters, "report": report}
+            payload = {
+                "report_code": code,
+                "filters": filters,
+                "saved_filters": saved_filters,
+                "report": report,
+            }
             self.reports_text.setPlainText(
                 json.dumps(
                     payload,
@@ -3195,7 +3315,9 @@ class MainWindow(QWidget):
                     ensure_ascii=False,
                 )
             )
-            self._render_report_view(code=code, filters=filters, saved_filters=saved_filters, report=report)
+            self._render_report_view(
+                code=code, filters=filters, saved_filters=saved_filters, report=report
+            )
 
         self._run_api(action)
 
@@ -3204,10 +3326,16 @@ class MainWindow(QWidget):
 
         def action() -> None:
             code = self._selected_report_code()
-            payload = self.api_client.export_report(code, self._current_report_filters())
-            self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
+            payload = self.api_client.export_report(
+                code, self._current_report_filters()
+            )
+            self.reports_text.setPlainText(
+                json.dumps(payload, indent=2, ensure_ascii=False)
+            )
             filename = payload.get("filename") or self.translator.text("reports.export")
-            self._render_report_result(payload, title=f"{self._ui('export_ready')}: {filename}")
+            self._render_report_result(
+                payload, title=f"{self._ui('export_ready')}: {filename}"
+            )
 
         self._run_api(action)
 
@@ -3216,7 +3344,11 @@ class MainWindow(QWidget):
 
         name = self.report_filter_name.text().strip()
         if not name:
-            QMessageBox.warning(self, self.translator.text("common.error"), self.translator.text("reports.filter_name"))
+            QMessageBox.warning(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("reports.filter_name"),
+            )
             return
 
         def action() -> None:
@@ -3228,8 +3360,13 @@ class MainWindow(QWidget):
                     "is_shared": False,
                 }
             )
-            self.reports_text.setPlainText(json.dumps(payload, indent=2, ensure_ascii=False))
-            self._render_report_result(payload, title=f"{self._ui('filter_saved')}: {payload.get('name', name)}")
+            self.reports_text.setPlainText(
+                json.dumps(payload, indent=2, ensure_ascii=False)
+            )
+            self._render_report_result(
+                payload,
+                title=f"{self._ui('filter_saved')}: {payload.get('name', name)}",
+            )
 
         self._run_api(action)
 
@@ -3252,15 +3389,29 @@ class MainWindow(QWidget):
             return dict(lines[0])
         return {}
 
-    def _toggle_active(self, row: dict[str, object], updater: Callable[[int, dict[str, object]], dict[str, object]], refresh: Callable[[], None]) -> None:
+    def _toggle_active(
+        self,
+        row: dict[str, object],
+        updater: Callable[[int, dict[str, object]], dict[str, object]],
+        refresh: Callable[[], None],
+    ) -> None:
         """Toggle is_active for one master-data row."""
 
         target_active = not bool(row.get("is_active"))
-        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
+        label = self.translator.text(
+            "crud.activate" if target_active else "crud.deactivate"
+        )
         if self._confirm_record_action(row, label):
-            self._run_api(lambda: (updater(int(row["id"]), {"is_active": target_active}), refresh()))
+            self._run_api(
+                lambda: (
+                    updater(int(row["id"]), {"is_active": target_active}),
+                    refresh(),
+                )
+            )
 
-    def _line_payload_from_flat(self, payload: dict[str, object], *, sale: bool = False) -> dict[str, object]:
+    def _line_payload_from_flat(
+        self, payload: dict[str, object], *, sale: bool = False
+    ) -> dict[str, object]:
         """Extract a one-line document payload from a flat form payload."""
 
         keys = {
@@ -3278,7 +3429,10 @@ class MainWindow(QWidget):
         }
         line = {key: payload.pop(key) for key in list(payload) if key in keys}
         if sale:
-            line.setdefault("line_type", "product" if line.get("product_id") is not None else "service")
+            line.setdefault(
+                "line_type",
+                "product" if line.get("product_id") is not None else "service",
+            )
             line.setdefault("price_list_price", line.get("price_final") or "0")
             line.setdefault("discount_amount", "0")
             line.setdefault("price_override", False)
@@ -3308,12 +3462,27 @@ class MainWindow(QWidget):
 
         payload = self._simple_record_form(
             self.translator.text("roles.create"),
-            [("name", self._ui("name"), ""), ("description", self._ui("description"), ""), ("permissions", self._ui("permissions"), "")],
+            [
+                ("name", self._ui("name"), ""),
+                ("description", self._ui("description"), ""),
+                ("permissions", self._ui("permissions"), ""),
+            ],
         )
         if payload is None:
             return
-        permissions = [part.strip() for part in str(payload.pop("permissions", "")).replace("\n", ",").split(",") if part.strip()]
-        self._run_api(lambda: (self.api_client.create_role({**payload, "permissions": permissions}), self.refresh_roles()))
+        permissions = [
+            part.strip()
+            for part in str(payload.pop("permissions", ""))
+            .replace("\n", ",")
+            .split(",")
+            if part.strip()
+        ]
+        self._run_api(
+            lambda: (
+                self.api_client.create_role({**payload, "permissions": permissions}),
+                self.refresh_roles(),
+            )
+        )
 
     def edit_role_dialog(self, row: dict[str, object]) -> None:
         """Edit a role description and permissions."""
@@ -3322,208 +3491,42 @@ class MainWindow(QWidget):
             self.translator.text("crud.edit"),
             [
                 ("description", self._ui("description"), row.get("description")),
-                ("permissions", self._ui("permissions"), ", ".join(str(item) for item in row.get("permissions") or [])),
+                (
+                    "permissions",
+                    self._ui("permissions"),
+                    ", ".join(str(item) for item in row.get("permissions") or []),
+                ),
             ],
         )
         if payload is None:
             return
-        permissions = [part.strip() for part in str(payload.pop("permissions", "")).replace("\n", ",").split(",") if part.strip()]
-        self._run_api(lambda: (self.api_client.update_role(int(row["id"]), {**payload, "permissions": permissions}), self.refresh_roles()))
+        permissions = [
+            part.strip()
+            for part in str(payload.pop("permissions", ""))
+            .replace("\n", ",")
+            .split(",")
+            if part.strip()
+        ]
+        self._run_api(
+            lambda: (
+                self.api_client.update_role(
+                    int(row["id"]), {**payload, "permissions": permissions}
+                ),
+                self.refresh_roles(),
+            )
+        )
 
     def delete_role_action(self, row: dict[str, object]) -> None:
         """Delete an unused custom role."""
 
         label = self.translator.text("crud.delete")
         if self._confirm_record_action(row, label, hard_delete=True):
-            self._run_api(lambda: (self.api_client.delete_role(int(row["id"])), self.refresh_roles()))
-
-    def _legacy_edit_user_dialog(self, row: dict[str, object]) -> None:
-        """Open a modern edit-user dialog."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self.translator.text("crud.edit"))
-        dialog.setMinimumSize(450, 420)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #f8fafc;
-            }
-            QLineEdit, QComboBox {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                padding: 8px 10px;
-                color: #0f172a;
-            }
-            QLineEdit:focus, QComboBox:focus {
-                border: 1px solid #2563eb;
-            }
-            QLabel {
-                font-weight: bold;
-                color: #475569;
-                font-size: 12px;
-            }
-        """)
-        
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(16)
-        
-        title_lbl = QLabel(self.translator.text("crud.edit") + f": {row.get('username')}")
-        title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 8px;")
-        main_layout.addWidget(title_lbl)
-        
-        form_widget = QWidget()
-        form_layout = QFormLayout(form_widget)
-        form_layout.setContentsMargins(0, 0, 0, 0)
-        form_layout.setSpacing(14)
-        
-        full_name = QLineEdit(str(row.get("full_name") or ""))
-        full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
-        
-        # Password row with hint and toggle
-        pwd_container = QWidget()
-        pwd_layout = QHBoxLayout(pwd_container)
-        pwd_layout.setContentsMargins(0, 0, 0, 0)
-        pwd_layout.setSpacing(8)
-        
-        password = QLineEdit()
-        password.setEchoMode(QLineEdit.EchoMode.Password)
-        password.setPlaceholderText(self.translator.text("users.form.password_hint"))
-        
-        show_pwd_btn = QPushButton("🙈")
-        show_pwd_btn.setFixedWidth(36)
-        show_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
-        show_pwd_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 6px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        
-        def toggle_pwd():
-            if password.echoMode() == QLineEdit.EchoMode.Password:
-                password.setEchoMode(QLineEdit.EchoMode.Normal)
-                show_pwd_btn.setText("👁️")
-                show_pwd_btn.setToolTip(self.translator.text("users.form.hide_password"))
-            else:
-                password.setEchoMode(QLineEdit.EchoMode.Password)
-                show_pwd_btn.setText("🙈")
-                show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
-                
-        show_pwd_btn.clicked.connect(toggle_pwd)
-        
-        pwd_layout.addWidget(password, 1)
-        pwd_layout.addWidget(show_pwd_btn)
-        
-        # Role combobox populated dynamically
-        role_combo = QComboBox()
-        current_role = str(row.get("role_name") or "")
-        try:
-            roles = self.api_client.get_roles()
-            selected_idx = 0
-            for idx, r in enumerate(roles):
-                role_name = r.get("name")
-                desc = r.get("description") or ""
-                label = f"{role_name} ({desc})" if desc else role_name
-                role_combo.addItem(label, role_name)
-                if role_name == current_role:
-                    selected_idx = idx
-            role_combo.setCurrentIndex(selected_idx)
-        except Exception:
-            role_combo.addItem("Cashier", "Cashier")
-            role_combo.addItem("Administrator", "Administrator")
-            if current_role == "Administrator":
-                role_combo.setCurrentIndex(1)
-                
-        # Active status toggle
-        from PyQt6.QtWidgets import QCheckBox
-        active_check = QCheckBox()
-        active_check.setChecked(bool(row.get("is_active")))
-        active_check.setCursor(Qt.CursorShape.PointingHandCursor)
-        
-        form_layout.addRow(self.translator.text("users.form.full_name"), full_name)
-        form_layout.addRow(self.translator.text("users.form.password"), pwd_container)
-        form_layout.addRow(self.translator.text("users.form.role"), role_combo)
-        form_layout.addRow(self.translator.text("ui.active"), active_check)
-        
-        main_layout.addWidget(form_widget)
-        main_layout.addStretch(1)
-        
-        # Buttons
-        buttons_layout = QHBoxLayout()
-        cancel_btn = QPushButton(self.translator.text("crud.cancel"))
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                color: #475569;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        cancel_btn.clicked.connect(dialog.reject)
-        
-        save_btn = QPushButton(self.translator.text("common.success"))
-        save_btn.setObjectName("PrimaryButton")
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                border: none;
-                border-radius: 8px;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
-        save_btn.clicked.connect(dialog.accept)
-        
-        buttons_layout.addStretch(1)
-        buttons_layout.addWidget(cancel_btn)
-        buttons_layout.addWidget(save_btn)
-        main_layout.addLayout(buttons_layout)
-        
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-            
-        # Build payload
-        payload: dict[str, object] = {
-            "full_name": full_name.text().strip(),
-            "role_name": role_combo.currentData() or "Cashier",
-            "is_active": active_check.isChecked()
-        }
-        # Only set password if it is not empty
-        pwd_val = password.text()
-        if pwd_val:
-            payload["password"] = pwd_val
-            
-        self._run_api(lambda: (self.api_client.update_user(int(row["id"]), payload), self.refresh_users()))
-
-    def _legacy_deactivate_user_action(self, row: dict[str, object]) -> None:
-        """Activate or deactivate a user."""
-
-        target_active = not bool(row.get("is_active"))
-        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
-        if not self._confirm_record_action(row, label):
-            return
-        if target_active:
-            self._run_api(lambda: (self.api_client.update_user(int(row["id"]), {"is_active": True}), self.refresh_users()))
-        else:
-            self._run_api(lambda: (self.api_client.deactivate_user(int(row["id"])), self.refresh_users()))
+            self._run_api(
+                lambda: (
+                    self.api_client.delete_role(int(row["id"])),
+                    self.refresh_roles(),
+                )
+            )
 
     def edit_product_dialog(self, row: dict[str, object]) -> None:
         """Edit a product."""
@@ -3531,18 +3534,43 @@ class MainWindow(QWidget):
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name", self.translator.text("catalog.form.name_ru"), row.get("name") or row.get("name_ru")),
-                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                (
+                    "name",
+                    self.translator.text("catalog.form.name_ru"),
+                    row.get("name") or row.get("name_ru"),
+                ),
+                (
+                    "name_tk",
+                    self.translator.text("catalog.form.name_tk"),
+                    row.get("name_tk"),
+                ),
                 ("unit", self._humanize_key("unit"), row.get("unit")),
-                ("retail_price", self.translator.text("catalog.form.price"), row.get("retail_price")),
-                ("last_known_cost", self._humanize_key("last_known_cost"), row.get("last_known_cost")),
+                (
+                    "retail_price",
+                    self.translator.text("catalog.form.price"),
+                    row.get("retail_price"),
+                ),
+                (
+                    "last_known_cost",
+                    self._humanize_key("last_known_cost"),
+                    row.get("last_known_cost"),
+                ),
                 ("min_stock", self._humanize_key("min_stock"), row.get("min_stock")),
-                ("description", self._humanize_key("description"), row.get("description")),
+                (
+                    "description",
+                    self._humanize_key("description"),
+                    row.get("description"),
+                ),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_product(int(row["id"]), payload), self.refresh_catalog()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_product(int(row["id"]), payload),
+                    self.refresh_catalog(),
+                )
+            )
 
     def toggle_product_active_action(self, row: dict[str, object]) -> None:
         self._toggle_active(row, self.api_client.update_product, self.refresh_catalog)
@@ -3551,33 +3579,65 @@ class MainWindow(QWidget):
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name_ru", self.translator.text("catalog.form.name_ru"), row.get("name_ru")),
-                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                (
+                    "name_ru",
+                    self.translator.text("catalog.form.name_ru"),
+                    row.get("name_ru"),
+                ),
+                (
+                    "name_tk",
+                    self.translator.text("catalog.form.name_tk"),
+                    row.get("name_tk"),
+                ),
                 ("parent_id", self._humanize_key("parent_id"), row.get("parent_id")),
                 ("sort_order", self._humanize_key("sort_order"), row.get("sort_order")),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_product_group(int(row["id"]), payload), self.refresh_catalog()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_product_group(int(row["id"]), payload),
+                    self.refresh_catalog(),
+                )
+            )
 
     def toggle_product_group_active_action(self, row: dict[str, object]) -> None:
-        self._toggle_active(row, self.api_client.update_product_group, self.refresh_catalog)
+        self._toggle_active(
+            row, self.api_client.update_product_group, self.refresh_catalog
+        )
 
     def edit_service_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name_ru", self.translator.text("catalog.form.name_ru"), row.get("name_ru")),
-                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
+                (
+                    "name_ru",
+                    self.translator.text("catalog.form.name_ru"),
+                    row.get("name_ru"),
+                ),
+                (
+                    "name_tk",
+                    self.translator.text("catalog.form.name_tk"),
+                    row.get("name_tk"),
+                ),
                 ("service_type", self._ui("type"), row.get("service_type")),
-                ("expense_category_id", self._humanize_key("expense_category_id"), row.get("expense_category_id")),
+                (
+                    "expense_category_id",
+                    self._humanize_key("expense_category_id"),
+                    row.get("expense_category_id"),
+                ),
                 ("default_price", self._ui("price"), row.get("default_price")),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_service(int(row["id"]), payload), self.refresh_catalog()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_service(int(row["id"]), payload),
+                    self.refresh_catalog(),
+                )
+            )
 
     def toggle_service_active_action(self, row: dict[str, object]) -> None:
         self._toggle_active(row, self.api_client.update_service, self.refresh_catalog)
@@ -3587,77 +3647,168 @@ class MainWindow(QWidget):
             self.translator.text("crud.edit"),
             [
                 ("name", self.translator.text("warehouse.form.name"), row.get("name")),
-                ("location", self.translator.text("warehouse.form.location"), row.get("location")),
+                (
+                    "location",
+                    self.translator.text("warehouse.form.location"),
+                    row.get("location"),
+                ),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_warehouse(int(row["id"]), payload), self.refresh_warehouse()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_warehouse(int(row["id"]), payload),
+                    self.refresh_warehouse(),
+                )
+            )
 
     def toggle_warehouse_active_action(self, row: dict[str, object]) -> None:
-        self._toggle_active(row, self.api_client.update_warehouse, self.refresh_warehouse)
+        self._toggle_active(
+            row, self.api_client.update_warehouse, self.refresh_warehouse
+        )
 
     def edit_counterparty_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name", self.translator.text("counterparties.form.name"), row.get("name")),
-                ("role_flags", self.translator.text("counterparties.form.role"), row.get("role_flags")),
+                (
+                    "name",
+                    self.translator.text("counterparties.form.name"),
+                    row.get("name"),
+                ),
+                (
+                    "role_flags",
+                    self.translator.text("counterparties.form.role"),
+                    row.get("role_flags"),
+                ),
                 ("counterparty_type", self._ui("type"), row.get("counterparty_type")),
-                ("phone", self.translator.text("counterparties.form.phone"), row.get("phone")),
+                (
+                    "phone",
+                    self.translator.text("counterparties.form.phone"),
+                    row.get("phone"),
+                ),
                 ("email", self._humanize_key("email"), row.get("email")),
                 ("tax_id", self._humanize_key("tax_id"), row.get("tax_id")),
-                ("address", self.translator.text("counterparties.form.address"), row.get("address")),
-                ("price_list_id", self._humanize_key("price_list_id"), row.get("price_list_id")),
-                ("discount_percent", self._humanize_key("discount_percent"), row.get("discount_percent")),
-                ("credit_limit_tmt", self._humanize_key("credit_limit_tmt"), row.get("credit_limit_tmt")),
+                (
+                    "address",
+                    self.translator.text("counterparties.form.address"),
+                    row.get("address"),
+                ),
+                (
+                    "price_list_id",
+                    self._humanize_key("price_list_id"),
+                    row.get("price_list_id"),
+                ),
+                (
+                    "discount_percent",
+                    self._humanize_key("discount_percent"),
+                    row.get("discount_percent"),
+                ),
+                (
+                    "credit_limit_tmt",
+                    self._humanize_key("credit_limit_tmt"),
+                    row.get("credit_limit_tmt"),
+                ),
                 ("note", self._ui("note"), row.get("note")),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_counterparty(int(row["id"]), payload), self.refresh_counterparties()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_counterparty(int(row["id"]), payload),
+                    self.refresh_counterparties(),
+                )
+            )
 
     def toggle_counterparty_active_action(self, row: dict[str, object]) -> None:
-        self._toggle_active(row, self.api_client.update_counterparty, self.refresh_counterparties)
+        self._toggle_active(
+            row, self.api_client.update_counterparty, self.refresh_counterparties
+        )
 
     def edit_price_list_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name_ru", self.translator.text("pricing.form.name"), row.get("name_ru")),
-                ("name_tk", self.translator.text("catalog.form.name_tk"), row.get("name_tk")),
-                ("currency_id", self.translator.text("pricing.form.currency_id"), row.get("currency_id")),
-                ("is_default", self.translator.text("pricing.table.default"), row.get("is_default")),
+                (
+                    "name_ru",
+                    self.translator.text("pricing.form.name"),
+                    row.get("name_ru"),
+                ),
+                (
+                    "name_tk",
+                    self.translator.text("catalog.form.name_tk"),
+                    row.get("name_tk"),
+                ),
+                (
+                    "currency_id",
+                    self.translator.text("pricing.form.currency_id"),
+                    row.get("currency_id"),
+                ),
+                (
+                    "is_default",
+                    self.translator.text("pricing.table.default"),
+                    row.get("is_default"),
+                ),
                 ("is_active", self._ui("active"), row.get("is_active")),
                 ("note", self._ui("note"), row.get("note")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_price_list(int(row["id"]), payload), self.refresh_pricing()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_price_list(int(row["id"]), payload),
+                    self.refresh_pricing(),
+                )
+            )
 
     def toggle_price_list_active_action(self, row: dict[str, object]) -> None:
-        self._toggle_active(row, self.api_client.update_price_list, self.refresh_pricing)
+        self._toggle_active(
+            row, self.api_client.update_price_list, self.refresh_pricing
+        )
 
     def edit_price_item_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("product_id", self.translator.text("pricing.form.product_id"), row.get("product_id")),
+                (
+                    "product_id",
+                    self.translator.text("pricing.form.product_id"),
+                    row.get("product_id"),
+                ),
                 ("service_id", self._humanize_key("service_id"), row.get("service_id")),
                 ("uom_id", self._humanize_key("uom_id"), row.get("uom_id")),
-                ("price_tmt", self.translator.text("pricing.form.price"), row.get("price_tmt")),
-                ("valid_from", self.translator.text("pricing.form.valid_from"), row.get("valid_from")),
+                (
+                    "price_tmt",
+                    self.translator.text("pricing.form.price"),
+                    row.get("price_tmt"),
+                ),
+                (
+                    "valid_from",
+                    self.translator.text("pricing.form.valid_from"),
+                    row.get("valid_from"),
+                ),
                 ("valid_to", self._humanize_key("valid_to"), row.get("valid_to")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_price_list_item(int(row["id"]), payload), self.refresh_pricing()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_price_list_item(int(row["id"]), payload),
+                    self.refresh_pricing(),
+                )
+            )
 
     def delete_price_item_action(self, row: dict[str, object]) -> None:
         label = self.translator.text("crud.delete")
         if self._confirm_record_action(row, label, hard_delete=True):
-            self._run_api(lambda: (self.api_client.delete_price_list_item(int(row["id"])), self.refresh_pricing()))
+            self._run_api(
+                lambda: (
+                    self.api_client.delete_price_list_item(int(row["id"])),
+                    self.refresh_pricing(),
+                )
+            )
 
     def edit_purchase_order_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
@@ -3665,26 +3816,72 @@ class MainWindow(QWidget):
             self.translator.text("crud.edit"),
             [
                 ("doc_date", self._ui("date"), row.get("doc_date")),
-                ("counterparty_id", self.translator.text("purchase.form.supplier_id"), row.get("counterparty_id")),
-                ("warehouse_id", self.translator.text("purchase.form.warehouse_id"), row.get("warehouse_id")),
-                ("currency_id", self.translator.text("purchase.form.currency_id"), row.get("currency_id")),
-                ("currency_rate", self._humanize_key("currency_rate"), row.get("currency_rate")),
+                (
+                    "counterparty_id",
+                    self.translator.text("purchase.form.supplier_id"),
+                    row.get("counterparty_id"),
+                ),
+                (
+                    "warehouse_id",
+                    self.translator.text("purchase.form.warehouse_id"),
+                    row.get("warehouse_id"),
+                ),
+                (
+                    "currency_id",
+                    self.translator.text("purchase.form.currency_id"),
+                    row.get("currency_id"),
+                ),
+                (
+                    "currency_rate",
+                    self._humanize_key("currency_rate"),
+                    row.get("currency_rate"),
+                ),
                 ("note", self._ui("note"), row.get("note")),
-                ("product_id", self.translator.text("purchase.form.product_id"), line.get("product_id")),
-                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
-                ("expense_category_id", self._humanize_key("expense_category_id"), line.get("expense_category_id")),
-                ("quantity", self.translator.text("purchase.form.quantity"), line.get("quantity_ordered")),
-                ("price_cur", self.translator.text("purchase.form.price"), line.get("price_cur")),
+                (
+                    "product_id",
+                    self.translator.text("purchase.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "service_id",
+                    self._humanize_key("service_id"),
+                    line.get("service_id"),
+                ),
+                (
+                    "expense_category_id",
+                    self._humanize_key("expense_category_id"),
+                    line.get("expense_category_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("purchase.form.quantity"),
+                    line.get("quantity_ordered"),
+                ),
+                (
+                    "price_cur",
+                    self.translator.text("purchase.form.price"),
+                    line.get("price_cur"),
+                ),
             ],
         )
         if payload is None:
             return
         line_payload = self._line_payload_from_flat(payload)
         update_payload = {**payload, "lines": [line_payload]}
-        self._run_api(lambda: (self.api_client.update_purchase_order(int(row["id"]), update_payload), self.refresh_purchase()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_purchase_order(int(row["id"]), update_payload),
+                self.refresh_purchase(),
+            )
+        )
 
     def cancel_purchase_order_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_purchase_order(int(row["id"])), self.refresh_purchase)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_purchase_order(int(row["id"])),
+            self.refresh_purchase,
+        )
 
     def edit_purchase_invoice_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
@@ -3693,113 +3890,283 @@ class MainWindow(QWidget):
             [
                 ("doc_number", self._ui("number"), row.get("doc_number")),
                 ("doc_date", self._ui("date"), row.get("doc_date")),
-                ("counterparty_id", self.translator.text("purchase.form.supplier_id"), row.get("counterparty_id")),
-                ("warehouse_id", self.translator.text("purchase.form.warehouse_id"), row.get("warehouse_id")),
-                ("currency_id", self.translator.text("purchase.form.currency_id"), row.get("currency_id")),
-                ("currency_rate", self._humanize_key("currency_rate"), row.get("currency_rate")),
-                ("purchase_order_id", self.translator.text("purchase.form.order_id"), row.get("purchase_order_id")),
-                ("return_invoice_id", self.translator.text("purchase.form.return_invoice_id"), row.get("return_invoice_id")),
-                ("is_return", self.translator.text("purchase.create_return"), row.get("is_return")),
+                (
+                    "counterparty_id",
+                    self.translator.text("purchase.form.supplier_id"),
+                    row.get("counterparty_id"),
+                ),
+                (
+                    "warehouse_id",
+                    self.translator.text("purchase.form.warehouse_id"),
+                    row.get("warehouse_id"),
+                ),
+                (
+                    "currency_id",
+                    self.translator.text("purchase.form.currency_id"),
+                    row.get("currency_id"),
+                ),
+                (
+                    "currency_rate",
+                    self._humanize_key("currency_rate"),
+                    row.get("currency_rate"),
+                ),
+                (
+                    "purchase_order_id",
+                    self.translator.text("purchase.form.order_id"),
+                    row.get("purchase_order_id"),
+                ),
+                (
+                    "return_invoice_id",
+                    self.translator.text("purchase.form.return_invoice_id"),
+                    row.get("return_invoice_id"),
+                ),
+                (
+                    "is_return",
+                    self.translator.text("purchase.create_return"),
+                    row.get("is_return"),
+                ),
                 ("note", self._ui("note"), row.get("note")),
-                ("product_id", self.translator.text("purchase.form.product_id"), line.get("product_id")),
-                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
-                ("expense_category_id", self._humanize_key("expense_category_id"), line.get("expense_category_id")),
-                ("purchase_order_line_id", self.translator.text("purchase.form.order_line_id"), line.get("purchase_order_line_id")),
-                ("quantity", self.translator.text("purchase.form.quantity"), line.get("quantity")),
-                ("price_cur", self.translator.text("purchase.form.price"), line.get("price_cur")),
+                (
+                    "product_id",
+                    self.translator.text("purchase.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "service_id",
+                    self._humanize_key("service_id"),
+                    line.get("service_id"),
+                ),
+                (
+                    "expense_category_id",
+                    self._humanize_key("expense_category_id"),
+                    line.get("expense_category_id"),
+                ),
+                (
+                    "purchase_order_line_id",
+                    self.translator.text("purchase.form.order_line_id"),
+                    line.get("purchase_order_line_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("purchase.form.quantity"),
+                    line.get("quantity"),
+                ),
+                (
+                    "price_cur",
+                    self.translator.text("purchase.form.price"),
+                    line.get("price_cur"),
+                ),
             ],
         )
         if payload is None:
             return
         line_payload = self._line_payload_from_flat(payload)
         update_payload = {**payload, "lines": [line_payload]}
-        self._run_api(lambda: (self.api_client.update_purchase_invoice(int(row["id"]), update_payload), self.refresh_purchase()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_purchase_invoice(int(row["id"]), update_payload),
+                self.refresh_purchase(),
+            )
+        )
 
     def cancel_purchase_invoice_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_purchase_invoice(int(row["id"])), self.refresh_purchase)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_purchase_invoice(int(row["id"])),
+            self.refresh_purchase,
+        )
 
     def edit_inventory_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
-                ("qty_actual", self.translator.text("warehouse.form.quantity"), line.get("qty_actual")),
-                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+                (
+                    "product_id",
+                    self.translator.text("warehouse.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "qty_actual",
+                    self.translator.text("warehouse.form.quantity"),
+                    line.get("qty_actual"),
+                ),
+                (
+                    "unit_cost_tmt",
+                    self.translator.text("warehouse.form.unit_cost"),
+                    line.get("unit_cost_tmt"),
+                ),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.replace_inventory_lines(int(row["id"]), [payload]), self.refresh_warehouse()))
+            self._run_api(
+                lambda: (
+                    self.api_client.replace_inventory_lines(int(row["id"]), [payload]),
+                    self.refresh_warehouse(),
+                )
+            )
 
     def cancel_inventory_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_inventory(int(row["id"])), self.refresh_warehouse)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_inventory(int(row["id"])),
+            self.refresh_warehouse,
+        )
 
     def edit_stock_transfer_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("source_warehouse_id", self.translator.text("warehouse.form.source_warehouse_id"), row.get("source_warehouse_id")),
-                ("target_warehouse_id", self.translator.text("warehouse.form.target_warehouse_id"), row.get("target_warehouse_id")),
+                (
+                    "source_warehouse_id",
+                    self.translator.text("warehouse.form.source_warehouse_id"),
+                    row.get("source_warehouse_id"),
+                ),
+                (
+                    "target_warehouse_id",
+                    self.translator.text("warehouse.form.target_warehouse_id"),
+                    row.get("target_warehouse_id"),
+                ),
                 ("note", self._ui("note"), row.get("note")),
-                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
-                ("quantity", self.translator.text("warehouse.form.quantity"), line.get("quantity")),
-                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+                (
+                    "product_id",
+                    self.translator.text("warehouse.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("warehouse.form.quantity"),
+                    line.get("quantity"),
+                ),
+                (
+                    "unit_cost_tmt",
+                    self.translator.text("warehouse.form.unit_cost"),
+                    line.get("unit_cost_tmt"),
+                ),
             ],
         )
         if payload is None:
             return
         line_payload = self._line_payload_from_flat(payload)
         update_payload = {**payload, "lines": [line_payload]}
-        self._run_api(lambda: (self.api_client.update_stock_transfer(int(row["id"]), update_payload), self.refresh_warehouse()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_stock_transfer(int(row["id"]), update_payload),
+                self.refresh_warehouse(),
+            )
+        )
 
     def reject_stock_transfer_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.reject_stock_transfer(int(row["id"])), self.refresh_warehouse)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.reject_stock_transfer(int(row["id"])),
+            self.refresh_warehouse,
+        )
 
     def edit_stock_writeoff_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("warehouse_id", self.translator.text("warehouse.form.warehouse_id"), row.get("warehouse_id")),
-                ("reason_code", self.translator.text("warehouse.form.reason"), row.get("reason_code")),
+                (
+                    "warehouse_id",
+                    self.translator.text("warehouse.form.warehouse_id"),
+                    row.get("warehouse_id"),
+                ),
+                (
+                    "reason_code",
+                    self.translator.text("warehouse.form.reason"),
+                    row.get("reason_code"),
+                ),
                 ("note", self._ui("note"), row.get("note")),
-                ("product_id", self.translator.text("warehouse.form.product_id"), line.get("product_id")),
-                ("quantity", self.translator.text("warehouse.form.quantity"), line.get("quantity")),
-                ("unit_cost_tmt", self.translator.text("warehouse.form.unit_cost"), line.get("unit_cost_tmt")),
+                (
+                    "product_id",
+                    self.translator.text("warehouse.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("warehouse.form.quantity"),
+                    line.get("quantity"),
+                ),
+                (
+                    "unit_cost_tmt",
+                    self.translator.text("warehouse.form.unit_cost"),
+                    line.get("unit_cost_tmt"),
+                ),
             ],
         )
         if payload is None:
             return
         line_payload = self._line_payload_from_flat(payload)
         update_payload = {**payload, "lines": [line_payload]}
-        self._run_api(lambda: (self.api_client.update_stock_writeoff(int(row["id"]), update_payload), self.refresh_warehouse()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_stock_writeoff(int(row["id"]), update_payload),
+                self.refresh_warehouse(),
+            )
+        )
 
     def cancel_stock_writeoff_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_stock_writeoff(int(row["id"])), self.refresh_warehouse)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_stock_writeoff(int(row["id"])),
+            self.refresh_warehouse,
+        )
 
     def edit_cash_register_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
-                ("name", self.translator.text("cashier.form.register_name"), row.get("name")),
-                ("warehouse_id", self.translator.text("cashier.form.warehouse_id"), row.get("warehouse_id")),
+                (
+                    "name",
+                    self.translator.text("cashier.form.register_name"),
+                    row.get("name"),
+                ),
+                (
+                    "warehouse_id",
+                    self.translator.text("cashier.form.warehouse_id"),
+                    row.get("warehouse_id"),
+                ),
                 ("is_active", self._ui("active"), row.get("is_active")),
             ],
         )
         if payload is not None:
-            self._run_api(lambda: (self.api_client.update_cash_register(int(row["id"]), payload), self.refresh_cashier()))
+            self._run_api(
+                lambda: (
+                    self.api_client.update_cash_register(int(row["id"]), payload),
+                    self.refresh_cashier(),
+                )
+            )
 
     def toggle_cash_register_active_action(self, row: dict[str, object]) -> None:
-        self._toggle_active(row, self.api_client.update_cash_register, self.refresh_cashier)
+        self._toggle_active(
+            row, self.api_client.update_cash_register, self.refresh_cashier
+        )
 
     def close_cash_shift_action(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.close"),
-            [("closing_amount", self.translator.text("cashier.form.closing_amount"), row.get("closing_amount") or row.get("opening_amount") or "0")],
+            [
+                (
+                    "closing_amount",
+                    self.translator.text("cashier.form.closing_amount"),
+                    row.get("closing_amount") or row.get("opening_amount") or "0",
+                )
+            ],
         )
         if payload is not None:
-            self._confirming_api_action(row, "crud.close", lambda: self.api_client.close_cash_shift(int(row["id"]), payload), self.refresh_cashier)
+            self._confirming_api_action(
+                row,
+                "crud.close",
+                lambda: self.api_client.close_cash_shift(int(row["id"]), payload),
+                self.refresh_cashier,
+            )
 
     def edit_sale_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
@@ -3808,21 +4175,81 @@ class MainWindow(QWidget):
             [
                 ("doc_number", self._ui("number"), row.get("doc_number")),
                 ("doc_date", self._ui("date"), row.get("doc_date")),
-                ("sale_type", self.translator.text("sales.table.type"), row.get("sale_type")),
-                ("cash_register_id", self.translator.text("sales.form.cash_register_id"), row.get("cash_register_id")),
-                ("cash_shift_id", self.translator.text("sales.form.cash_shift_id"), row.get("cash_shift_id")),
-                ("counterparty_id", self.translator.text("sales.form.customer_id"), row.get("counterparty_id")),
-                ("warehouse_id", self.translator.text("sales.form.warehouse_id"), row.get("warehouse_id")),
-                ("currency_id", self.translator.text("sales.form.currency_id"), row.get("currency_id")),
-                ("payment_type", self.translator.text("sales.form.payment_type"), row.get("payment_type")),
-                ("paid_cash_tmt", self.translator.text("sales.form.paid_cash"), row.get("paid_cash_tmt")),
-                ("paid_transfer_tmt", self.translator.text("sales.form.paid_transfer"), row.get("paid_transfer_tmt")),
-                ("debt_amount_tmt", self.translator.text("sales.form.debt_amount"), row.get("debt_amount_tmt")),
-                ("product_id", self.translator.text("sales.form.product_id"), line.get("product_id")),
-                ("service_id", self._humanize_key("service_id"), line.get("service_id")),
-                ("quantity", self.translator.text("sales.form.quantity"), line.get("quantity")),
-                ("price_final", self.translator.text("sales.form.price"), line.get("price_final")),
-                ("discount_percent", self._humanize_key("discount_percent"), line.get("discount_percent")),
+                (
+                    "sale_type",
+                    self.translator.text("sales.table.type"),
+                    row.get("sale_type"),
+                ),
+                (
+                    "cash_register_id",
+                    self.translator.text("sales.form.cash_register_id"),
+                    row.get("cash_register_id"),
+                ),
+                (
+                    "cash_shift_id",
+                    self.translator.text("sales.form.cash_shift_id"),
+                    row.get("cash_shift_id"),
+                ),
+                (
+                    "counterparty_id",
+                    self.translator.text("sales.form.customer_id"),
+                    row.get("counterparty_id"),
+                ),
+                (
+                    "warehouse_id",
+                    self.translator.text("sales.form.warehouse_id"),
+                    row.get("warehouse_id"),
+                ),
+                (
+                    "currency_id",
+                    self.translator.text("sales.form.currency_id"),
+                    row.get("currency_id"),
+                ),
+                (
+                    "payment_type",
+                    self.translator.text("sales.form.payment_type"),
+                    row.get("payment_type"),
+                ),
+                (
+                    "paid_cash_tmt",
+                    self.translator.text("sales.form.paid_cash"),
+                    row.get("paid_cash_tmt"),
+                ),
+                (
+                    "paid_transfer_tmt",
+                    self.translator.text("sales.form.paid_transfer"),
+                    row.get("paid_transfer_tmt"),
+                ),
+                (
+                    "debt_amount_tmt",
+                    self.translator.text("sales.form.debt_amount"),
+                    row.get("debt_amount_tmt"),
+                ),
+                (
+                    "product_id",
+                    self.translator.text("sales.form.product_id"),
+                    line.get("product_id"),
+                ),
+                (
+                    "service_id",
+                    self._humanize_key("service_id"),
+                    line.get("service_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("sales.form.quantity"),
+                    line.get("quantity"),
+                ),
+                (
+                    "price_final",
+                    self.translator.text("sales.form.price"),
+                    line.get("price_final"),
+                ),
+                (
+                    "discount_percent",
+                    self._humanize_key("discount_percent"),
+                    line.get("discount_percent"),
+                ),
             ],
         )
         if payload is None:
@@ -3832,10 +4259,20 @@ class MainWindow(QWidget):
         payload.setdefault("discount_percent", row.get("discount_percent") or "0")
         payload.setdefault("discount_amount_tmt", row.get("discount_amount_tmt") or "0")
         payload["lines"] = [line_payload]
-        self._run_api(lambda: (self.api_client.update_sale(int(row["id"]), payload), self.refresh_sales()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_sale(int(row["id"]), payload),
+                self.refresh_sales(),
+            )
+        )
 
     def cancel_sale_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_sale(int(row["id"])), self.refresh_sales)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_sale(int(row["id"])),
+            self.refresh_sales,
+        )
 
     def edit_sale_return_dialog(self, row: dict[str, object]) -> None:
         line = self._first_line(row)
@@ -3844,16 +4281,56 @@ class MainWindow(QWidget):
             [
                 ("doc_number", self._ui("number"), row.get("doc_number")),
                 ("doc_date", self._ui("date"), row.get("doc_date")),
-                ("sale_id", self.translator.text("sales.form.sale_id"), row.get("sale_id")),
-                ("cash_register_id", self.translator.text("sales.form.cash_register_id"), row.get("cash_register_id")),
-                ("cash_shift_id", self.translator.text("sales.form.cash_shift_id"), row.get("cash_shift_id")),
-                ("refund_method", self.translator.text("sales.form.refund_method"), row.get("refund_method")),
-                ("refund_cash_tmt", self.translator.text("sales.form.refund_cash"), row.get("refund_cash_tmt")),
-                ("refund_transfer_tmt", self.translator.text("sales.form.refund_transfer"), row.get("refund_transfer_tmt")),
-                ("receivable_correction_tmt", self.translator.text("sales.form.receivable_correction"), row.get("receivable_correction_tmt")),
-                ("source_sale_line_id", self.translator.text("sales.form.sale_line_id"), line.get("source_sale_line_id")),
-                ("quantity", self.translator.text("sales.form.quantity"), line.get("quantity")),
-                ("price_final", self.translator.text("sales.form.price"), line.get("price_final")),
+                (
+                    "sale_id",
+                    self.translator.text("sales.form.sale_id"),
+                    row.get("sale_id"),
+                ),
+                (
+                    "cash_register_id",
+                    self.translator.text("sales.form.cash_register_id"),
+                    row.get("cash_register_id"),
+                ),
+                (
+                    "cash_shift_id",
+                    self.translator.text("sales.form.cash_shift_id"),
+                    row.get("cash_shift_id"),
+                ),
+                (
+                    "refund_method",
+                    self.translator.text("sales.form.refund_method"),
+                    row.get("refund_method"),
+                ),
+                (
+                    "refund_cash_tmt",
+                    self.translator.text("sales.form.refund_cash"),
+                    row.get("refund_cash_tmt"),
+                ),
+                (
+                    "refund_transfer_tmt",
+                    self.translator.text("sales.form.refund_transfer"),
+                    row.get("refund_transfer_tmt"),
+                ),
+                (
+                    "receivable_correction_tmt",
+                    self.translator.text("sales.form.receivable_correction"),
+                    row.get("receivable_correction_tmt"),
+                ),
+                (
+                    "source_sale_line_id",
+                    self.translator.text("sales.form.sale_line_id"),
+                    line.get("source_sale_line_id"),
+                ),
+                (
+                    "quantity",
+                    self.translator.text("sales.form.quantity"),
+                    line.get("quantity"),
+                ),
+                (
+                    "price_final",
+                    self.translator.text("sales.form.price"),
+                    line.get("price_final"),
+                ),
             ],
         )
         if payload is None:
@@ -3861,21 +4338,43 @@ class MainWindow(QWidget):
         try:
             source_sale_line_id = int(payload.pop("source_sale_line_id"))
         except (TypeError, ValueError):
-            QMessageBox.critical(self, self.translator.text("common.error"), self.translator.text("sales.form.sale_line_id"))
+            QMessageBox.critical(
+                self,
+                self.translator.text("common.error"),
+                self.translator.text("sales.form.sale_line_id"),
+            )
             return
-        line_payload = {"source_sale_line_id": source_sale_line_id, "quantity": payload.pop("quantity"), "price_final": payload.pop("price_final")}
+        line_payload = {
+            "source_sale_line_id": source_sale_line_id,
+            "quantity": payload.pop("quantity"),
+            "price_final": payload.pop("price_final"),
+        }
         payload["lines"] = [line_payload]
-        self._run_api(lambda: (self.api_client.update_sale_return(int(row["id"]), payload), self.refresh_sales()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_sale_return(int(row["id"]), payload),
+                self.refresh_sales(),
+            )
+        )
 
     def cancel_sale_return_action(self, row: dict[str, object]) -> None:
-        self._confirming_api_action(row, "crud.cancel", lambda: self.api_client.cancel_sale_return(int(row["id"])), self.refresh_sales)
+        self._confirming_api_action(
+            row,
+            "crud.cancel",
+            lambda: self.api_client.cancel_sale_return(int(row["id"])),
+            self.refresh_sales,
+        )
 
     def edit_report_filter_dialog(self, row: dict[str, object]) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
                 ("name", self._ui("name"), row.get("name")),
-                ("filters", self._ui("filters"), json.dumps(row.get("filters") or {}, ensure_ascii=False)),
+                (
+                    "filters",
+                    self._ui("filters"),
+                    json.dumps(row.get("filters") or {}, ensure_ascii=False),
+                ),
                 ("is_shared", self._ui("shared"), row.get("is_shared")),
             ],
         )
@@ -3886,12 +4385,22 @@ class MainWindow(QWidget):
         except json.JSONDecodeError as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
             return
-        self._run_api(lambda: (self.api_client.update_report_filter(int(row["id"]), payload), self.refresh_reports()))
+        self._run_api(
+            lambda: (
+                self.api_client.update_report_filter(int(row["id"]), payload),
+                self.refresh_reports(),
+            )
+        )
 
     def delete_report_filter_action(self, row: dict[str, object]) -> None:
         label = self.translator.text("crud.delete")
         if self._confirm_record_action(row, label, hard_delete=True):
-            self._run_api(lambda: (self.api_client.delete_report_filter(int(row["id"])), self.refresh_reports()))
+            self._run_api(
+                lambda: (
+                    self.api_client.delete_report_filter(int(row["id"])),
+                    self.refresh_reports(),
+                )
+            )
 
     def create_product_group_dialog(self) -> None:
         """Create a product group."""
@@ -3905,7 +4414,10 @@ class MainWindow(QWidget):
         form.addRow(self.translator.text("catalog.form.code"), code)
         form.addRow(self.translator.text("catalog.form.name_ru"), name_ru)
         form.addRow(self.translator.text("catalog.form.name_tk"), name_tk)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -3941,7 +4453,10 @@ class MainWindow(QWidget):
             ("catalog.form.barcode", barcode),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -3981,7 +4496,10 @@ class MainWindow(QWidget):
             ("catalog.form.price", price),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4007,7 +4525,9 @@ class MainWindow(QWidget):
         form = QFormLayout(dialog)
         barcode = QLineEdit()
         form.addRow(self.translator.text("catalog.form.barcode"), barcode)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4027,7 +4547,12 @@ class MainWindow(QWidget):
         dialog.setWindowTitle(self.translator.text("catalog.find_barcode"))
         dialog.setMinimumSize(520, 360)
         layout = QVBoxLayout(dialog)
-        header = QLabel(product.get("name") or product.get("name_ru") or product.get("sku") or self.translator.text("catalog.find_barcode"))
+        header = QLabel(
+            product.get("name")
+            or product.get("name_ru")
+            or product.get("sku")
+            or self.translator.text("catalog.find_barcode")
+        )
         header.setObjectName("PageTitle")
         layout.addWidget(header)
         summary, summary_layout = self._metric_area()
@@ -4035,15 +4560,24 @@ class MainWindow(QWidget):
             summary_layout,
             [
                 (self._ui("sku"), product.get("sku") or product.get("code")),
-                (self._ui("retail_price"), product.get("retail_price") or product.get("default_price")),
+                (
+                    self._ui("retail_price"),
+                    product.get("retail_price") or product.get("default_price"),
+                ),
                 (self._ui("active"), product.get("is_active")),
             ],
         )
         layout.addWidget(summary)
-        rows = [{"field": self._humanize_key(key), "value": value} for key, value in product.items() if key != "barcodes"]
+        rows = [
+            {"field": self._humanize_key(key), "value": value}
+            for key, value in product.items()
+            if key != "barcodes"
+        ]
         table = QTableWidget(0, 2)
         self._configure_table(table)
-        self._populate_table(table, rows, [("field", self._ui("field")), ("value", self._ui("value"))])
+        self._populate_table(
+            table, rows, [("field", self._ui("field")), ("value", self._ui("value"))]
+        )
         layout.addWidget(table, 1)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         buttons.accepted.connect(dialog.accept)
@@ -4069,7 +4603,10 @@ class MainWindow(QWidget):
             ("counterparties.form.address", address),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4083,7 +4620,11 @@ class MainWindow(QWidget):
                     "code": code.text().strip(),
                     "name": name.text().strip(),
                     "role_flags": role_flags,
-                    "counterparty_type": "supplier" if role_flags == 1 else "both" if role_flags == 3 else "customer",
+                    "counterparty_type": "supplier"
+                    if role_flags == 1
+                    else "both"
+                    if role_flags == 3
+                    else "customer",
                     "phone": phone.text().strip() or None,
                     "address": address.text().strip() or None,
                 }
@@ -4102,9 +4643,14 @@ class MainWindow(QWidget):
         currency_id = QLineEdit()
         is_default = QLineEdit("true")
         form.addRow(self.translator.text("pricing.form.name"), name)
-        self._add_selector_row(form, "pricing.form.currency_id", currency_id, self._select_currency_id)
+        self._add_selector_row(
+            form, "pricing.form.currency_id", currency_id, self._select_currency_id
+        )
         form.addRow(self.translator.text("pricing.table.default"), is_default)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4112,12 +4658,15 @@ class MainWindow(QWidget):
             return
 
         def action() -> None:
-            selected_currency_id = int(currency_id.text().strip() or self._default_currency_id())
+            selected_currency_id = int(
+                currency_id.text().strip() or self._default_currency_id()
+            )
             self.api_client.create_price_list(
                 {
                     "name_ru": name.text().strip(),
                     "currency_id": selected_currency_id,
-                    "is_default": is_default.text().strip().lower() in {"1", "true", "yes", "да"},
+                    "is_default": is_default.text().strip().lower()
+                    in {"1", "true", "yes", "да"},
                 }
             )
             self.refresh_pricing()
@@ -4134,14 +4683,27 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         product_price = QLineEdit("0")
         valid_from = QLineEdit(date.today().isoformat())
-        self._add_selector_row(form, "pricing.form.price_list_id", price_list_id, self._select_price_list_id)
-        self._add_selector_row(form, "pricing.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=product_price))
+        self._add_selector_row(
+            form,
+            "pricing.form.price_list_id",
+            price_list_id,
+            self._select_price_list_id,
+        )
+        self._add_selector_row(
+            form,
+            "pricing.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=product_price),
+        )
         for key, widget in (
             ("pricing.form.price", product_price),
             ("pricing.form.valid_from", valid_from),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4173,16 +4735,30 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
-        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
-        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
-        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
+        self._add_selector_row(
+            form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.currency_id", currency_id, self._select_currency_id
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=purchase_price),
+        )
         for key, widget in (
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4194,7 +4770,9 @@ class MainWindow(QWidget):
                 {
                     "counterparty_id": int(supplier_id.text().strip()),
                     "warehouse_id": int(warehouse_id.text().strip()),
-                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "currency_id": int(
+                        currency_id.text().strip() or self._default_currency_id()
+                    ),
                     "currency_rate": "1",
                     "lines": [
                         {
@@ -4209,7 +4787,6 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-
     def create_purchase_invoice_dialog(self) -> None:
         """Create and post a one-line purchase invoice."""
 
@@ -4222,16 +4799,30 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
-        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
-        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
-        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
+        self._add_selector_row(
+            form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.currency_id", currency_id, self._select_currency_id
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=purchase_price),
+        )
         for key, widget in (
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4243,7 +4834,9 @@ class MainWindow(QWidget):
                 {
                     "counterparty_id": int(supplier_id.text().strip()),
                     "warehouse_id": int(warehouse_id.text().strip()),
-                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "currency_id": int(
+                        currency_id.text().strip() or self._default_currency_id()
+                    ),
                     "currency_rate": "1",
                     "lines": [
                         {
@@ -4275,19 +4868,45 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("1")
         purchase_price = QLineEdit("0")
-        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
-        self._add_selector_row(form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "purchase.form.currency_id", currency_id, self._select_currency_id)
-        self._add_selector_row(form, "purchase.form.return_invoice_id", source_invoice_id, self._select_purchase_invoice_id)
-        self._add_selector_row(form, "purchase.form.order_id", order_id, self._select_purchase_order_id)
-        self._add_selector_row(form, "purchase.form.order_line_id", order_line_id, lambda field: self._select_purchase_order_line_id(field, order_id))
-        self._add_selector_row(form, "purchase.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=purchase_price))
+        self._add_selector_row(
+            form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form, "purchase.form.currency_id", currency_id, self._select_currency_id
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.return_invoice_id",
+            source_invoice_id,
+            self._select_purchase_invoice_id,
+        )
+        self._add_selector_row(
+            form, "purchase.form.order_id", order_id, self._select_purchase_order_id
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.order_line_id",
+            order_line_id,
+            lambda field: self._select_purchase_order_line_id(field, order_id),
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=purchase_price),
+        )
         for key, widget in (
             ("purchase.form.quantity", quantity),
             ("purchase.form.price", purchase_price),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4310,7 +4929,9 @@ class MainWindow(QWidget):
             payload: dict[str, object] = {
                 "counterparty_id": int(supplier_id.text().strip()),
                 "warehouse_id": int(warehouse_id.text().strip()),
-                "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                "currency_id": int(
+                    currency_id.text().strip() or self._default_currency_id()
+                ),
                 "currency_rate": "1",
                 "return_invoice_id": int(source_invoice_id.text().strip()),
                 "lines": [line],
@@ -4325,7 +4946,6 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-
     def create_supplier_payment_dialog(self) -> None:
         """Create an outgoing supplier payment."""
 
@@ -4335,10 +4955,20 @@ class MainWindow(QWidget):
         supplier_id = QLineEdit()
         invoice_id = QLineEdit()
         amount = QLineEdit("0")
-        self._add_selector_row(form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id)
-        self._add_selector_row(form, "purchase.form.invoice_id", invoice_id, self._select_purchase_invoice_id)
+        self._add_selector_row(
+            form, "purchase.form.supplier_id", supplier_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form,
+            "purchase.form.invoice_id",
+            invoice_id,
+            self._select_purchase_invoice_id,
+        )
         form.addRow(self.translator.text("purchase.form.payment_amount"), amount)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4384,12 +5014,30 @@ class MainWindow(QWidget):
         paid_cash = QLineEdit("0")
         paid_transfer = QLineEdit("0")
         debt_amount = QLineEdit("0")
-        self._add_selector_row(form, "sales.form.cash_register_id", cash_register_id, self._select_cash_register_id)
-        self._add_selector_row(form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id)
-        self._add_selector_row(form, "sales.form.customer_id", customer_id, self._select_counterparty_id)
-        self._add_selector_row(form, "sales.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "sales.form.currency_id", currency_id, self._select_currency_id)
-        self._add_selector_row(form, "sales.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=sale_price))
+        self._add_selector_row(
+            form,
+            "sales.form.cash_register_id",
+            cash_register_id,
+            self._select_cash_register_id,
+        )
+        self._add_selector_row(
+            form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id
+        )
+        self._add_selector_row(
+            form, "sales.form.customer_id", customer_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form, "sales.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form, "sales.form.currency_id", currency_id, self._select_currency_id
+        )
+        self._add_selector_row(
+            form,
+            "sales.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=sale_price),
+        )
         for key, widget in (
             ("sales.form.quantity", quantity),
             ("sales.form.price", sale_price),
@@ -4399,7 +5047,10 @@ class MainWindow(QWidget):
             ("sales.form.debt_amount", debt_amount),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4418,7 +5069,9 @@ class MainWindow(QWidget):
                     "cash_shift_id": optional_int(cash_shift_id),
                     "counterparty_id": optional_int(customer_id),
                     "warehouse_id": int(warehouse_id.text().strip()),
-                    "currency_id": int(currency_id.text().strip() or self._default_currency_id()),
+                    "currency_id": int(
+                        currency_id.text().strip() or self._default_currency_id()
+                    ),
                     "payment_type": payment_type.text().strip() or "cash",
                     "paid_cash_tmt": paid_cash.text().strip() or "0",
                     "paid_transfer_tmt": paid_transfer.text().strip() or "0",
@@ -4452,10 +5105,24 @@ class MainWindow(QWidget):
         refund_cash = QLineEdit("0")
         refund_transfer = QLineEdit("0")
         receivable_correction = QLineEdit("0")
-        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
-        self._add_selector_row(form, "sales.form.sale_line_id", sale_line_id, lambda field: self._select_sale_line_id(field, sale_id))
-        self._add_selector_row(form, "sales.form.cash_register_id", cash_register_id, self._select_cash_register_id)
-        self._add_selector_row(form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id)
+        self._add_selector_row(
+            form, "sales.form.sale_id", sale_id, self._select_sale_id
+        )
+        self._add_selector_row(
+            form,
+            "sales.form.sale_line_id",
+            sale_line_id,
+            lambda field: self._select_sale_line_id(field, sale_id),
+        )
+        self._add_selector_row(
+            form,
+            "sales.form.cash_register_id",
+            cash_register_id,
+            self._select_cash_register_id,
+        )
+        self._add_selector_row(
+            form, "sales.form.cash_shift_id", cash_shift_id, self._select_cash_shift_id
+        )
         for key, widget in (
             ("sales.form.quantity", quantity),
             ("sales.form.refund_method", refund_method),
@@ -4464,7 +5131,10 @@ class MainWindow(QWidget):
             ("sales.form.receivable_correction", receivable_correction),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4481,7 +5151,8 @@ class MainWindow(QWidget):
                 "refund_method": refund_method.text().strip() or "debt_correction",
                 "refund_cash_tmt": refund_cash.text().strip() or "0",
                 "refund_transfer_tmt": refund_transfer.text().strip() or "0",
-                "receivable_correction_tmt": receivable_correction.text().strip() or "0",
+                "receivable_correction_tmt": receivable_correction.text().strip()
+                or "0",
                 "lines": [
                     {
                         "source_sale_line_id": int(sale_line_id.text().strip()),
@@ -4502,7 +5173,6 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-
     def create_customer_payment_dialog(self) -> None:
         """Create an incoming customer payment."""
 
@@ -4513,11 +5183,20 @@ class MainWindow(QWidget):
         sale_id = QLineEdit()
         shift_id = QLineEdit()
         amount = QLineEdit("0")
-        self._add_selector_row(form, "sales.form.customer_id", customer_id, self._select_counterparty_id)
-        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
-        self._add_selector_row(form, "sales.form.cash_shift_id", shift_id, self._select_cash_shift_id)
+        self._add_selector_row(
+            form, "sales.form.customer_id", customer_id, self._select_counterparty_id
+        )
+        self._add_selector_row(
+            form, "sales.form.sale_id", sale_id, self._select_sale_id
+        )
+        self._add_selector_row(
+            form, "sales.form.cash_shift_id", shift_id, self._select_cash_shift_id
+        )
         form.addRow(self.translator.text("sales.form.paid_cash"), amount)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4555,8 +5234,12 @@ class MainWindow(QWidget):
         dialog.setWindowTitle(self.translator.text("sales.cancel"))
         form = QFormLayout(dialog)
         sale_id = QLineEdit()
-        self._add_selector_row(form, "sales.form.sale_id", sale_id, self._select_sale_id)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self._add_selector_row(
+            form, "sales.form.sale_id", sale_id, self._select_sale_id
+        )
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4587,7 +5270,9 @@ class MainWindow(QWidget):
         def action() -> None:
             barcode = self.cashier_barcode_input.text().strip()
             if barcode and not self.cashier_product_id_input.text().strip():
-                self._cashier_set_product_inputs(self.api_client.find_product_by_barcode(barcode))
+                self._cashier_set_product_inputs(
+                    self.api_client.find_product_by_barcode(barcode)
+                )
             self.cashier_cart.append(self._cashier_cart_row_from_inputs())
             self._refresh_cashier_cart_table()
 
@@ -4655,20 +5340,39 @@ class MainWindow(QWidget):
                 debt_amount = total
                 self.cashier_debt_amount_input.setText(str(total))
             else:
-                paid_cash = self._cashier_decimal_text(self.cashier_paid_cash_input.text())
-                paid_transfer = self._cashier_decimal_text(self.cashier_paid_transfer_input.text())
-                debt_amount = self._cashier_decimal_text(self.cashier_debt_amount_input.text())
-                if (paid_cash + paid_transfer + debt_amount).quantize(Decimal("0.01")) != total:
-                    raise ValueError(self.translator.text("cashier.error.mixed_payment_total"))
+                paid_cash = self._cashier_decimal_text(
+                    self.cashier_paid_cash_input.text()
+                )
+                paid_transfer = self._cashier_decimal_text(
+                    self.cashier_paid_transfer_input.text()
+                )
+                debt_amount = self._cashier_decimal_text(
+                    self.cashier_debt_amount_input.text()
+                )
+                if (paid_cash + paid_transfer + debt_amount).quantize(
+                    Decimal("0.01")
+                ) != total:
+                    raise ValueError(
+                        self.translator.text("cashier.error.mixed_payment_total")
+                    )
             customer_id = self._cashier_optional_int(self.cashier_customer_id_input)
             if debt_amount > Decimal("0.00") and customer_id is None:
-                raise ValueError(self.translator.text("cashier.error.customer_required"))
-            cash_register_id = self._cashier_optional_int(self.cashier_register_id_input)
+                raise ValueError(
+                    self.translator.text("cashier.error.customer_required")
+                )
+            cash_register_id = self._cashier_optional_int(
+                self.cashier_register_id_input
+            )
             cash_shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
             warehouse_id = self._cashier_optional_int(self.cashier_warehouse_id_input)
             if warehouse_id is None:
-                raise ValueError(self.translator.text("cashier.error.warehouse_required"))
-            currency_id = self._cashier_optional_int(self.cashier_currency_id_input) or self._default_currency_id()
+                raise ValueError(
+                    self.translator.text("cashier.error.warehouse_required")
+                )
+            currency_id = (
+                self._cashier_optional_int(self.cashier_currency_id_input)
+                or self._default_currency_id()
+            )
             payload: dict[str, object] = {
                 "sale_type": "retail",
                 "cash_register_id": cash_register_id,
@@ -4708,7 +5412,11 @@ class MainWindow(QWidget):
     def cashier_print_receipt(self) -> None:
         """Send the current receipt preview to the configured printer adapter."""
 
-        lines = [line for line in self.cashier_receipt_preview.toPlainText().splitlines() if line.strip()]
+        lines = [
+            line
+            for line in self.cashier_receipt_preview.toPlainText().splitlines()
+            if line.strip()
+        ]
         if not lines:
             lines = self._cashier_receipt_lines(None)
             self.cashier_receipt_preview.setPlainText("\n".join(lines))
@@ -4751,13 +5459,22 @@ class MainWindow(QWidget):
         self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
         title = f"{self._format_value(report.get('report_type'))} {self._ui('report_suffix')}"
         self._render_cash_report(report, title=title)
-        self.cashier_receipt_preview.setPlainText("\n".join(self._cashier_report_lines(report)))
+        self.cashier_receipt_preview.setPlainText(
+            "\n".join(self._cashier_report_lines(report))
+        )
 
     def _cashier_set_product_inputs(self, product: dict[str, object]) -> None:
         """Populate product entry fields from a catalog payload."""
 
         self.cashier_product_id_input.setText(str(product.get("id", "")))
-        self.cashier_product_name_input.setText(str(product.get("name") or product.get("name_ru") or product.get("sku") or ""))
+        self.cashier_product_name_input.setText(
+            str(
+                product.get("name")
+                or product.get("name_ru")
+                or product.get("sku")
+                or ""
+            )
+        )
         self.cashier_price_input.setText(str(product.get("retail_price") or "0"))
 
     def _cashier_cart_row_from_inputs(self) -> dict[str, object]:
@@ -4766,9 +5483,13 @@ class MainWindow(QWidget):
         product_id = self._cashier_optional_int(self.cashier_product_id_input)
         if product_id is None:
             raise ValueError(self.translator.text("cashier.error.product_required"))
-        quantity = self._cashier_decimal_text(self.cashier_quantity_input.text(), Decimal("1.0000"))
+        quantity = self._cashier_decimal_text(
+            self.cashier_quantity_input.text(), Decimal("1.0000")
+        )
         price_final = self._cashier_decimal_text(self.cashier_price_input.text())
-        discount_percent = self._cashier_decimal_text(self.cashier_discount_input.text())
+        discount_percent = self._cashier_decimal_text(
+            self.cashier_discount_input.text()
+        )
         if quantity <= Decimal("0.00"):
             raise ValueError(self.translator.text("cashier.error.quantity_positive"))
         if price_final < Decimal("0.00"):
@@ -4777,7 +5498,8 @@ class MainWindow(QWidget):
             raise ValueError(self.translator.text("cashier.error.discount_range"))
         return {
             "product_id": product_id,
-            "product_name": self.cashier_product_name_input.text().strip() or f"{self._ui('product')} {product_id}",
+            "product_name": self.cashier_product_name_input.text().strip()
+            or f"{self._ui('product')} {product_id}",
             "quantity": quantity,
             "price_final": price_final,
             "discount_percent": discount_percent,
@@ -4797,7 +5519,9 @@ class MainWindow(QWidget):
         text = widget.text().strip()
         return int(text) if text else None
 
-    def _cashier_decimal_text(self, text: str, default: Decimal = Decimal("0.00")) -> Decimal:
+    def _cashier_decimal_text(
+        self, text: str, default: Decimal = Decimal("0.00")
+    ) -> Decimal:
         """Parse a decimal input with a default for blank values."""
 
         value = text.strip()
@@ -4809,13 +5533,21 @@ class MainWindow(QWidget):
         quantity = Decimal(str(item["quantity"]))
         price_final = Decimal(str(item["price_final"]))
         discount_percent = Decimal(str(item["discount_percent"]))
-        amount = quantity * price_final * (Decimal("100.00") - discount_percent) / Decimal("100.00")
+        amount = (
+            quantity
+            * price_final
+            * (Decimal("100.00") - discount_percent)
+            / Decimal("100.00")
+        )
         return amount.quantize(Decimal("0.01"))
 
     def _cashier_cart_total(self) -> Decimal:
         """Return the current cart total."""
 
-        return sum((self._cashier_line_amount(item) for item in self.cashier_cart), Decimal("0.00")).quantize(Decimal("0.01"))
+        return sum(
+            (self._cashier_line_amount(item) for item in self.cashier_cart),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01"))
 
     def _refresh_cashier_cart_table(self) -> None:
         """Refresh cart table rows and total label."""
@@ -4831,7 +5563,9 @@ class MainWindow(QWidget):
             ]
             for col, value in enumerate(values):
                 self.cashier_cart_table.setItem(row, col, self._table_item(value))
-        self.cashier_total_label.setText(f"{self.translator.text('cashier.cart.total')}: {self._cashier_cart_total()} TMT")
+        self.cashier_total_label.setText(
+            f"{self.translator.text('cashier.cart.total')}: {self._cashier_cart_total()} TMT"
+        )
 
     def _cashier_receipt_lines(self, sale: dict[str, object] | None) -> list[str]:
         """Build receipt-preview lines for a posted sale or current cart."""
@@ -4843,13 +5577,21 @@ class MainWindow(QWidget):
             if isinstance(sale_lines, list):
                 for item in sale_lines:
                     if isinstance(item, dict):
-                        name = item.get("product_name") or item.get("service_name_ru") or item.get("product_id")
-                        lines.append(f"{name} x {item.get('quantity')} = {item.get('amount_tmt')} TMT")
+                        name = (
+                            item.get("product_name")
+                            or item.get("service_name_ru")
+                            or item.get("product_id")
+                        )
+                        lines.append(
+                            f"{name} x {item.get('quantity')} = {item.get('amount_tmt')} TMT"
+                        )
             lines.append(f"Total: {sale.get('total_amount_tmt', '0.00')} TMT")
             lines.append(f"Payment: {sale.get('payment_type', '')}")
             return lines
         for item in self.cashier_cart:
-            lines.append(f"{item.get('product_name')} x {item.get('quantity')} = {self._cashier_line_amount(item)} TMT")
+            lines.append(
+                f"{item.get('product_name')} x {item.get('quantity')} = {self._cashier_line_amount(item)} TMT"
+            )
         lines.append(f"Total: {self._cashier_cart_total()} TMT")
         return lines
 
@@ -4878,8 +5620,13 @@ class MainWindow(QWidget):
         name = QLineEdit()
         warehouse_id = QLineEdit()
         form.addRow(self.translator.text("cashier.form.register_name"), name)
-        self._add_selector_row(form, "cashier.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self._add_selector_row(
+            form, "cashier.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4887,7 +5634,12 @@ class MainWindow(QWidget):
             return
 
         def action() -> None:
-            self.api_client.create_cash_register({"name": name.text().strip(), "warehouse_id": int(warehouse_id.text().strip())})
+            self.api_client.create_cash_register(
+                {
+                    "name": name.text().strip(),
+                    "warehouse_id": int(warehouse_id.text().strip()),
+                }
+            )
             self.refresh_cashier()
 
         self._run_api(action)
@@ -4900,9 +5652,14 @@ class MainWindow(QWidget):
         form = QFormLayout(dialog)
         register_id = QLineEdit()
         opening_amount = QLineEdit("0")
-        self._add_selector_row(form, "cashier.form.register_id", register_id, self._select_cash_register_id)
+        self._add_selector_row(
+            form, "cashier.form.register_id", register_id, self._select_cash_register_id
+        )
         form.addRow(self.translator.text("cashier.form.opening_amount"), opening_amount)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4928,9 +5685,14 @@ class MainWindow(QWidget):
         form = QFormLayout(dialog)
         shift_id = QLineEdit()
         closing_amount = QLineEdit("0")
-        self._add_selector_row(form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id)
+        self._add_selector_row(
+            form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id
+        )
         form.addRow(self.translator.text("cashier.form.closing_amount"), closing_amount)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4938,7 +5700,10 @@ class MainWindow(QWidget):
             return
 
         def action() -> None:
-            self.api_client.close_cash_shift(int(shift_id.text().strip()), {"closing_amount": closing_amount.text().strip() or "0"})
+            self.api_client.close_cash_shift(
+                int(shift_id.text().strip()),
+                {"closing_amount": closing_amount.text().strip() or "0"},
+            )
             self.refresh_cashier()
 
         self._run_api(action)
@@ -4954,12 +5719,24 @@ class MainWindow(QWidget):
         operation_type = QLineEdit("collection")
         amount = QLineEdit("0")
         target_register_id = QLineEdit()
-        self._add_selector_row(form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id)
-        self._add_selector_row(form, "cashier.form.register_id", register_id, self._select_cash_register_id)
+        self._add_selector_row(
+            form, "cashier.form.shift_id", shift_id, self._select_cash_shift_id
+        )
+        self._add_selector_row(
+            form, "cashier.form.register_id", register_id, self._select_cash_register_id
+        )
         form.addRow(self.translator.text("cashier.form.operation_type"), operation_type)
         form.addRow(self.translator.text("cashier.form.amount"), amount)
-        self._add_selector_row(form, "cashier.form.target_register_id", target_register_id, self._select_cash_register_id)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        self._add_selector_row(
+            form,
+            "cashier.form.target_register_id",
+            target_register_id,
+            self._select_cash_register_id,
+        )
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -4993,7 +5770,10 @@ class MainWindow(QWidget):
         form.addRow(self.translator.text("warehouse.form.code"), code)
         form.addRow(self.translator.text("warehouse.form.name"), name)
         form.addRow(self.translator.text("warehouse.form.location"), location)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -5022,14 +5802,24 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         qty_actual = QLineEdit("0")
         unit_cost = QLineEdit("0")
-        self._add_selector_row(form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "warehouse.form.product_id", product_id, lambda field: self._select_product_id(field, price_target=unit_cost))
+        self._add_selector_row(
+            form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form,
+            "warehouse.form.product_id",
+            product_id,
+            lambda field: self._select_product_id(field, price_target=unit_cost),
+        )
         for key, widget in (
             ("warehouse.form.quantity", qty_actual),
             ("warehouse.form.unit_cost", unit_cost),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -5064,11 +5854,26 @@ class MainWindow(QWidget):
         target_warehouse_id = QLineEdit()
         product_id = QLineEdit()
         quantity = QLineEdit("0")
-        self._add_selector_row(form, "warehouse.form.source_warehouse_id", source_warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "warehouse.form.target_warehouse_id", target_warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "warehouse.form.product_id", product_id, self._select_product_id)
+        self._add_selector_row(
+            form,
+            "warehouse.form.source_warehouse_id",
+            source_warehouse_id,
+            self._select_warehouse_id,
+        )
+        self._add_selector_row(
+            form,
+            "warehouse.form.target_warehouse_id",
+            target_warehouse_id,
+            self._select_warehouse_id,
+        )
+        self._add_selector_row(
+            form, "warehouse.form.product_id", product_id, self._select_product_id
+        )
         form.addRow(self.translator.text("warehouse.form.quantity"), quantity)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -5105,14 +5910,21 @@ class MainWindow(QWidget):
         product_id = QLineEdit()
         quantity = QLineEdit("0")
         reason = QLineEdit("other")
-        self._add_selector_row(form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id)
-        self._add_selector_row(form, "warehouse.form.product_id", product_id, self._select_product_id)
+        self._add_selector_row(
+            form, "warehouse.form.warehouse_id", warehouse_id, self._select_warehouse_id
+        )
+        self._add_selector_row(
+            form, "warehouse.form.product_id", product_id, self._select_product_id
+        )
         for key, widget in (
             ("warehouse.form.quantity", quantity),
             ("warehouse.form.reason", reason),
         ):
             form.addRow(self.translator.text(key), widget)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -5142,14 +5954,19 @@ class MainWindow(QWidget):
 
         def action() -> None:
             roles = self.api_client.get_roles()
-            self.roles_text.setPlainText(json.dumps(roles, indent=2, ensure_ascii=False))
+            self.roles_text.setPlainText(
+                json.dumps(roles, indent=2, ensure_ascii=False)
+            )
             self._populate_table(
                 self.roles_table,
                 roles,
                 [
                     ("name", self._ui("role")),
                     ("description", self._ui("description")),
-                    (lambda row: len(row.get("permissions") or []), self._ui("permissions")),
+                    (
+                        lambda row: len(row.get("permissions") or []),
+                        self._ui("permissions"),
+                    ),
                 ],
             )
             if roles:
@@ -5164,7 +5981,9 @@ class MainWindow(QWidget):
         def action() -> None:
             settings = self.api_client.get_settings()
             self.settings_values = dict(settings)
-            self.settings_text.setPlainText(json.dumps(settings, indent=2, ensure_ascii=False))
+            self.settings_text.setPlainText(
+                json.dumps(settings, indent=2, ensure_ascii=False)
+            )
             self._render_settings_forms(self.settings_values)
 
         self._run_api(action)
@@ -5175,7 +5994,9 @@ class MainWindow(QWidget):
         def action() -> None:
             values = json.loads(json.dumps(self.settings_values, ensure_ascii=False))
             for path, field in self.settings_fields.items():
-                parsed = self._setting_value_from_text(field.text(), self._settings_value_at_path(path))
+                parsed = self._setting_value_from_text(
+                    field.text(), self._settings_value_at_path(path)
+                )
                 if len(path) == 1:
                     values[path[0]] = parsed
                 elif len(path) == 2:
@@ -5184,212 +6005,52 @@ class MainWindow(QWidget):
                         parent[path[1]] = parsed
             updated = self.api_client.update_settings(values)
             self.settings_values = dict(updated)
-            self.settings_text.setPlainText(json.dumps(updated, indent=2, ensure_ascii=False))
-            self._render_settings_forms(self.settings_values)
-            QMessageBox.information(self, self.translator.text("common.success"), self.translator.text("common.success"))
-
-        self._run_api(action)
-
-    def _legacy_create_user_dialog(self) -> None:
-        """Open a modern create-user dialog."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(self.translator.text("users.create"))
-        dialog.setMinimumSize(450, 420)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #f8fafc;
-            }
-            QLineEdit, QComboBox {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                padding: 8px 10px;
-                color: #0f172a;
-            }
-            QLineEdit:focus, QComboBox:focus {
-                border: 1px solid #2563eb;
-            }
-            QLabel {
-                font-weight: bold;
-                color: #475569;
-                font-size: 12px;
-            }
-        """)
-        
-        main_layout = QVBoxLayout(dialog)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(16)
-        
-        title_lbl = QLabel(self.translator.text("users.create"))
-        title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 8px;")
-        main_layout.addWidget(title_lbl)
-        
-        form_widget = QWidget()
-        form_layout = QFormLayout(form_widget)
-        form_layout.setContentsMargins(0, 0, 0, 0)
-        form_layout.setSpacing(14)
-        
-        username = QLineEdit()
-        username.setPlaceholderText(self.translator.text("users.form.username"))
-        
-        full_name = QLineEdit()
-        full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
-        
-        # Password row with toggle button
-        pwd_container = QWidget()
-        pwd_layout = QHBoxLayout(pwd_container)
-        pwd_layout.setContentsMargins(0, 0, 0, 0)
-        pwd_layout.setSpacing(8)
-        
-        password = QLineEdit()
-        password.setEchoMode(QLineEdit.EchoMode.Password)
-        password.setPlaceholderText(self.translator.text("users.form.password"))
-        
-        show_pwd_btn = QPushButton("🙈")
-        show_pwd_btn.setFixedWidth(36)
-        show_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
-        show_pwd_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                font-size: 14px;
-                padding: 6px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        
-        def toggle_pwd():
-            if password.echoMode() == QLineEdit.EchoMode.Password:
-                password.setEchoMode(QLineEdit.EchoMode.Normal)
-                show_pwd_btn.setText("👁️")
-                show_pwd_btn.setToolTip(self.translator.text("users.form.hide_password"))
-            else:
-                password.setEchoMode(QLineEdit.EchoMode.Password)
-                show_pwd_btn.setText("🙈")
-                show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
-                
-        show_pwd_btn.clicked.connect(toggle_pwd)
-        
-        pwd_layout.addWidget(password, 1)
-        pwd_layout.addWidget(show_pwd_btn)
-        
-        # Role combobox populated dynamically
-        role_combo = QComboBox()
-        try:
-            roles = self.api_client.get_roles()
-            for r in roles:
-                role_name = r.get("name")
-                desc = r.get("description") or ""
-                label = f"{role_name} ({desc})" if desc else role_name
-                role_combo.addItem(label, role_name)
-        except Exception:
-            role_combo.addItem("Cashier", "Cashier")
-            role_combo.addItem("Administrator", "Administrator")
-            
-        form_layout.addRow(self.translator.text("users.form.username"), username)
-        form_layout.addRow(self.translator.text("users.form.full_name"), full_name)
-        form_layout.addRow(self.translator.text("users.form.password"), pwd_container)
-        form_layout.addRow(self.translator.text("users.form.role"), role_combo)
-        
-        main_layout.addWidget(form_widget)
-        main_layout.addStretch(1)
-        
-        # Buttons
-        buttons_layout = QHBoxLayout()
-        cancel_btn = QPushButton(self.translator.text("crud.cancel"))
-        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
-                color: #475569;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #f1f5f9;
-            }
-        """)
-        cancel_btn.clicked.connect(dialog.reject)
-        
-        save_btn = QPushButton(self.translator.text("common.success"))
-        save_btn.setObjectName("PrimaryButton")
-        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        save_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #2563eb;
-                border: none;
-                border-radius: 8px;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #1d4ed8;
-            }
-        """)
-        
-        def on_save():
-            if not username.text().strip():
-                QMessageBox.warning(dialog, self.translator.text("common.error"), self.translator.text("users.form.username") + " is required.")
-                return
-            if not password.text().strip():
-                QMessageBox.warning(dialog, self.translator.text("common.error"), self.translator.text("users.form.password") + " is required.")
-                return
-            dialog.accept()
-            
-        save_btn.clicked.connect(on_save)
-        
-        buttons_layout.addStretch(1)
-        buttons_layout.addWidget(cancel_btn)
-        buttons_layout.addWidget(save_btn)
-        main_layout.addLayout(buttons_layout)
-        
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-            
-        def action() -> None:
-            self.api_client.create_user(
-                {
-                    "username": username.text().strip(),
-                    "full_name": full_name.text().strip(),
-                    "password": password.text(),
-                    "role_name": role_combo.currentData() or "Cashier",
-                }
+            self.settings_text.setPlainText(
+                json.dumps(updated, indent=2, ensure_ascii=False)
             )
-            self.refresh_users()
-            
+            self._render_settings_forms(self.settings_values)
+            QMessageBox.information(
+                self,
+                self.translator.text("common.success"),
+                self.translator.text("common.success"),
+            )
+
         self._run_api(action)
 
     def simulate_scan(self) -> None:
         """Run scanner simulator."""
 
-        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.scanner')}: {self.hardware.scan()}")
+        self.hardware_text.appendPlainText(
+            f"{self.translator.text('hardware.log.scanner')}: {self.hardware.scan()}"
+        )
 
     def simulate_print(self) -> None:
         """Run printer simulator."""
 
-        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.printer')}: {self.hardware.print_receipt()}")
+        self.hardware_text.appendPlainText(
+            f"{self.translator.text('hardware.log.printer')}: {self.hardware.print_receipt()}"
+        )
 
     def simulate_drawer(self) -> None:
         """Run cash drawer simulator."""
 
-        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.drawer')}: {self.hardware.open_drawer()}")
+        self.hardware_text.appendPlainText(
+            f"{self.translator.text('hardware.log.drawer')}: {self.hardware.open_drawer()}"
+        )
 
     def simulate_scale(self) -> None:
         """Run scale simulator."""
 
-        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.scale')}: {self.hardware.read_weight()} kg")
+        self.hardware_text.appendPlainText(
+            f"{self.translator.text('hardware.log.scale')}: {self.hardware.read_weight()} kg"
+        )
 
     def simulate_fiscal(self) -> None:
         """Run fiscal-device simulator."""
 
-        self.hardware_text.appendPlainText(f"{self.translator.text('hardware.log.fiscal')}: {self.hardware.register_operation(Decimal('0.00'))}")
+        self.hardware_text.appendPlainText(
+            f"{self.translator.text('hardware.log.fiscal')}: {self.hardware.register_operation(Decimal('0.00'))}"
+        )
 
     def _run_api(self, action: Callable[[], None]) -> None:
         """Run an API action and show a simple error dialog."""
@@ -5399,20 +6060,19 @@ class MainWindow(QWidget):
         except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
             QMessageBox.critical(self, self.translator.text("common.error"), str(exc))
 
-    def _legacy_set_users_table_headers(self) -> None:
-        """Apply translated column headers to the users table."""
-
-        self.users_table.setHorizontalHeaderLabels([self.translator.text(key) for key in USER_TABLE_HEADER_KEYS])
-
     def _set_catalog_table_headers(self) -> None:
         """Apply translated column headers to the catalog table."""
 
-        self.catalog_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CATALOG_TABLE_HEADER_KEYS])
+        self.catalog_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in CATALOG_TABLE_HEADER_KEYS]
+        )
 
     def _set_warehouse_table_headers(self) -> None:
         """Apply translated column headers to the warehouse table."""
 
-        self.warehouse_table.setHorizontalHeaderLabels([self.translator.text(key) for key in WAREHOUSE_TABLE_HEADER_KEYS])
+        self.warehouse_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in WAREHOUSE_TABLE_HEADER_KEYS]
+        )
 
     def _set_counterparties_table_headers(self) -> None:
         """Apply translated column headers to the counterparties table."""
@@ -5424,43 +6084,62 @@ class MainWindow(QWidget):
     def _set_pricing_table_headers(self) -> None:
         """Apply translated column headers to the pricing table."""
 
-        self.pricing_table.setHorizontalHeaderLabels([self.translator.text(key) for key in PRICING_TABLE_HEADER_KEYS])
+        self.pricing_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in PRICING_TABLE_HEADER_KEYS]
+        )
 
     def _set_purchase_table_headers(self) -> None:
         """Apply translated column headers to the purchase table."""
 
-        self.purchase_table.setHorizontalHeaderLabels([self.translator.text(key) for key in PURCHASE_TABLE_HEADER_KEYS])
+        self.purchase_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in PURCHASE_TABLE_HEADER_KEYS]
+        )
 
     def _set_sales_table_headers(self) -> None:
         """Apply translated column headers to the sales table."""
 
-        self.sales_table.setHorizontalHeaderLabels([self.translator.text(key) for key in SALES_TABLE_HEADER_KEYS])
+        self.sales_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in SALES_TABLE_HEADER_KEYS]
+        )
 
     def _set_cashier_table_headers(self) -> None:
         """Apply translated column headers to the cashier table."""
 
-        self.cashier_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_TABLE_HEADER_KEYS])
+        self.cashier_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in CASHIER_TABLE_HEADER_KEYS]
+        )
 
     def _set_cashier_cart_table_headers(self) -> None:
         """Apply translated column headers to the cashier cart table."""
 
-        self.cashier_cart_table.setHorizontalHeaderLabels([self.translator.text(key) for key in CASHIER_CART_HEADER_KEYS])
+        self.cashier_cart_table.setHorizontalHeaderLabels(
+            [self.translator.text(key) for key in CASHIER_CART_HEADER_KEYS]
+        )
 
     def _set_roles_table_headers(self) -> None:
         """Apply translated column headers to the roles table."""
 
-        self.roles_table.setHorizontalHeaderLabels([self._ui("role"), self._ui("description"), self._ui("permissions")])
+        self.roles_table.setHorizontalHeaderLabels(
+            [self._ui("role"), self._ui("description"), self._ui("permissions")]
+        )
 
     def _set_role_permissions_table_headers(self) -> None:
         """Apply translated column headers to the selected-role permissions table."""
 
-        self.role_permissions_table.setHorizontalHeaderLabels([self._ui("module"), self._ui("permission")])
+        self.role_permissions_table.setHorizontalHeaderLabels(
+            [self._ui("module"), self._ui("permission")]
+        )
 
     def _set_report_saved_filters_table_headers(self) -> None:
         """Apply translated column headers to the saved report filters table."""
 
         self.report_saved_filters_table.setHorizontalHeaderLabels(
-            [self._ui("name"), self._ui("report"), self._ui("scope"), self._ui("updated")]
+            [
+                self._ui("name"),
+                self._ui("report"),
+                self._ui("scope"),
+                self._ui("updated"),
+            ]
         )
 
     def _set_report_combo_labels(self) -> None:
@@ -5473,14 +6152,26 @@ class MainWindow(QWidget):
         if hasattr(self, "report_debt_type"):
             for index in range(self.report_debt_type.count()):
                 value = self.report_debt_type.itemData(index)
-                self.report_debt_type.setItemText(index, self._debt_type_text(str(value) if value else None))
+                self.report_debt_type.setItemText(
+                    index, self._debt_type_text(str(value) if value else None)
+                )
 
     def _set_tab_labels(self) -> None:
         """Apply translated labels to tab widgets."""
 
         tab_sets: tuple[tuple[str, tuple[str, ...]], ...] = (
             ("catalog_tabs", ("tabs.products", "tabs.product_groups", "tabs.services")),
-            ("warehouse_tabs", ("tabs.warehouses", "tabs.balances", "tabs.movements", "tabs.inventories", "tabs.transfers", "tabs.writeoffs")),
+            (
+                "warehouse_tabs",
+                (
+                    "tabs.warehouses",
+                    "tabs.balances",
+                    "tabs.movements",
+                    "tabs.inventories",
+                    "tabs.transfers",
+                    "tabs.writeoffs",
+                ),
+            ),
             ("pricing_tabs", ("tabs.price_lists", "tabs.price_items")),
             ("purchase_tabs", ("tabs.orders", "tabs.invoices", "tabs.debt")),
             ("sales_tabs", ("tabs.sales", "tabs.returns", "tabs.debt")),
@@ -5519,16 +6210,22 @@ class MainWindow(QWidget):
             self._set_cashier_cart_table_headers()
             self._refresh_cashier_cart_table()
         if hasattr(self, "catalog_search"):
-            self.catalog_search.setPlaceholderText(self.translator.text("catalog.search"))
+            self.catalog_search.setPlaceholderText(
+                self.translator.text("catalog.search")
+            )
         if hasattr(self, "counterparty_search"):
-            self.counterparty_search.setPlaceholderText(self.translator.text("counterparties.search"))
+            self.counterparty_search.setPlaceholderText(
+                self.translator.text("counterparties.search")
+            )
         for line_edit in self.findChildren(QLineEdit):
             placeholder_key = line_edit.property("placeholderKey")
             if placeholder_key:
                 line_edit.setPlaceholderText(self.translator.text(str(placeholder_key)))
         user = self.api_client.current_user
         user_text = f"{user.full_name} ({user.role_name})" if user else ""
-        self.status_label.setText(f"{self.translator.text('main.connected')}: {user_text}")
+        self.status_label.setText(
+            f"{self.translator.text('main.connected')}: {user_text}"
+        )
         self.logout_button.setText(self.translator.text("main.logout"))
         for page_id, item in self.nav_items.items():
             key = f"nav.{page_id}"
@@ -5552,7 +6249,8 @@ class MainWindow(QWidget):
             self._apply_users_filters()
         if (
             hasattr(self, "users_stack")
-            and self.users_stack.currentWidget() == getattr(self, "users_detail_page", None)
+            and self.users_stack.currentWidget()
+            == getattr(self, "users_detail_page", None)
             and self.users_current_detail_row
         ):
             self._render_user_detail(self.users_current_detail_row)
@@ -5650,16 +6348,22 @@ class MainWindow(QWidget):
         filters_layout.setSpacing(8)
         self.users_search = QLineEdit()
         self.users_search.setProperty("placeholderKey", "users.search_placeholder")
-        self.users_search.setPlaceholderText(self.translator.text("users.search_placeholder"))
+        self.users_search.setPlaceholderText(
+            self.translator.text("users.search_placeholder")
+        )
         self.users_search.setClearButtonEnabled(True)
         self.users_search.setMinimumWidth(180)
-        self.users_search.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.users_search.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self.users_search.textChanged.connect(self._filter_users_table)
         filters_layout.addWidget(self.users_search, 2)
 
         self.users_role_filter = QComboBox()
         self.users_role_filter.setMinimumWidth(150)
-        self.users_role_filter.currentIndexChanged.connect(lambda _index: self._apply_users_filters())
+        self.users_role_filter.currentIndexChanged.connect(
+            lambda _index: self._apply_users_filters()
+        )
         filters_layout.addWidget(self.users_role_filter, 1)
 
         self.users_status_group = QButtonGroup(self)
@@ -5677,7 +6381,9 @@ class MainWindow(QWidget):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             if status == "all":
                 button.setChecked(True)
-            button.clicked.connect(lambda _checked, value=status: self._set_users_status_filter(value))
+            button.clicked.connect(
+                lambda _checked, value=status: self._set_users_status_filter(value)
+            )
             self.users_status_group.addButton(button)
             self.users_status_buttons[status] = button
             filters_layout.addWidget(button)
@@ -5686,10 +6392,20 @@ class MainWindow(QWidget):
         self.users_stats_grid = QGridLayout(self.users_stats_widget)
         self.users_stats_grid.setContentsMargins(0, 0, 0, 0)
         self.users_stats_grid.setSpacing(10)
-        self.stat_total_card, self.stat_total_val = self._make_user_stat_card("users.stats.total", "UsersStatCardTotal")
-        self.stat_active_card, self.stat_active_val = self._make_user_stat_card("users.stats.active", "UsersStatCardActive")
-        self.stat_inactive_card, self.stat_inactive_val = self._make_user_stat_card("users.stats.inactive", "UsersStatCardInactive")
-        self.users_stat_cards = [self.stat_total_card, self.stat_active_card, self.stat_inactive_card]
+        self.stat_total_card, self.stat_total_val = self._make_user_stat_card(
+            "users.stats.total", "UsersStatCardTotal"
+        )
+        self.stat_active_card, self.stat_active_val = self._make_user_stat_card(
+            "users.stats.active", "UsersStatCardActive"
+        )
+        self.stat_inactive_card, self.stat_inactive_val = self._make_user_stat_card(
+            "users.stats.inactive", "UsersStatCardInactive"
+        )
+        self.users_stat_cards = [
+            self.stat_total_card,
+            self.stat_active_card,
+            self.stat_inactive_card,
+        ]
 
         list_meta = QHBoxLayout()
         list_meta.setContentsMargins(0, 0, 0, 0)
@@ -5701,7 +6417,9 @@ class MainWindow(QWidget):
         self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
         self.users_table.setObjectName("UsersTable")
         self._configure_table(self.users_table)
-        self.users_table.verticalHeader().setDefaultSectionSize(46)
+        users_vertical_header = self.users_table.verticalHeader()
+        if users_vertical_header is not None:
+            users_vertical_header.setDefaultSectionSize(46)
         self._set_users_table_headers()
         self._install_record_actions(
             self.users_table,
@@ -5711,7 +6429,9 @@ class MainWindow(QWidget):
             lifecycle_label=self._active_lifecycle_label,
         )
 
-        self.users_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.users_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
 
         self.users_empty_state = self._build_users_empty_state()
         self.users_table_stack = QStackedWidget()
@@ -5728,7 +6448,9 @@ class MainWindow(QWidget):
         self._populate_users_role_filter()
         return page
 
-    def _make_user_stat_card(self, title_key: str, card_name: str = "UsersStatCard") -> tuple[QFrame, QLabel]:
+    def _make_user_stat_card(
+        self, title_key: str, card_name: str = "UsersStatCard"
+    ) -> tuple[QFrame, QLabel]:
         """Create one Users KPI card."""
 
         card = QFrame()
@@ -5795,11 +6517,23 @@ class MainWindow(QWidget):
 
         if not hasattr(self, "users_role_filter"):
             return
-        selected = self.users_role_filter.currentData() if self.users_role_filter.count() else "all"
-        roles = sorted({str(row.get("role_name") or "") for row in self.users_rows if row.get("role_name")})
+        selected = (
+            self.users_role_filter.currentData()
+            if self.users_role_filter.count()
+            else "all"
+        )
+        roles = sorted(
+            {
+                str(row.get("role_name") or "")
+                for row in self.users_rows
+                if row.get("role_name")
+            }
+        )
         self.users_role_filter.blockSignals(True)
         self.users_role_filter.clear()
-        self.users_role_filter.addItem(self.translator.text("users.filter.role_all"), "all")
+        self.users_role_filter.addItem(
+            self.translator.text("users.filter.role_all"), "all"
+        )
         for role in roles:
             self.users_role_filter.addItem(role, role)
         index = self.users_role_filter.findData(selected)
@@ -5812,8 +6546,16 @@ class MainWindow(QWidget):
         if not hasattr(self, "users_table"):
             return
         self.users_current_page = 0
-        query = self.users_search.text().strip().casefold() if hasattr(self, "users_search") else ""
-        role_filter = self.users_role_filter.currentData() if hasattr(self, "users_role_filter") else "all"
+        query = (
+            self.users_search.text().strip().casefold()
+            if hasattr(self, "users_search")
+            else ""
+        )
+        role_filter = (
+            self.users_role_filter.currentData()
+            if hasattr(self, "users_role_filter")
+            else "all"
+        )
         filtered: list[dict[str, object]] = []
         for row in self.users_rows:
             active = bool(row.get("is_active"))
@@ -5821,7 +6563,9 @@ class MainWindow(QWidget):
                 continue
             if self.users_status_filter == "inactive" and active:
                 continue
-            if role_filter not in (None, "all") and str(row.get("role_name") or "") != str(role_filter):
+            if role_filter not in (None, "all") and str(
+                row.get("role_name") or ""
+            ) != str(role_filter):
                 continue
             haystack = " ".join(
                 str(row.get(key) or "")
@@ -5850,7 +6594,11 @@ class MainWindow(QWidget):
                 user.get("username"),
                 user.get("full_name"),
                 user.get("role_name"),
-                self.translator.text("users.status.active" if user.get("is_active") else "users.status.inactive"),
+                self.translator.text(
+                    "users.status.active"
+                    if user.get("is_active")
+                    else "users.status.inactive"
+                ),
             )
             for column_index, value in enumerate(values):
                 item = self._table_item(value)
@@ -5882,8 +6630,16 @@ class MainWindow(QWidget):
         if visible_count > 0:
             self.users_table_stack.setCurrentWidget(self.users_table)
             return
-        self.users_empty_title.setText(self.translator.text("users.empty.title" if has_any_users else "users.empty.no_users_title"))
-        self.users_empty_body.setText(self.translator.text("users.empty.body" if has_any_users else "users.empty.no_users_body"))
+        self.users_empty_title.setText(
+            self.translator.text(
+                "users.empty.title" if has_any_users else "users.empty.no_users_title"
+            )
+        )
+        self.users_empty_body.setText(
+            self.translator.text(
+                "users.empty.body" if has_any_users else "users.empty.no_users_body"
+            )
+        )
         self.users_table_stack.setCurrentWidget(self.users_empty_state)
 
     def _build_users_pagination_bar(self) -> QFrame:
@@ -5905,7 +6661,9 @@ class MainWindow(QWidget):
             self.users_page_size_combo.addItem(str(size), size)
         self.users_page_size_combo.setCurrentIndex(1)
         self.users_page_size_combo.currentIndexChanged.connect(
-            lambda _: self._change_users_page_size(self.users_page_size_combo.currentData())
+            lambda _: self._change_users_page_size(
+                self.users_page_size_combo.currentData()
+            )
         )
         layout.addWidget(size_label)
         layout.addWidget(self.users_page_size_combo)
@@ -5929,17 +6687,23 @@ class MainWindow(QWidget):
         self.users_btn_prev = QPushButton("\u2039")
         self.users_btn_prev.setObjectName("UsersPaginationButton")
         self.users_btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.users_btn_prev.clicked.connect(lambda: self._go_to_users_page(self.users_current_page - 1))
+        self.users_btn_prev.clicked.connect(
+            lambda: self._go_to_users_page(self.users_current_page - 1)
+        )
 
         self.users_btn_next = QPushButton("\u203a")
         self.users_btn_next.setObjectName("UsersPaginationButton")
         self.users_btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.users_btn_next.clicked.connect(lambda: self._go_to_users_page(self.users_current_page + 1))
+        self.users_btn_next.clicked.connect(
+            lambda: self._go_to_users_page(self.users_current_page + 1)
+        )
 
         self.users_btn_last = QPushButton("\u00bb")
         self.users_btn_last.setObjectName("UsersPaginationButton")
         self.users_btn_last.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.users_btn_last.clicked.connect(lambda: self._go_to_users_page(self._users_total_pages() - 1))
+        self.users_btn_last.clicked.connect(
+            lambda: self._go_to_users_page(self._users_total_pages() - 1)
+        )
 
         self.users_page_nav_layout.addWidget(self.users_btn_first)
         self.users_page_nav_layout.addWidget(self.users_btn_prev)
@@ -5979,11 +6743,15 @@ class MainWindow(QWidget):
         end = min(start + self.users_page_size - 1, total)
         if total == 0:
             self.users_pagination_info.setText(
-                self.translator.text("users.pagination.showing").format(start=0, end=0, total=0)
+                self.translator.text("users.pagination.showing").format(
+                    start=0, end=0, total=0
+                )
             )
         else:
             self.users_pagination_info.setText(
-                self.translator.text("users.pagination.showing").format(start=start, end=end, total=total)
+                self.translator.text("users.pagination.showing").format(
+                    start=start, end=end, total=total
+                )
             )
 
         self.users_btn_first.setEnabled(self.users_current_page > 0)
@@ -5993,8 +6761,11 @@ class MainWindow(QWidget):
 
         while self.users_page_buttons_layout.count():
             child = self.users_page_buttons_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+            if child is None:
+                continue
+            widget = child.widget()
+            if widget is not None:
+                widget.deleteLater()
 
         max_visible = 5
         if total_pages <= max_visible:
@@ -6015,7 +6786,9 @@ class MainWindow(QWidget):
             else:
                 btn.setObjectName("UsersPaginationButton")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.clicked.connect(lambda _checked, p=page_index: self._go_to_users_page(p))
+            btn.clicked.connect(
+                lambda _checked, p=page_index: self._go_to_users_page(p)
+            )
             self.users_page_buttons_layout.addWidget(btn)
 
     def _go_to_users_page(self, page: int) -> None:
@@ -6040,7 +6813,11 @@ class MainWindow(QWidget):
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge = QLabel(self.translator.text("users.status.active" if active else "users.status.inactive"))
+        badge = QLabel(
+            self.translator.text(
+                "users.status.active" if active else "users.status.inactive"
+            )
+        )
         badge.setObjectName("UsersBadgeActive" if active else "UsersBadgeInactive")
         layout.addWidget(badge)
         return container
@@ -6091,9 +6868,13 @@ class MainWindow(QWidget):
         header.addStretch(1)
         edit = QPushButton(self.translator.text("crud.edit"))
         edit.setObjectName("PrimaryButton")
-        edit.clicked.connect(lambda _checked=False, current=row: self.edit_user_dialog(current))
+        edit.clicked.connect(
+            lambda _checked=False, current=row: self.edit_user_dialog(current)
+        )
         toggle = QPushButton(self._active_lifecycle_label(row))
-        toggle.clicked.connect(lambda _checked=False, current=row: self.deactivate_user_action(current))
+        toggle.clicked.connect(
+            lambda _checked=False, current=row: self.deactivate_user_action(current)
+        )
         header.addWidget(toggle)
         header.addWidget(edit)
         self.users_detail_layout.addLayout(header)
@@ -6123,7 +6904,11 @@ class MainWindow(QWidget):
         badges = QHBoxLayout()
         badges.setSpacing(8)
         badges.addWidget(self._make_role_badge(row.get("role_name")))
-        badges.addWidget(self._make_status_badge(bool(row.get("is_active")), self.translator.language))
+        badges.addWidget(
+            self._make_status_badge(
+                bool(row.get("is_active")), self.translator.language
+            )
+        )
         badges.addStretch(1)
         profile_text.addWidget(name)
         profile_text.addWidget(username)
@@ -6143,14 +6928,23 @@ class MainWindow(QWidget):
             ("users.table.username", row.get("username")),
             ("users.table.full_name", row.get("full_name")),
             ("users.table.role", row.get("role_name")),
-            ("users.table.active", self.translator.text("users.status.active" if row.get("is_active") else "users.status.inactive")),
+            (
+                "users.table.active",
+                self.translator.text(
+                    "users.status.active"
+                    if row.get("is_active")
+                    else "users.status.inactive"
+                ),
+            ),
         )
         for index, (key, value) in enumerate(fields):
             label = QLabel(self.translator.text(key))
             label.setObjectName("UsersFieldLabel")
             value_label = QLabel(self._format_value(value))
             value_label.setWordWrap(True)
-            value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            value_label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
             details_layout.addWidget(label, index, 0)
             details_layout.addWidget(value_label, index, 1)
         details_layout.setColumnStretch(1, 1)
@@ -6159,7 +6953,9 @@ class MainWindow(QWidget):
         scroll.setWidget(content)
         self.users_detail_layout.addWidget(scroll, 1)
 
-    def _user_role_options(self, selected_role: str | None = None) -> list[tuple[str, str]]:
+    def _user_role_options(
+        self, selected_role: str | None = None
+    ) -> list[tuple[str, str]]:
         """Return role combo options using the API when available."""
 
         options: list[tuple[str, str]] = []
@@ -6224,7 +7020,9 @@ class MainWindow(QWidget):
         form_layout.setContentsMargins(18, 18, 18, 18)
         form_layout.setHorizontalSpacing(18)
         form_layout.setVerticalSpacing(12)
-        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        form_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
 
         self.user_form_error_label = QLabel()
         self.user_form_error_label.setObjectName("UsersFormError")
@@ -6233,14 +7031,20 @@ class MainWindow(QWidget):
         form_layout.addRow(self.user_form_error_label)
 
         self.user_form_username = QLineEdit(str(row.get("username") or ""))
-        self.user_form_username.setPlaceholderText(self.translator.text("users.form.username"))
+        self.user_form_username.setPlaceholderText(
+            self.translator.text("users.form.username")
+        )
         self.user_form_username.setReadOnly(is_edit)
         self.user_form_full_name = QLineEdit(str(row.get("full_name") or ""))
-        self.user_form_full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        self.user_form_full_name.setPlaceholderText(
+            self.translator.text("users.form.full_name")
+        )
         self.user_form_password = QLineEdit()
         self.user_form_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.user_form_password.setPlaceholderText(
-            self.translator.text("users.form.password_hint" if is_edit else "users.form.password")
+            self.translator.text(
+                "users.form.password_hint" if is_edit else "users.form.password"
+            )
         )
 
         password_box = QWidget()
@@ -6249,14 +7053,22 @@ class MainWindow(QWidget):
         password_layout.setSpacing(8)
         self.user_form_password_toggle = QToolButton()
         self.user_form_password_toggle.setObjectName("UsersPasswordToggle")
-        self.user_form_password_toggle.setText(self.translator.text("users.form.show_password"))
+        self.user_form_password_toggle.setText(
+            self.translator.text("users.form.show_password")
+        )
         self.user_form_password_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def toggle_password() -> None:
             visible = self.user_form_password.echoMode() == QLineEdit.EchoMode.Password
-            self.user_form_password.setEchoMode(QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password)
+            self.user_form_password.setEchoMode(
+                QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
+            )
             self.user_form_password_toggle.setText(
-                self.translator.text("users.form.hide_password" if visible else "users.form.show_password")
+                self.translator.text(
+                    "users.form.hide_password"
+                    if visible
+                    else "users.form.show_password"
+                )
             )
 
         self.user_form_password_toggle.clicked.connect(toggle_password)
@@ -6271,15 +7083,25 @@ class MainWindow(QWidget):
         if selected_role >= 0:
             self.user_form_role_combo.setCurrentIndex(selected_role)
 
-        self.user_form_active_check = QCheckBox(self.translator.text("users.status.active"))
+        self.user_form_active_check = QCheckBox(
+            self.translator.text("users.status.active")
+        )
         self.user_form_active_check.setChecked(bool(row.get("is_active", True)))
         self.user_form_active_check.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        form_layout.addRow(self.translator.text("users.form.username"), self.user_form_username)
-        form_layout.addRow(self.translator.text("users.form.full_name"), self.user_form_full_name)
+        form_layout.addRow(
+            self.translator.text("users.form.username"), self.user_form_username
+        )
+        form_layout.addRow(
+            self.translator.text("users.form.full_name"), self.user_form_full_name
+        )
         form_layout.addRow(self.translator.text("users.form.password"), password_box)
-        form_layout.addRow(self.translator.text("users.form.role"), self.user_form_role_combo)
-        form_layout.addRow(self.translator.text("ui.active"), self.user_form_active_check)
+        form_layout.addRow(
+            self.translator.text("users.form.role"), self.user_form_role_combo
+        )
+        form_layout.addRow(
+            self.translator.text("ui.active"), self.user_form_active_check
+        )
         content_layout.addWidget(form_card)
         content_layout.addStretch(1)
         scroll.setWidget(content)
@@ -6291,7 +7113,9 @@ class MainWindow(QWidget):
         cancel.clicked.connect(self._show_users_list_page)
         self.user_form_save_button = QPushButton(self.translator.text("users.save"))
         self.user_form_save_button.setObjectName("PrimaryButton")
-        self.user_form_save_button.clicked.connect(lambda _checked=False: self._submit_user_form(mode, row))
+        self.user_form_save_button.clicked.connect(
+            lambda _checked=False: self._submit_user_form(mode, row)
+        )
         button_row.addStretch(1)
         button_row.addWidget(cancel)
         button_row.addWidget(self.user_form_save_button)
@@ -6351,7 +7175,11 @@ class MainWindow(QWidget):
         def action() -> None:
             created = self.api_client.create_user(payload)
             self._refresh_users_data()
-            detail = self._find_user_by_id(created.get("id")) if isinstance(created, dict) else None
+            detail = (
+                self._find_user_by_id(created.get("id"))
+                if isinstance(created, dict)
+                else None
+            )
             self._show_user_details_dialog(detail or dict(created))
 
         self._run_api(action)
@@ -6390,20 +7218,33 @@ class MainWindow(QWidget):
         """Activate or deactivate a user and preserve the relevant Users state."""
 
         target_active = not bool(row.get("is_active"))
-        label = self.translator.text("crud.activate" if target_active else "crud.deactivate")
+        label = self.translator.text(
+            "crud.activate" if target_active else "crud.deactivate"
+        )
         if not self._confirm_record_action(row, label):
             return
         user_id = row.get("id")
-        current_widget = self.users_stack.currentWidget() if hasattr(self, "users_stack") else None
+        current_widget = (
+            self.users_stack.currentWidget() if hasattr(self, "users_stack") else None
+        )
 
         def action() -> None:
             if target_active:
-                updated = self.api_client.update_user(int(row["id"]), {"is_active": True})
+                updated = self.api_client.update_user(
+                    int(row["id"]), {"is_active": True}
+                )
             else:
                 updated = self.api_client.deactivate_user(int(row["id"]))
             self._refresh_users_data()
-            refreshed = self._find_user_by_id(user_id) or {**row, **dict(updated), "is_active": target_active}
-            if current_widget in (getattr(self, "users_detail_page", None), getattr(self, "users_edit_page", None)):
+            refreshed = self._find_user_by_id(user_id) or {
+                **row,
+                **dict(updated),
+                "is_active": target_active,
+            }
+            if current_widget in (
+                getattr(self, "users_detail_page", None),
+                getattr(self, "users_edit_page", None),
+            ):
                 self._show_user_details_dialog(refreshed)
 
         self._run_api(action)
@@ -6414,6 +7255,8 @@ class MainWindow(QWidget):
         if not hasattr(self, "users_table") or self.users_table.columnCount() < 5:
             return
         header = self.users_table.horizontalHeader()
+        if header is None:
+            return
         for i in range(self.users_table.columnCount()):
             header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
@@ -6433,7 +7276,11 @@ class MainWindow(QWidget):
         if not hasattr(self, "users_toolbar_grid"):
             return
         compact = self.width() < 1180
-        for widget in (self.users_header_title_box, self.users_header_actions_box, self.users_filter_box):
+        for widget in (
+            self.users_header_title_box,
+            self.users_header_actions_box,
+            self.users_filter_box,
+        ):
             self.users_toolbar_grid.removeWidget(widget)
         if compact:
             self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0, 1, 2)
@@ -6484,9 +7331,19 @@ class MainWindow(QWidget):
             "catalog.create_product": ("goods.create",),
             "catalog.create_service": ("goods.create",),
             "warehouse.create_warehouse": ("warehouse.create",),
-            "warehouse.opening_inventory": ("warehouse.inventory_create", "warehouse.inventory_post"),
-            "warehouse.transfer": ("warehouse.transfer_create", "warehouse.transfer_send", "warehouse.transfer_receive"),
-            "warehouse.writeoff": ("warehouse.writeoff_create", "warehouse.writeoff_post"),
+            "warehouse.opening_inventory": (
+                "warehouse.inventory_create",
+                "warehouse.inventory_post",
+            ),
+            "warehouse.transfer": (
+                "warehouse.transfer_create",
+                "warehouse.transfer_send",
+                "warehouse.transfer_receive",
+            ),
+            "warehouse.writeoff": (
+                "warehouse.writeoff_create",
+                "warehouse.writeoff_post",
+            ),
             "counterparties.create": ("counterparty.create",),
             "pricing.create_price_list": ("pricing.price_list_create",),
             "pricing.add_price": ("pricing.price_list_edit",),
@@ -6515,9 +7372,11 @@ class MainWindow(QWidget):
                 continue
             allowed = all(permission in permissions for permission in required)
             button.setEnabled(allowed)
-            button.setToolTip("" if allowed else self.translator.text("common.permission_required"))
+            button.setToolTip(
+                "" if allowed else self.translator.text("common.permission_required")
+            )
 
-    def resizeEvent(self, event: object) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         """Handle window resizing to toggle sidebar visibility based on width."""
 
         super().resizeEvent(event)
