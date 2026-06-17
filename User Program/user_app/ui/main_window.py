@@ -1071,32 +1071,387 @@ class MainWindow(QWidget):
         return page
 
     def _build_users_page(self) -> QWidget:
-        """Build users page."""
+        """Build users page with a modernized visual design and dynamic stats."""
 
         page, layout, _title = self._page("users.title")
-        row = QHBoxLayout()
+        
+        # Hide the default title added by self._page to avoid duplicates and look more modern
+        _title.hide()
+
+        # Top banner with Title and Action buttons
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        
+        users_title_lbl = QLabel(self.translator.text("users.title"))
+        users_title_lbl.setObjectName("PageTitle")
+        users_title_lbl.setProperty("titleKey", "users.title")
+        top_bar.addWidget(users_title_lbl)
+        
+        top_bar.addStretch(1)
+        
+        # Real-time search/filter input
+        self.users_search = QLineEdit()
+        self.users_search.setProperty("placeholderKey", "common.search")
+        self.users_search.setPlaceholderText(self.translator.text("common.search"))
+        self.users_search.setClearButtonEnabled(True)
+        self.users_search.setFixedWidth(240)
+        self.users_search.textChanged.connect(self._filter_users_table)
+        top_bar.addWidget(self.users_search)
+        
         refresh = QPushButton()
         refresh.setProperty("textKey", "users.refresh")
+        refresh.setText(self.translator.text("users.refresh"))
         refresh.clicked.connect(self.refresh_users)
+        refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        refresh.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #475569;
+                font-weight: bold;
+                padding: 8px 14px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        top_bar.addWidget(refresh)
+        
         create = QPushButton()
         create.setProperty("textKey", "users.create")
+        create.setText(self.translator.text("users.create"))
         create.clicked.connect(self.create_user_dialog)
-        row.addWidget(refresh)
-        row.addWidget(create)
-        row.addStretch(1)
+        create.setObjectName("PrimaryButton")
+        create.setCursor(Qt.CursorShape.PointingHandCursor)
+        create.setStyleSheet("""
+            QPushButton#PrimaryButton {
+                background-color: #2563eb;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton#PrimaryButton:hover {
+                background-color: #1d4ed8;
+            }
+        """)
+        top_bar.addWidget(create)
+        
+        # Stats Cards Row
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(14)
+        
+        def make_stat_card(title_key: str, color_hex: str) -> tuple[QFrame, QLabel, QLabel]:
+            card = QFrame()
+            card.setObjectName("UsersStatCard")
+            card.setStyleSheet("""
+                QFrame#UsersStatCard {
+                    background-color: #ffffff;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 12px;
+                    padding: 12px 16px;
+                }
+            """)
+            shadow = QGraphicsDropShadowEffect(card)
+            shadow.setBlurRadius(10)
+            shadow.setColor(QColor(0, 0, 0, 8))
+            shadow.setOffset(0, 3)
+            card.setGraphicsEffect(shadow)
+            
+            l = QVBoxLayout(card)
+            l.setSpacing(4)
+            
+            title = QLabel()
+            title.setProperty("titleKey", title_key)
+            title.setText(self.translator.text(title_key))
+            title.setStyleSheet("font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;")
+            
+            value = QLabel("0")
+            value.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {color_hex};")
+            
+            l.addWidget(title)
+            l.addWidget(value)
+            return card, title, value
+            
+        self.stat_total_card, _, self.stat_total_val = make_stat_card("users.stats.total", "#0f172a")
+        self.stat_active_card, _, self.stat_active_val = make_stat_card("users.stats.active", "#15803d")
+        self.stat_inactive_card, _, self.stat_inactive_val = make_stat_card("users.stats.inactive", "#b91c1c")
+        
+        stats_layout.addWidget(self.stat_total_card, 1)
+        stats_layout.addWidget(self.stat_active_card, 1)
+        stats_layout.addWidget(self.stat_inactive_card, 1)
+        
+        # Users Table
         self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
         self._configure_table(self.users_table)
         self._set_users_table_headers()
         self._install_record_actions(
             self.users_table,
-            view=lambda row: self._show_record_details(self.translator.text("users.title"), row),
+            view=self._show_user_details_dialog,
             edit=self.edit_user_dialog,
             lifecycle=self.deactivate_user_action,
             lifecycle_label=self._active_lifecycle_label,
         )
-        layout.addLayout(row)
+        
+        layout.addLayout(top_bar)
+        layout.addLayout(stats_layout)
         layout.addWidget(self.users_table, 1)
         return page
+
+    def _filter_users_table(self, text: str) -> None:
+        """Filter the users table based on search input in real time."""
+        search_query = text.strip().lower()
+        for row in range(self.users_table.rowCount()):
+            match = False
+            for col in range(self.users_table.columnCount()):
+                item = self.users_table.item(row, col)
+                if item and search_query in item.text().lower():
+                    match = True
+                    break
+            self.users_table.setRowHidden(row, not match)
+
+    def _make_status_badge(self, active: bool, lang: str) -> QWidget:
+        """Create a styled badge representing active/inactive status."""
+        container = QWidget()
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        badge = QLabel()
+        if active:
+            text = "АКТИВЕН" if lang == "ru" else "IŞJEŇ" if lang == "tk" else "ACTIVE"
+            badge.setStyleSheet("""
+                background-color: #dcfce7;
+                color: #15803d;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 6px;
+            """)
+        else:
+            text = "НЕАКТИВЕН" if lang == "ru" else "IŞJEŇ DÄL" if lang == "tk" else "INACTIVE"
+            badge.setStyleSheet("""
+                background-color: #f3f4f6;
+                color: #4b5563;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 4px 8px;
+                border-radius: 6px;
+            """)
+        badge.setText(text)
+        layout.addWidget(badge)
+        return container
+
+    def _show_user_details_dialog(self, row: dict[str, object]) -> None:
+        """Show a modern, styled user details profile dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("users.details"))
+        dialog.setMinimumSize(450, 360)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+        """)
+        
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(16)
+        
+        # Profile Header Card
+        header_card = QFrame()
+        header_card.setStyleSheet("""
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+        """)
+        header_shadow = QGraphicsDropShadowEffect(header_card)
+        header_shadow.setBlurRadius(8)
+        header_shadow.setColor(QColor(0, 0, 0, 8))
+        header_shadow.setOffset(0, 2)
+        header_card.setGraphicsEffect(header_shadow)
+        
+        header_layout = QHBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 16, 16, 16)
+        header_layout.setSpacing(16)
+        
+        # Generate initials
+        full_name = str(row.get("full_name") or "")
+        username = str(row.get("username") or "")
+        initials = ""
+        if full_name:
+            parts = full_name.split()
+            if len(parts) >= 2:
+                initials = (parts[0][0] + parts[1][0]).upper()
+            elif parts:
+                initials = parts[0][0].upper()
+        if not initials and username:
+            initials = username[:2].upper()
+        if not initials:
+            initials = "U"
+            
+        avatar = QLabel(initials)
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar.setStyleSheet("""
+            background-color: #eff6ff;
+            color: #2563eb;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 25px;
+            min-width: 50px;
+            max-width: 50px;
+            min-height: 50px;
+            max-height: 50px;
+            border: 2px solid #bfdbfe;
+        """)
+        
+        text_layout = QVBoxLayout()
+        text_layout.setSpacing(4)
+        
+        name_label = QLabel(full_name or username)
+        name_label.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a;")
+        name_label.setWordWrap(True)
+        
+        # Role badge layout
+        role_layout = QHBoxLayout()
+        role_label = QLabel(str(row.get("role_name") or "User"))
+        role_label.setStyleSheet("""
+            background-color: #f1f5f9;
+            color: #475569;
+            font-size: 11px;
+            font-weight: bold;
+            padding: 3px 8px;
+            border-radius: 5px;
+        """)
+        role_layout.addWidget(role_label)
+        role_layout.addStretch(1)
+        
+        text_layout.addWidget(name_label)
+        text_layout.addLayout(role_layout)
+        
+        header_layout.addWidget(avatar)
+        header_layout.addLayout(text_layout, 1)
+        main_layout.addWidget(header_card)
+        
+        # Details Fields Card
+        fields_card = QFrame()
+        fields_card.setStyleSheet("""
+            background-color: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+        """)
+        fields_shadow = QGraphicsDropShadowEffect(fields_card)
+        fields_shadow.setBlurRadius(8)
+        fields_shadow.setColor(QColor(0, 0, 0, 8))
+        fields_shadow.setOffset(0, 2)
+        fields_card.setGraphicsEffect(fields_shadow)
+        
+        fields_layout = QGridLayout(fields_card)
+        fields_layout.setContentsMargins(16, 16, 16, 16)
+        fields_layout.setSpacing(12)
+        
+        def add_detail_row(grid: QGridLayout, r: int, label_text: str, val_widget: QWidget) -> None:
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("font-weight: bold; color: #64748b; font-size: 12px;")
+            grid.addWidget(lbl, r, 0)
+            grid.addWidget(val_widget, r, 1)
+            
+        # Row 0: ID
+        id_lbl = QLabel(str(row.get("id") or "-"))
+        id_lbl.setStyleSheet("color: #0f172a; font-size: 13px;")
+        add_detail_row(fields_layout, 0, "ID:", id_lbl)
+        
+        # Row 1: Username
+        uname_lbl = QLabel(username)
+        uname_lbl.setStyleSheet("color: #0f172a; font-size: 13px; font-weight: 500;")
+        add_detail_row(fields_layout, 1, self.translator.text("users.table.username") + ":", uname_lbl)
+        
+        # Row 2: Status badge
+        is_active = bool(row.get("is_active"))
+        status_widget = self._make_status_badge(is_active, self.translator.language)
+        status_widget.layout().setContentsMargins(0, 0, 0, 0)
+        status_widget.layout().setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        add_detail_row(fields_layout, 2, self.translator.text("users.table.active") + ":", status_widget)
+        
+        main_layout.addWidget(fields_card)
+        main_layout.addStretch(1)
+        
+        # Actions Layout
+        buttons_layout = QHBoxLayout()
+        
+        # Edit action directly
+        edit_btn = QPushButton(self.translator.text("crud.edit"))
+        edit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #2563eb;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #f8fafc;
+                border-color: #cbd5e1;
+            }
+        """)
+        
+        def handle_edit() -> None:
+            dialog.accept()
+            self.edit_user_dialog(row)
+            
+        edit_btn.clicked.connect(handle_edit)
+        
+        # Toggle status directly
+        toggle_btn = QPushButton(self._active_lifecycle_label(row))
+        toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #475569;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        
+        def handle_toggle() -> None:
+            dialog.accept()
+            self.deactivate_user_action(row)
+            
+        toggle_btn.clicked.connect(handle_toggle)
+        
+        close_btn = QPushButton(self.translator.text("crud.close"))
+        close_btn.setObjectName("PrimaryButton")
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+        """)
+        close_btn.clicked.connect(dialog.accept)
+        
+        buttons_layout.addWidget(edit_btn)
+        buttons_layout.addWidget(toggle_btn)
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(close_btn)
+        
+        main_layout.addLayout(buttons_layout)
+        dialog.exec()
 
     def _build_roles_page(self) -> QWidget:
         """Build roles page."""
@@ -2238,21 +2593,74 @@ class MainWindow(QWidget):
             self.refresh_reports()
 
     def refresh_users(self) -> None:
-        """Refresh users table."""
+        """Refresh users table and update stats cards."""
 
         def action() -> None:
             users = self.api_client.get_users()
-            self._populate_table(
-                self.users_table,
-                users,
-                [
-                    ("id", self.translator.text("users.table.id")),
-                    ("username", self.translator.text("users.table.username")),
-                    ("full_name", self.translator.text("users.table.full_name")),
-                    ("role_name", self.translator.text("users.table.role")),
-                    ("is_active", self.translator.text("users.table.active")),
-                ],
-            )
+            
+            # Update stats
+            total_count = len(users)
+            active_count = sum(1 for u in users if u.get("is_active"))
+            inactive_count = total_count - active_count
+            
+            if hasattr(self, "stat_total_val"):
+                self.stat_total_val.setText(str(total_count))
+            if hasattr(self, "stat_active_val"):
+                self.stat_active_val.setText(str(active_count))
+            if hasattr(self, "stat_inactive_val"):
+                self.stat_inactive_val.setText(str(inactive_count))
+                
+            # Populate table with custom badge widgets
+            self.users_table.setSortingEnabled(False)
+            self.users_table.setColumnCount(5)
+            self.users_table.setHorizontalHeaderLabels([
+                self.translator.text("users.table.id"),
+                self.translator.text("users.table.username"),
+                self.translator.text("users.table.full_name"),
+                self.translator.text("users.table.role"),
+                self.translator.text("users.table.active"),
+            ])
+            self.users_table.setRowCount(len(users))
+            lang = self.translator.language
+            
+            for row_index, user in enumerate(users):
+                # ID
+                id_item = self._table_item(user.get("id"))
+                id_item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, 0, id_item)
+                
+                # Username
+                username_item = self._table_item(user.get("username"))
+                username_item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, 1, username_item)
+                
+                # Full Name
+                fullname_item = self._table_item(user.get("full_name"))
+                fullname_item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, 2, fullname_item)
+                
+                # Role
+                role_item = self._table_item(user.get("role_name"))
+                role_item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, 3, role_item)
+                
+                # Active (badge)
+                is_active = bool(user.get("is_active"))
+                active_item = QTableWidgetItem("1" if is_active else "0") # For sorting
+                active_item.setFlags(active_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                active_item.setData(Qt.ItemDataRole.UserRole, user)
+                self.users_table.setItem(row_index, 4, active_item)
+                
+                # Set cell widget
+                badge = self._make_status_badge(is_active, lang)
+                self.users_table.setCellWidget(row_index, 4, badge)
+                
+            self.users_table.resizeColumnsToContents()
+            self.users_table.setSortingEnabled(True)
+            
+            # Apply search filter if search contains text
+            if hasattr(self, "users_search") and self.users_search.text():
+                self._filter_users_table(self.users_search.text())
 
         self._run_api(action)
 
@@ -2751,20 +3159,180 @@ class MainWindow(QWidget):
             self._run_api(lambda: (self.api_client.delete_role(int(row["id"])), self.refresh_roles()))
 
     def edit_user_dialog(self, row: dict[str, object]) -> None:
-        """Edit a user."""
-
-        payload = self._simple_record_form(
-            self.translator.text("crud.edit"),
-            [
-                ("full_name", self.translator.text("users.form.full_name"), row.get("full_name")),
-                ("password", self.translator.text("users.form.password"), ""),
-                ("role_name", self.translator.text("users.form.role"), row.get("role_name")),
-                ("is_active", self._ui("active"), row.get("is_active")),
-            ],
-            omit_blank=("password",),
-        )
-        if payload is not None:
-            self._run_api(lambda: (self.api_client.update_user(int(row["id"]), payload), self.refresh_users()))
+        """Open a modern edit-user dialog."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(self.translator.text("crud.edit"))
+        dialog.setMinimumSize(450, 420)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+            QLineEdit, QComboBox {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #0f172a;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #2563eb;
+            }
+            QLabel {
+                font-weight: bold;
+                color: #475569;
+                font-size: 12px;
+            }
+        """)
+        
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(16)
+        
+        title_lbl = QLabel(self.translator.text("crud.edit") + f": {row.get('username')}")
+        title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 8px;")
+        main_layout.addWidget(title_lbl)
+        
+        form_widget = QWidget()
+        form_layout = QFormLayout(form_widget)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(14)
+        
+        full_name = QLineEdit(str(row.get("full_name") or ""))
+        full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        
+        # Password row with hint and toggle
+        pwd_container = QWidget()
+        pwd_layout = QHBoxLayout(pwd_container)
+        pwd_layout.setContentsMargins(0, 0, 0, 0)
+        pwd_layout.setSpacing(8)
+        
+        password = QLineEdit()
+        password.setEchoMode(QLineEdit.EchoMode.Password)
+        password.setPlaceholderText(self.translator.text("users.form.password_hint"))
+        
+        show_pwd_btn = QPushButton("🙈")
+        show_pwd_btn.setFixedWidth(36)
+        show_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
+        show_pwd_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                font-size: 14px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        
+        def toggle_pwd():
+            if password.echoMode() == QLineEdit.EchoMode.Password:
+                password.setEchoMode(QLineEdit.EchoMode.Normal)
+                show_pwd_btn.setText("👁️")
+                show_pwd_btn.setToolTip(self.translator.text("users.form.hide_password"))
+            else:
+                password.setEchoMode(QLineEdit.EchoMode.Password)
+                show_pwd_btn.setText("🙈")
+                show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
+                
+        show_pwd_btn.clicked.connect(toggle_pwd)
+        
+        pwd_layout.addWidget(password, 1)
+        pwd_layout.addWidget(show_pwd_btn)
+        
+        # Role combobox populated dynamically
+        role_combo = QComboBox()
+        current_role = str(row.get("role_name") or "")
+        try:
+            roles = self.api_client.get_roles()
+            selected_idx = 0
+            for idx, r in enumerate(roles):
+                role_name = r.get("name")
+                desc = r.get("description") or ""
+                label = f"{role_name} ({desc})" if desc else role_name
+                role_combo.addItem(label, role_name)
+                if role_name == current_role:
+                    selected_idx = idx
+            role_combo.setCurrentIndex(selected_idx)
+        except Exception:
+            role_combo.addItem("Cashier", "Cashier")
+            role_combo.addItem("Administrator", "Administrator")
+            if current_role == "Administrator":
+                role_combo.setCurrentIndex(1)
+                
+        # Active status toggle
+        from PyQt6.QtWidgets import QCheckBox
+        active_check = QCheckBox()
+        active_check.setChecked(bool(row.get("is_active")))
+        active_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        form_layout.addRow(self.translator.text("users.form.full_name"), full_name)
+        form_layout.addRow(self.translator.text("users.form.password"), pwd_container)
+        form_layout.addRow(self.translator.text("users.form.role"), role_combo)
+        form_layout.addRow(self.translator.text("ui.active"), active_check)
+        
+        main_layout.addWidget(form_widget)
+        main_layout.addStretch(1)
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        cancel_btn = QPushButton(self.translator.text("crud.cancel"))
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #475569;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        save_btn = QPushButton(self.translator.text("common.success"))
+        save_btn.setObjectName("PrimaryButton")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+        """)
+        save_btn.clicked.connect(dialog.accept)
+        
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(cancel_btn)
+        buttons_layout.addWidget(save_btn)
+        main_layout.addLayout(buttons_layout)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+            
+        # Build payload
+        payload: dict[str, object] = {
+            "full_name": full_name.text().strip(),
+            "role_name": role_combo.currentData() or "Cashier",
+            "is_active": active_check.isChecked()
+        }
+        # Only set password if it is not empty
+        pwd_val = password.text()
+        if pwd_val:
+            payload["password"] = pwd_val
+            
+        self._run_api(lambda: (self.api_client.update_user(int(row["id"]), payload), self.refresh_users()))
 
     def deactivate_user_action(self, row: dict[str, object]) -> None:
         """Activate or deactivate a user."""
@@ -4444,38 +5012,179 @@ class MainWindow(QWidget):
         self._run_api(action)
 
     def create_user_dialog(self) -> None:
-        """Open a minimal create-user dialog."""
-
+        """Open a modern create-user dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle(self.translator.text("users.create"))
-        form = QFormLayout(dialog)
+        dialog.setMinimumSize(450, 420)
+        dialog.setStyleSheet("""
+            QDialog {
+                background-color: #f8fafc;
+            }
+            QLineEdit, QComboBox {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 8px 10px;
+                color: #0f172a;
+            }
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #2563eb;
+            }
+            QLabel {
+                font-weight: bold;
+                color: #475569;
+                font-size: 12px;
+            }
+        """)
+        
+        main_layout = QVBoxLayout(dialog)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+        main_layout.setSpacing(16)
+        
+        title_lbl = QLabel(self.translator.text("users.create"))
+        title_lbl.setStyleSheet("font-size: 18px; font-weight: bold; color: #0f172a; margin-bottom: 8px;")
+        main_layout.addWidget(title_lbl)
+        
+        form_widget = QWidget()
+        form_layout = QFormLayout(form_widget)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(14)
+        
         username = QLineEdit()
+        username.setPlaceholderText(self.translator.text("users.form.username"))
+        
         full_name = QLineEdit()
+        full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        
+        # Password row with toggle button
+        pwd_container = QWidget()
+        pwd_layout = QHBoxLayout(pwd_container)
+        pwd_layout.setContentsMargins(0, 0, 0, 0)
+        pwd_layout.setSpacing(8)
+        
         password = QLineEdit()
         password.setEchoMode(QLineEdit.EchoMode.Password)
-        role = QLineEdit("Cashier")
-        form.addRow(self.translator.text("users.form.username"), username)
-        form.addRow(self.translator.text("users.form.full_name"), full_name)
-        form.addRow(self.translator.text("users.form.password"), password)
-        self._add_selector_row(form, "users.form.role", role, self._select_role_name)
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
+        password.setPlaceholderText(self.translator.text("users.form.password"))
+        
+        show_pwd_btn = QPushButton("🙈")
+        show_pwd_btn.setFixedWidth(36)
+        show_pwd_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
+        show_pwd_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                font-size: 14px;
+                padding: 6px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        
+        def toggle_pwd():
+            if password.echoMode() == QLineEdit.EchoMode.Password:
+                password.setEchoMode(QLineEdit.EchoMode.Normal)
+                show_pwd_btn.setText("👁️")
+                show_pwd_btn.setToolTip(self.translator.text("users.form.hide_password"))
+            else:
+                password.setEchoMode(QLineEdit.EchoMode.Password)
+                show_pwd_btn.setText("🙈")
+                show_pwd_btn.setToolTip(self.translator.text("users.form.show_password"))
+                
+        show_pwd_btn.clicked.connect(toggle_pwd)
+        
+        pwd_layout.addWidget(password, 1)
+        pwd_layout.addWidget(show_pwd_btn)
+        
+        # Role combobox populated dynamically
+        role_combo = QComboBox()
+        try:
+            roles = self.api_client.get_roles()
+            for r in roles:
+                role_name = r.get("name")
+                desc = r.get("description") or ""
+                label = f"{role_name} ({desc})" if desc else role_name
+                role_combo.addItem(label, role_name)
+        except Exception:
+            role_combo.addItem("Cashier", "Cashier")
+            role_combo.addItem("Administrator", "Administrator")
+            
+        form_layout.addRow(self.translator.text("users.form.username"), username)
+        form_layout.addRow(self.translator.text("users.form.full_name"), full_name)
+        form_layout.addRow(self.translator.text("users.form.password"), pwd_container)
+        form_layout.addRow(self.translator.text("users.form.role"), role_combo)
+        
+        main_layout.addWidget(form_widget)
+        main_layout.addStretch(1)
+        
+        # Buttons
+        buttons_layout = QHBoxLayout()
+        cancel_btn = QPushButton(self.translator.text("crud.cancel"))
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                color: #475569;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #f1f5f9;
+            }
+        """)
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        save_btn = QPushButton(self.translator.text("common.success"))
+        save_btn.setObjectName("PrimaryButton")
+        save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        save_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #2563eb;
+                border: none;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: bold;
+                padding: 8px 16px;
+            }
+            QPushButton:hover {
+                background-color: #1d4ed8;
+            }
+        """)
+        
+        def on_save():
+            if not username.text().strip():
+                QMessageBox.warning(dialog, self.translator.text("common.error"), self.translator.text("users.form.username") + " is required.")
+                return
+            if not password.text().strip():
+                QMessageBox.warning(dialog, self.translator.text("common.error"), self.translator.text("users.form.password") + " is required.")
+                return
+            dialog.accept()
+            
+        save_btn.clicked.connect(on_save)
+        
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(cancel_btn)
+        buttons_layout.addWidget(save_btn)
+        main_layout.addLayout(buttons_layout)
+        
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-
+            
         def action() -> None:
             self.api_client.create_user(
                 {
                     "username": username.text().strip(),
                     "full_name": full_name.text().strip(),
                     "password": password.text(),
-                    "role_name": role.text().strip() or "Cashier",
+                    "role_name": role_combo.currentData() or "Cashier",
                 }
             )
             self.refresh_users()
-
+            
         self._run_api(action)
 
     def simulate_scan(self) -> None:
