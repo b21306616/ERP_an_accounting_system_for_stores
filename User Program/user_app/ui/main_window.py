@@ -329,6 +329,8 @@ class MainWindow(QWidget):
             }
             QTableWidget#UsersTable {
                 border-radius: 8px;
+                padding-left: 16px;
+                padding-right: 16px;
             }
             """
         )
@@ -2754,16 +2756,12 @@ class MainWindow(QWidget):
                 role_item.setData(Qt.ItemDataRole.UserRole, user)
                 self.users_table.setItem(row_index, 3, role_item)
                 
-                # Active (badge)
+                # Active
                 is_active = bool(user.get("is_active"))
-                active_item = QTableWidgetItem("1" if is_active else "0") # For sorting
-                active_item.setFlags(active_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                active_text = self.translator.text("users.status.active" if is_active else "users.status.inactive")
+                active_item = self._table_item(active_text)
                 active_item.setData(Qt.ItemDataRole.UserRole, user)
                 self.users_table.setItem(row_index, 4, active_item)
-                
-                # Set cell widget
-                badge = self._make_status_badge(is_active, lang)
-                self.users_table.setCellWidget(row_index, 4, badge)
                 
             self.users_table.resizeColumnsToContents()
             self.users_table.setSortingEnabled(True)
@@ -5627,7 +5625,7 @@ class MainWindow(QWidget):
         list_meta.addWidget(self.users_visible_count_label)
         list_meta.addStretch(1)
 
-        self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS) + 1)
+        self.users_table = QTableWidget(0, len(USER_TABLE_HEADER_KEYS))
         self.users_table.setObjectName("UsersTable")
         self._configure_table(self.users_table)
         self.users_table.verticalHeader().setDefaultSectionSize(46)
@@ -5774,38 +5772,11 @@ class MainWindow(QWidget):
                 item = self._table_item(value)
                 item.setData(Qt.ItemDataRole.UserRole, user)
                 self.users_table.setItem(row_index, column_index, item)
-            badge = self._make_status_badge(bool(user.get("is_active")), self.translator.language)
-            self.users_table.setCellWidget(row_index, 4, badge)
-            action_item = QTableWidgetItem("")
-            action_item.setFlags(action_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            action_item.setData(Qt.ItemDataRole.UserRole, user)
-            self.users_table.setItem(row_index, 5, action_item)
-            self.users_table.setCellWidget(row_index, 5, self._make_user_row_actions(user))
             self.users_table.setRowHeight(row_index, 46)
         self._configure_users_table_columns()
         self.users_table.setSortingEnabled(True)
         self._update_users_visible_count()
         self._update_users_empty_state(len(rows))
-
-    def _make_user_row_actions(self, row: dict[str, object]) -> QWidget:
-        """Create compact inline actions for one Users table row."""
-
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(4, 3, 4, 3)
-        layout.setSpacing(5)
-        layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        for text, callback, object_name in (
-            (self.translator.text("crud.view"), lambda _checked=False, current=row: self._show_user_details_dialog(current), "UsersInlineButton"),
-            (self.translator.text("crud.edit"), lambda _checked=False, current=row: self.edit_user_dialog(current), "UsersInlineButton"),
-            (self._active_lifecycle_label(row), lambda _checked=False, current=row: self.deactivate_user_action(current), "UsersInlineDangerButton"),
-        ):
-            button = QPushButton(text)
-            button.setObjectName(object_name)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(callback)
-            layout.addWidget(button)
-        return widget
 
     def _update_users_visible_count(self) -> None:
         """Update visible/total count text."""
@@ -6208,15 +6179,11 @@ class MainWindow(QWidget):
     def _configure_users_table_columns(self) -> None:
         """Apply practical resize policies for the Users table."""
 
-        if not hasattr(self, "users_table") or self.users_table.columnCount() < 6:
+        if not hasattr(self, "users_table") or self.users_table.columnCount() < 5:
             return
         header = self.users_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        for i in range(self.users_table.columnCount()):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
     def _set_users_table_headers(self) -> None:
         """Apply translated column headers to the users table."""
@@ -6224,7 +6191,6 @@ class MainWindow(QWidget):
         if not hasattr(self, "users_table"):
             return
         headers = [self.translator.text(key) for key in USER_TABLE_HEADER_KEYS]
-        headers.append(self.translator.text("users.table.actions"))
         self.users_table.setColumnCount(len(headers))
         self.users_table.setHorizontalHeaderLabels(headers)
         self._configure_users_table_columns()
