@@ -226,33 +226,50 @@ class MainWindow(QWidget):
             }
             QFrame#UsersToolbar,
             QFrame#UsersStatCard,
+            QFrame#UsersStatCardTotal,
+            QFrame#UsersStatCardActive,
+            QFrame#UsersStatCardInactive,
             QFrame#UsersProfileCard,
             QFrame#UsersDetailsCard,
             QFrame#UsersFormCard,
             QFrame#UsersEmptyState {
                 background: #ffffff;
-                border: 1px solid #dce5ef;
-                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            QFrame#UsersToolbar {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #ffffff, stop:1 #f8fafc);
+            }
+            QFrame#UsersStatCardTotal {
+                border-left: 4px solid #3b82f6;
+            }
+            QFrame#UsersStatCardActive {
+                border-left: 4px solid #22c55e;
+            }
+            QFrame#UsersStatCardInactive {
+                border-left: 4px solid #f59e0b;
             }
             QLabel#UsersPageHeading {
                 color: #0f172a;
                 font-size: 22px;
                 font-weight: 800;
+                letter-spacing: 0.3px;
             }
             QLabel#UsersSubtitle,
             QLabel#UsersVisibleCount {
-                color: #64748b;
+                color: #94a3b8;
                 font-size: 9pt;
             }
             QLabel#UsersStatTitle,
             QLabel#UsersFieldLabel {
                 color: #64748b;
-                font-size: 9pt;
+                font-size: 8pt;
                 font-weight: 700;
             }
             QLabel#UsersStatValue {
                 color: #0f172a;
-                font-size: 22px;
+                font-size: 24px;
                 font-weight: 800;
             }
             QLabel#UsersAvatar {
@@ -270,10 +287,10 @@ class MainWindow(QWidget):
             QLabel#UsersBadgeActive,
             QLabel#UsersBadgeInactive,
             QLabel#UsersRoleBadge {
-                border-radius: 8px;
+                border-radius: 10px;
                 font-size: 9pt;
                 font-weight: 800;
-                padding: 4px 9px;
+                padding: 4px 12px;
             }
             QLabel#UsersBadgeActive {
                 background: #dcfce7;
@@ -297,18 +314,22 @@ class MainWindow(QWidget):
             }
             QPushButton#UsersFilterButton {
                 background: #ffffff;
-                border: 1px solid #cbd5e1;
-                border-radius: 8px;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
                 color: #475569;
-                padding: 7px 11px;
+                font-weight: 600;
+                padding: 7px 14px;
             }
             QPushButton#UsersFilterButton:hover {
-                background: #f8fafc;
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #334155;
             }
             QPushButton#UsersFilterButton:checked {
-                background: #e0edff;
+                background: #dbeafe;
                 border-color: #93c5fd;
-                color: #1557c0;
+                color: #1d4ed8;
+                font-weight: 700;
             }
             QPushButton#UsersInlineButton,
             QPushButton#UsersInlineDangerButton,
@@ -328,9 +349,59 @@ class MainWindow(QWidget):
                 color: #b91c1c;
             }
             QTableWidget#UsersTable {
-                border-radius: 8px;
+                border-radius: 10px;
                 padding-left: 16px;
                 padding-right: 16px;
+            }
+            QTableWidget#UsersTable QScrollBar:vertical {
+                width: 0px;
+            }
+            QTableWidget#UsersTable::item:hover {
+                background: #eff6ff;
+            }
+            QFrame#UsersPaginationBar {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            QPushButton#UsersPaginationButton {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                color: #475569;
+                font-weight: 600;
+                min-width: 34px;
+                min-height: 34px;
+                padding: 4px 10px;
+            }
+            QPushButton#UsersPaginationButton:hover {
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #1e293b;
+            }
+            QPushButton#UsersPaginationButton:disabled {
+                background: #f8fafc;
+                border-color: #f1f5f9;
+                color: #cbd5e1;
+            }
+            QPushButton#UsersPaginationButtonActive {
+                background: #1f6feb;
+                border: 1px solid #1f6feb;
+                border-radius: 6px;
+                color: #ffffff;
+                font-weight: 700;
+                min-width: 34px;
+                min-height: 34px;
+                padding: 4px 10px;
+            }
+            QLabel#UsersPaginationInfo {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QComboBox#UsersPageSizeCombo {
+                min-width: 70px;
+                padding: 4px 8px;
             }
             """
         )
@@ -5497,6 +5568,8 @@ class MainWindow(QWidget):
         self.users_status_filter = "all"
         self.users_current_detail_row: dict[str, object] | None = None
         self.users_stat_columns = 0
+        self.users_page_size = 10
+        self.users_current_page = 0
 
         self.users_stack = QStackedWidget()
         self.users_stack.setObjectName("UsersStack")
@@ -5613,9 +5686,9 @@ class MainWindow(QWidget):
         self.users_stats_grid = QGridLayout(self.users_stats_widget)
         self.users_stats_grid.setContentsMargins(0, 0, 0, 0)
         self.users_stats_grid.setSpacing(10)
-        self.stat_total_card, self.stat_total_val = self._make_user_stat_card("users.stats.total")
-        self.stat_active_card, self.stat_active_val = self._make_user_stat_card("users.stats.active")
-        self.stat_inactive_card, self.stat_inactive_val = self._make_user_stat_card("users.stats.inactive")
+        self.stat_total_card, self.stat_total_val = self._make_user_stat_card("users.stats.total", "UsersStatCardTotal")
+        self.stat_active_card, self.stat_active_val = self._make_user_stat_card("users.stats.active", "UsersStatCardActive")
+        self.stat_inactive_card, self.stat_inactive_val = self._make_user_stat_card("users.stats.inactive", "UsersStatCardInactive")
         self.users_stat_cards = [self.stat_total_card, self.stat_active_card, self.stat_inactive_card]
 
         list_meta = QHBoxLayout()
@@ -5638,23 +5711,28 @@ class MainWindow(QWidget):
             lifecycle_label=self._active_lifecycle_label,
         )
 
+        self.users_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         self.users_empty_state = self._build_users_empty_state()
         self.users_table_stack = QStackedWidget()
         self.users_table_stack.addWidget(self.users_table)
         self.users_table_stack.addWidget(self.users_empty_state)
 
+        self.users_pagination_bar = self._build_users_pagination_bar()
+
         page_layout.addWidget(toolbar)
         page_layout.addWidget(self.users_stats_widget)
         page_layout.addLayout(list_meta)
         page_layout.addWidget(self.users_table_stack, 1)
+        page_layout.addWidget(self.users_pagination_bar)
         self._populate_users_role_filter()
         return page
 
-    def _make_user_stat_card(self, title_key: str) -> tuple[QFrame, QLabel]:
+    def _make_user_stat_card(self, title_key: str, card_name: str = "UsersStatCard") -> tuple[QFrame, QLabel]:
         """Create one Users KPI card."""
 
         card = QFrame()
-        card.setObjectName("UsersStatCard")
+        card.setObjectName(card_name)
         card.setMinimumHeight(76)
         shadow = QGraphicsDropShadowEffect(card)
         shadow.setBlurRadius(12)
@@ -5733,6 +5811,7 @@ class MainWindow(QWidget):
 
         if not hasattr(self, "users_table"):
             return
+        self.users_current_page = 0
         query = self.users_search.text().strip().casefold() if hasattr(self, "users_search") else ""
         role_filter = self.users_role_filter.currentData() if hasattr(self, "users_role_filter") else "all"
         filtered: list[dict[str, object]] = []
@@ -5755,12 +5834,17 @@ class MainWindow(QWidget):
         self._render_users_table(filtered)
 
     def _render_users_table(self, rows: list[dict[str, object]]) -> None:
-        """Render the filtered Users rows."""
+        """Render the paginated Users rows for the current page."""
+
+        total = len(rows)
+        start = self.users_current_page * self.users_page_size
+        end = min(start + self.users_page_size, total)
+        page_rows = rows[start:end]
 
         self.users_table.setSortingEnabled(False)
         self.users_table.setRowCount(0)
-        self.users_table.setRowCount(len(rows))
-        for row_index, user in enumerate(rows):
+        self.users_table.setRowCount(len(page_rows))
+        for row_index, user in enumerate(page_rows):
             values = (
                 user.get("id"),
                 user.get("username"),
@@ -5776,7 +5860,8 @@ class MainWindow(QWidget):
         self._configure_users_table_columns()
         self.users_table.setSortingEnabled(True)
         self._update_users_visible_count()
-        self._update_users_empty_state(len(rows))
+        self._update_users_empty_state(total)
+        self._update_users_pagination()
 
     def _update_users_visible_count(self) -> None:
         """Update visible/total count text."""
@@ -5800,6 +5885,153 @@ class MainWindow(QWidget):
         self.users_empty_title.setText(self.translator.text("users.empty.title" if has_any_users else "users.empty.no_users_title"))
         self.users_empty_body.setText(self.translator.text("users.empty.body" if has_any_users else "users.empty.no_users_body"))
         self.users_table_stack.setCurrentWidget(self.users_empty_state)
+
+    def _build_users_pagination_bar(self) -> QFrame:
+        """Build the pagination control bar below the Users table."""
+
+        bar = QFrame()
+        bar.setObjectName("UsersPaginationBar")
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 10, 16, 10)
+        layout.setSpacing(8)
+
+        size_label = QLabel(self.translator.text("users.pagination.per_page"))
+        size_label.setObjectName("UsersPaginationInfo")
+        size_label.setProperty("titleKey", "users.pagination.per_page")
+        self.users_page_size_combo = QComboBox()
+        self.users_page_size_combo.setObjectName("UsersPageSizeCombo")
+        self.users_page_size_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        for size in (5, 10, 15, 25):
+            self.users_page_size_combo.addItem(str(size), size)
+        self.users_page_size_combo.setCurrentIndex(1)
+        self.users_page_size_combo.currentIndexChanged.connect(
+            lambda _: self._change_users_page_size(self.users_page_size_combo.currentData())
+        )
+        layout.addWidget(size_label)
+        layout.addWidget(self.users_page_size_combo)
+
+        layout.addStretch(1)
+
+        self.users_pagination_info = QLabel()
+        self.users_pagination_info.setObjectName("UsersPaginationInfo")
+        layout.addWidget(self.users_pagination_info)
+
+        layout.addStretch(1)
+
+        self.users_page_nav_layout = QHBoxLayout()
+        self.users_page_nav_layout.setSpacing(4)
+
+        self.users_btn_first = QPushButton("\u00ab")
+        self.users_btn_first.setObjectName("UsersPaginationButton")
+        self.users_btn_first.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.users_btn_first.clicked.connect(lambda: self._go_to_users_page(0))
+
+        self.users_btn_prev = QPushButton("\u2039")
+        self.users_btn_prev.setObjectName("UsersPaginationButton")
+        self.users_btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.users_btn_prev.clicked.connect(lambda: self._go_to_users_page(self.users_current_page - 1))
+
+        self.users_btn_next = QPushButton("\u203a")
+        self.users_btn_next.setObjectName("UsersPaginationButton")
+        self.users_btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.users_btn_next.clicked.connect(lambda: self._go_to_users_page(self.users_current_page + 1))
+
+        self.users_btn_last = QPushButton("\u00bb")
+        self.users_btn_last.setObjectName("UsersPaginationButton")
+        self.users_btn_last.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.users_btn_last.clicked.connect(lambda: self._go_to_users_page(self._users_total_pages() - 1))
+
+        self.users_page_nav_layout.addWidget(self.users_btn_first)
+        self.users_page_nav_layout.addWidget(self.users_btn_prev)
+
+        self.users_page_buttons_container = QWidget()
+        self.users_page_buttons_layout = QHBoxLayout(self.users_page_buttons_container)
+        self.users_page_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        self.users_page_buttons_layout.setSpacing(4)
+        self.users_page_nav_layout.addWidget(self.users_page_buttons_container)
+
+        self.users_page_nav_layout.addWidget(self.users_btn_next)
+        self.users_page_nav_layout.addWidget(self.users_btn_last)
+
+        layout.addLayout(self.users_page_nav_layout)
+
+        return bar
+
+    def _users_total_pages(self) -> int:
+        """Return total page count based on filtered rows and page size."""
+
+        total = len(self.users_filtered_rows)
+        if total == 0:
+            return 1
+        return (total + self.users_page_size - 1) // self.users_page_size
+
+    def _update_users_pagination(self) -> None:
+        """Recalculate and refresh the pagination controls."""
+
+        if not hasattr(self, "users_pagination_info"):
+            return
+        total = len(self.users_filtered_rows)
+        total_pages = self._users_total_pages()
+        if self.users_current_page >= total_pages:
+            self.users_current_page = max(0, total_pages - 1)
+
+        start = self.users_current_page * self.users_page_size + 1
+        end = min(start + self.users_page_size - 1, total)
+        if total == 0:
+            self.users_pagination_info.setText(
+                self.translator.text("users.pagination.showing").format(start=0, end=0, total=0)
+            )
+        else:
+            self.users_pagination_info.setText(
+                self.translator.text("users.pagination.showing").format(start=start, end=end, total=total)
+            )
+
+        self.users_btn_first.setEnabled(self.users_current_page > 0)
+        self.users_btn_prev.setEnabled(self.users_current_page > 0)
+        self.users_btn_next.setEnabled(self.users_current_page < total_pages - 1)
+        self.users_btn_last.setEnabled(self.users_current_page < total_pages - 1)
+
+        while self.users_page_buttons_layout.count():
+            child = self.users_page_buttons_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        max_visible = 5
+        if total_pages <= max_visible:
+            pages_to_show = list(range(total_pages))
+        else:
+            half = max_visible // 2
+            start_page = max(0, self.users_current_page - half)
+            end_page = start_page + max_visible
+            if end_page > total_pages:
+                end_page = total_pages
+                start_page = end_page - max_visible
+            pages_to_show = list(range(start_page, end_page))
+
+        for page_index in pages_to_show:
+            btn = QPushButton(str(page_index + 1))
+            if page_index == self.users_current_page:
+                btn.setObjectName("UsersPaginationButtonActive")
+            else:
+                btn.setObjectName("UsersPaginationButton")
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(lambda _checked, p=page_index: self._go_to_users_page(p))
+            self.users_page_buttons_layout.addWidget(btn)
+
+    def _go_to_users_page(self, page: int) -> None:
+        """Navigate to a specific page in the Users table."""
+
+        total_pages = self._users_total_pages()
+        self.users_current_page = max(0, min(page, total_pages - 1))
+        self._render_users_table(self.users_filtered_rows)
+
+    def _change_users_page_size(self, size: int) -> None:
+        """Change the number of rows displayed per page."""
+
+        if size and size > 0:
+            self.users_page_size = size
+            self.users_current_page = 0
+            self._render_users_table(self.users_filtered_rows)
 
     def _make_status_badge(self, active: bool, _lang: str) -> QWidget:
         """Create a styled active/inactive status badge."""
