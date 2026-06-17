@@ -58,7 +58,7 @@ from user_app.core.i18n import (
 from user_app.hardware.simulator import HardwareSimulator
 from user_app.ui.selectors import ReferenceSelectorDialog
 
-ApiRow = dict[str, object]
+ApiRow = dict[str, Any]
 TableColumn = tuple[str | Callable[[ApiRow], object], str]
 Metric = tuple[str, object]
 SelectorColumn = tuple[str, str]
@@ -733,7 +733,7 @@ class MainWindow(QWidget):
         if row is not None:
             view(row)
 
-    def _show_record_details(self, title: str, row: dict[str, object]) -> None:
+    def _show_record_details(self, title: str, row: ApiRow) -> None:
         """Show scalar fields and related list data for a record."""
 
         dialog = QDialog(self)
@@ -802,7 +802,7 @@ class MainWindow(QWidget):
         fields: list[tuple[str, str, object]],
         *,
         omit_blank: tuple[str, ...] = (),
-    ) -> dict[str, object] | None:
+    ) -> ApiRow | None:
         """Show a simple localized edit form and return parsed values."""
 
         dialog = QDialog(self)
@@ -824,7 +824,7 @@ class MainWindow(QWidget):
         form.addRow(buttons)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        payload: dict[str, object] = {}
+        payload: ApiRow = {}
         for key, (field, original) in widgets.items():
             text = field.text().strip()
             if key in omit_blank and not text:
@@ -848,7 +848,7 @@ class MainWindow(QWidget):
         return text
 
     def _confirm_record_action(
-        self, row: dict[str, object], action_label: str, *, hard_delete: bool = False
+        self, row: ApiRow, action_label: str, *, hard_delete: bool = False
     ) -> bool:
         """Ask the user to confirm a lifecycle or delete action."""
 
@@ -868,7 +868,7 @@ class MainWindow(QWidget):
         )
         return result == QMessageBox.StandardButton.Yes
 
-    def _active_lifecycle_label(self, row: dict[str, object]) -> str:
+    def _active_lifecycle_label(self, row: ApiRow) -> str:
         """Return Activate or Deactivate for rows with is_active."""
 
         return self.translator.text(
@@ -1555,7 +1555,7 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("settings.title")
         self.settings_text = QPlainTextEdit()
         self.settings_text.hide()
-        self.settings_values: dict[str, object] = {}
+        self.settings_values: ApiRow = {}
         self.settings_fields: dict[tuple[str, ...], QLineEdit] = {}
         action_row = QHBoxLayout()
         refresh = QPushButton()
@@ -1584,7 +1584,7 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("hardware.title")
         self.hardware_text = QPlainTextEdit()
         self.hardware_text.setReadOnly(True)
-        actions: list[tuple[str, Callable[[], None]]] = [
+        actions: list[tuple[str, Callable[[], object]]] = [
             ("hardware.scan", self.simulate_scan),
             ("hardware.print", self.simulate_print),
             ("hardware.drawer", self.simulate_drawer),
@@ -2434,7 +2434,7 @@ class MainWindow(QWidget):
             self.role_permissions_table.setRowCount(0)
             return
         permissions = role.get("permissions")
-        rows: list[dict[str, object]] = []
+        rows: list[ApiRow] = []
         if isinstance(permissions, list):
             for permission in permissions:
                 code = str(permission)
@@ -2446,7 +2446,7 @@ class MainWindow(QWidget):
             [("module", self._ui("module")), ("permission", self._ui("permission"))],
         )
 
-    def _render_settings_forms(self, settings: dict[str, object]) -> None:
+    def _render_settings_forms(self, settings: ApiRow) -> None:
         """Render editable settings forms without exposing raw JSON."""
 
         self.settings_fields = {}
@@ -2518,7 +2518,7 @@ class MainWindow(QWidget):
 
     def _render_debt_ledger(
         self,
-        rows: list[dict[str, object]],
+        rows: list[ApiRow],
         table: QTableWidget,
         metrics_layout: QHBoxLayout,
         *,
@@ -2551,9 +2551,7 @@ class MainWindow(QWidget):
             ],
         )
 
-    def _render_cash_report(
-        self, report: dict[str, object], *, title: str | None = None
-    ) -> None:
+    def _render_cash_report(self, report: ApiRow, *, title: str | None = None) -> None:
         """Render cashier cash-flow or shift report data."""
 
         self.cashier_report_status.setText(title or self._ui("cash_flow_snapshot"))
@@ -2589,7 +2587,7 @@ class MainWindow(QWidget):
         *,
         code: str,
         filters: dict[str, str],
-        saved_filters: list[dict[str, object]],
+        saved_filters: list[ApiRow],
         report: object,
     ) -> None:
         """Render report data as metrics, rows, and saved-filter tables."""
@@ -2672,7 +2670,7 @@ class MainWindow(QWidget):
             self.report_rows_table, [], [("message", self._ui("message"))]
         )
 
-    def _render_report_result(self, payload: dict[str, object], *, title: str) -> None:
+    def _render_report_result(self, payload: ApiRow, *, title: str) -> None:
         """Render export/save responses without showing JSON."""
 
         self.report_status_label.setText(title)
@@ -3090,7 +3088,7 @@ class MainWindow(QWidget):
                     ("is_default", self.translator.text("pricing.table.default")),
                 ],
             )
-            items: list[dict[str, object]] = []
+            items: list[ApiRow] = []
             for price_list in rows:
                 price_list_id = price_list.get("id")
                 if price_list_id is None:
@@ -3381,7 +3379,7 @@ class MainWindow(QWidget):
             raise ValueError(self.translator.text("error.no_currencies"))
         return int(currencies[0]["id"])
 
-    def _first_line(self, row: dict[str, object]) -> dict[str, object]:
+    def _first_line(self, row: ApiRow) -> ApiRow:
         """Return the first related line from a document row."""
 
         lines = row.get("lines")
@@ -3391,9 +3389,9 @@ class MainWindow(QWidget):
 
     def _toggle_active(
         self,
-        row: dict[str, object],
-        updater: Callable[[int, dict[str, object]], dict[str, object]],
-        refresh: Callable[[], None],
+        row: ApiRow,
+        updater: Callable[[int, ApiRow], ApiRow],
+        refresh: Callable[[], object],
     ) -> None:
         """Toggle is_active for one master-data row."""
 
@@ -3409,9 +3407,7 @@ class MainWindow(QWidget):
                 )
             )
 
-    def _line_payload_from_flat(
-        self, payload: dict[str, object], *, sale: bool = False
-    ) -> dict[str, object]:
+    def _line_payload_from_flat(self, payload: ApiRow, *, sale: bool = False) -> ApiRow:
         """Extract a one-line document payload from a flat form payload."""
 
         keys = {
@@ -3440,10 +3436,10 @@ class MainWindow(QWidget):
 
     def _confirming_api_action(
         self,
-        row: dict[str, object],
+        row: ApiRow,
         label_key: str,
         api_call: Callable[[], object],
-        refresh: Callable[[], None],
+        refresh: Callable[[], object],
     ) -> None:
         """Confirm, run an API call, and refresh the relevant page."""
 
@@ -3484,7 +3480,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def edit_role_dialog(self, row: dict[str, object]) -> None:
+    def edit_role_dialog(self, row: ApiRow) -> None:
         """Edit a role description and permissions."""
 
         payload = self._simple_record_form(
@@ -3516,7 +3512,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def delete_role_action(self, row: dict[str, object]) -> None:
+    def delete_role_action(self, row: ApiRow) -> None:
         """Delete an unused custom role."""
 
         label = self.translator.text("crud.delete")
@@ -3528,7 +3524,7 @@ class MainWindow(QWidget):
                 )
             )
 
-    def edit_product_dialog(self, row: dict[str, object]) -> None:
+    def edit_product_dialog(self, row: ApiRow) -> None:
         """Edit a product."""
 
         payload = self._simple_record_form(
@@ -3572,10 +3568,10 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_product_active_action(self, row: dict[str, object]) -> None:
+    def toggle_product_active_action(self, row: ApiRow) -> None:
         self._toggle_active(row, self.api_client.update_product, self.refresh_catalog)
 
-    def edit_product_group_dialog(self, row: dict[str, object]) -> None:
+    def edit_product_group_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3602,12 +3598,12 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_product_group_active_action(self, row: dict[str, object]) -> None:
+    def toggle_product_group_active_action(self, row: ApiRow) -> None:
         self._toggle_active(
             row, self.api_client.update_product_group, self.refresh_catalog
         )
 
-    def edit_service_dialog(self, row: dict[str, object]) -> None:
+    def edit_service_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3639,10 +3635,10 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_service_active_action(self, row: dict[str, object]) -> None:
+    def toggle_service_active_action(self, row: ApiRow) -> None:
         self._toggle_active(row, self.api_client.update_service, self.refresh_catalog)
 
-    def edit_warehouse_dialog(self, row: dict[str, object]) -> None:
+    def edit_warehouse_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3663,12 +3659,12 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_warehouse_active_action(self, row: dict[str, object]) -> None:
+    def toggle_warehouse_active_action(self, row: ApiRow) -> None:
         self._toggle_active(
             row, self.api_client.update_warehouse, self.refresh_warehouse
         )
 
-    def edit_counterparty_dialog(self, row: dict[str, object]) -> None:
+    def edit_counterparty_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3722,12 +3718,12 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_counterparty_active_action(self, row: dict[str, object]) -> None:
+    def toggle_counterparty_active_action(self, row: ApiRow) -> None:
         self._toggle_active(
             row, self.api_client.update_counterparty, self.refresh_counterparties
         )
 
-    def edit_price_list_dialog(self, row: dict[str, object]) -> None:
+    def edit_price_list_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3763,12 +3759,12 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_price_list_active_action(self, row: dict[str, object]) -> None:
+    def toggle_price_list_active_action(self, row: ApiRow) -> None:
         self._toggle_active(
             row, self.api_client.update_price_list, self.refresh_pricing
         )
 
-    def edit_price_item_dialog(self, row: dict[str, object]) -> None:
+    def edit_price_item_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -3800,7 +3796,7 @@ class MainWindow(QWidget):
                 )
             )
 
-    def delete_price_item_action(self, row: dict[str, object]) -> None:
+    def delete_price_item_action(self, row: ApiRow) -> None:
         label = self.translator.text("crud.delete")
         if self._confirm_record_action(row, label, hard_delete=True):
             self._run_api(
@@ -3810,7 +3806,7 @@ class MainWindow(QWidget):
                 )
             )
 
-    def edit_purchase_order_dialog(self, row: dict[str, object]) -> None:
+    def edit_purchase_order_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -3875,7 +3871,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def cancel_purchase_order_action(self, row: dict[str, object]) -> None:
+    def cancel_purchase_order_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -3883,7 +3879,7 @@ class MainWindow(QWidget):
             self.refresh_purchase,
         )
 
-    def edit_purchase_invoice_dialog(self, row: dict[str, object]) -> None:
+    def edit_purchase_invoice_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -3969,7 +3965,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def cancel_purchase_invoice_action(self, row: dict[str, object]) -> None:
+    def cancel_purchase_invoice_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -3977,7 +3973,7 @@ class MainWindow(QWidget):
             self.refresh_purchase,
         )
 
-    def edit_inventory_dialog(self, row: dict[str, object]) -> None:
+    def edit_inventory_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -4007,7 +4003,7 @@ class MainWindow(QWidget):
                 )
             )
 
-    def cancel_inventory_action(self, row: dict[str, object]) -> None:
+    def cancel_inventory_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -4015,7 +4011,7 @@ class MainWindow(QWidget):
             self.refresh_warehouse,
         )
 
-    def edit_stock_transfer_dialog(self, row: dict[str, object]) -> None:
+    def edit_stock_transfer_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -4059,7 +4055,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def reject_stock_transfer_action(self, row: dict[str, object]) -> None:
+    def reject_stock_transfer_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -4067,7 +4063,7 @@ class MainWindow(QWidget):
             self.refresh_warehouse,
         )
 
-    def edit_stock_writeoff_dialog(self, row: dict[str, object]) -> None:
+    def edit_stock_writeoff_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -4111,7 +4107,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def cancel_stock_writeoff_action(self, row: dict[str, object]) -> None:
+    def cancel_stock_writeoff_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -4119,7 +4115,7 @@ class MainWindow(QWidget):
             self.refresh_warehouse,
         )
 
-    def edit_cash_register_dialog(self, row: dict[str, object]) -> None:
+    def edit_cash_register_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -4144,12 +4140,12 @@ class MainWindow(QWidget):
                 )
             )
 
-    def toggle_cash_register_active_action(self, row: dict[str, object]) -> None:
+    def toggle_cash_register_active_action(self, row: ApiRow) -> None:
         self._toggle_active(
             row, self.api_client.update_cash_register, self.refresh_cashier
         )
 
-    def close_cash_shift_action(self, row: dict[str, object]) -> None:
+    def close_cash_shift_action(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.close"),
             [
@@ -4168,7 +4164,7 @@ class MainWindow(QWidget):
                 self.refresh_cashier,
             )
 
-    def edit_sale_dialog(self, row: dict[str, object]) -> None:
+    def edit_sale_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -4266,7 +4262,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def cancel_sale_action(self, row: dict[str, object]) -> None:
+    def cancel_sale_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -4274,7 +4270,7 @@ class MainWindow(QWidget):
             self.refresh_sales,
         )
 
-    def edit_sale_return_dialog(self, row: dict[str, object]) -> None:
+    def edit_sale_return_dialog(self, row: ApiRow) -> None:
         line = self._first_line(row)
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
@@ -4357,7 +4353,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def cancel_sale_return_action(self, row: dict[str, object]) -> None:
+    def cancel_sale_return_action(self, row: ApiRow) -> None:
         self._confirming_api_action(
             row,
             "crud.cancel",
@@ -4365,7 +4361,7 @@ class MainWindow(QWidget):
             self.refresh_sales,
         )
 
-    def edit_report_filter_dialog(self, row: dict[str, object]) -> None:
+    def edit_report_filter_dialog(self, row: ApiRow) -> None:
         payload = self._simple_record_form(
             self.translator.text("crud.edit"),
             [
@@ -4392,7 +4388,7 @@ class MainWindow(QWidget):
             )
         )
 
-    def delete_report_filter_action(self, row: dict[str, object]) -> None:
+    def delete_report_filter_action(self, row: ApiRow) -> None:
         label = self.translator.text("crud.delete")
         if self._confirm_record_action(row, label, hard_delete=True):
             self._run_api(
@@ -4540,7 +4536,7 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-    def _show_product_result_dialog(self, product: dict[str, object]) -> None:
+    def _show_product_result_dialog(self, product: ApiRow) -> None:
         """Show barcode lookup results as a friendly details dialog."""
 
         dialog = QDialog(self)
@@ -4918,7 +4914,7 @@ class MainWindow(QWidget):
             return int(text) if text else None
 
         def action() -> None:
-            line: dict[str, object] = {
+            line: ApiRow = {
                 "product_id": int(product_id.text().strip()),
                 "quantity": quantity.text().strip() or "1",
                 "price_cur": purchase_price.text().strip() or "0",
@@ -4926,7 +4922,7 @@ class MainWindow(QWidget):
             order_line = optional_int(order_line_id)
             if order_line is not None:
                 line["purchase_order_line_id"] = order_line
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "counterparty_id": int(supplier_id.text().strip()),
                 "warehouse_id": int(warehouse_id.text().strip()),
                 "currency_id": int(
@@ -5146,7 +5142,7 @@ class MainWindow(QWidget):
             return int(text) if text else None
 
         def action() -> None:
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "sale_id": int(sale_id.text().strip()),
                 "refund_method": refund_method.text().strip() or "debt_correction",
                 "refund_cash_tmt": refund_cash.text().strip() or "0",
@@ -5205,7 +5201,7 @@ class MainWindow(QWidget):
 
         def action() -> None:
             sale_text = sale_id.text().strip()
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "counterparty_id": int(customer_id.text().strip()),
                 "direction": "incoming",
                 "payment_method": "cash",
@@ -5373,7 +5369,7 @@ class MainWindow(QWidget):
                 self._cashier_optional_int(self.cashier_currency_id_input)
                 or self._default_currency_id()
             )
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "sale_type": "retail",
                 "cash_register_id": cash_register_id,
                 "cash_shift_id": cash_shift_id,
@@ -5443,7 +5439,7 @@ class MainWindow(QWidget):
             shift_id = self._cashier_optional_int(self.cashier_shift_id_input)
             if shift_id is None:
                 raise ValueError(self.translator.text("cashier.error.shift_required"))
-            payload: dict[str, object] = {}
+            payload: ApiRow = {}
             closing_amount = self.cashier_closing_amount_input.text().strip()
             if closing_amount:
                 payload["closing_amount"] = closing_amount
@@ -5453,7 +5449,7 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-    def _show_cashier_report(self, report: dict[str, object]) -> None:
+    def _show_cashier_report(self, report: ApiRow) -> None:
         """Render an X/Z report into the cashier text and receipt preview panes."""
 
         self.cashier_text.setPlainText(json.dumps(report, indent=2, ensure_ascii=False))
@@ -5463,7 +5459,7 @@ class MainWindow(QWidget):
             "\n".join(self._cashier_report_lines(report))
         )
 
-    def _cashier_set_product_inputs(self, product: dict[str, object]) -> None:
+    def _cashier_set_product_inputs(self, product: ApiRow) -> None:
         """Populate product entry fields from a catalog payload."""
 
         self.cashier_product_id_input.setText(str(product.get("id", "")))
@@ -5477,7 +5473,7 @@ class MainWindow(QWidget):
         )
         self.cashier_price_input.setText(str(product.get("retail_price") or "0"))
 
-    def _cashier_cart_row_from_inputs(self) -> dict[str, object]:
+    def _cashier_cart_row_from_inputs(self) -> ApiRow:
         """Build one cart row from entry fields."""
 
         product_id = self._cashier_optional_int(self.cashier_product_id_input)
@@ -5527,7 +5523,7 @@ class MainWindow(QWidget):
         value = text.strip()
         return Decimal(value) if value else default
 
-    def _cashier_line_amount(self, item: dict[str, object]) -> Decimal:
+    def _cashier_line_amount(self, item: ApiRow) -> Decimal:
         """Return one cart row amount after percentage discount."""
 
         quantity = Decimal(str(item["quantity"]))
@@ -5567,7 +5563,7 @@ class MainWindow(QWidget):
             f"{self.translator.text('cashier.cart.total')}: {self._cashier_cart_total()} TMT"
         )
 
-    def _cashier_receipt_lines(self, sale: dict[str, object] | None) -> list[str]:
+    def _cashier_receipt_lines(self, sale: ApiRow | None) -> list[str]:
         """Build receipt-preview lines for a posted sale or current cart."""
 
         lines = ["ERP Accounting", "Receipt"]
@@ -5595,7 +5591,7 @@ class MainWindow(QWidget):
         lines.append(f"Total: {self._cashier_cart_total()} TMT")
         return lines
 
-    def _cashier_report_lines(self, report: dict[str, object]) -> list[str]:
+    def _cashier_report_lines(self, report: ApiRow) -> list[str]:
         """Build printable X/Z report lines."""
 
         return [
@@ -5744,7 +5740,7 @@ class MainWindow(QWidget):
             return
 
         def action() -> None:
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "cash_shift_id": int(shift_id.text().strip()),
                 "cash_register_from_id": int(register_id.text().strip()),
                 "operation_type": operation_type.text().strip() or "collection",
@@ -6052,7 +6048,7 @@ class MainWindow(QWidget):
             f"{self.translator.text('hardware.log.fiscal')}: {self.hardware.register_operation(Decimal('0.00'))}"
         )
 
-    def _run_api(self, action: Callable[[], None]) -> None:
+    def _run_api(self, action: Callable[[], object]) -> None:
         """Run an API action and show a simple error dialog."""
 
         try:
@@ -6261,10 +6257,10 @@ class MainWindow(QWidget):
         page, layout, _title = self._page("users.title")
         _title.hide()
 
-        self.users_rows: list[dict[str, object]] = []
-        self.users_filtered_rows: list[dict[str, object]] = []
+        self.users_rows: list[ApiRow] = []
+        self.users_filtered_rows: list[ApiRow] = []
         self.users_status_filter = "all"
-        self.users_current_detail_row: dict[str, object] | None = None
+        self.users_current_detail_row: ApiRow | None = None
         self.users_stat_columns = 0
         self.users_page_size = 10
         self.users_current_page = 0
@@ -6556,7 +6552,7 @@ class MainWindow(QWidget):
             if hasattr(self, "users_role_filter")
             else "all"
         )
-        filtered: list[dict[str, object]] = []
+        filtered: list[ApiRow] = []
         for row in self.users_rows:
             active = bool(row.get("is_active"))
             if self.users_status_filter == "active" and not active:
@@ -6577,7 +6573,7 @@ class MainWindow(QWidget):
         self.users_filtered_rows = filtered
         self._render_users_table(filtered)
 
-    def _render_users_table(self, rows: list[dict[str, object]]) -> None:
+    def _render_users_table(self, rows: list[ApiRow]) -> None:
         """Render the paginated Users rows for the current page."""
 
         total = len(rows)
@@ -6830,7 +6826,7 @@ class MainWindow(QWidget):
         role.setAlignment(Qt.AlignmentFlag.AlignCenter)
         return role
 
-    def _user_initials(self, row: dict[str, object]) -> str:
+    def _user_initials(self, row: ApiRow) -> str:
         """Return initials for a Users profile avatar."""
 
         full_name = str(row.get("full_name") or "").strip()
@@ -6844,13 +6840,13 @@ class MainWindow(QWidget):
             return username[:2].upper()
         return "U"
 
-    def _show_user_details_dialog(self, row: dict[str, object]) -> None:
+    def _show_user_details_dialog(self, row: ApiRow) -> None:
         """Compatibility wrapper: show the full-page Users detail view."""
 
         self._render_user_detail(row)
         self.users_stack.setCurrentWidget(self.users_detail_page)
 
-    def _render_user_detail(self, row: dict[str, object]) -> None:
+    def _render_user_detail(self, row: ApiRow) -> None:
         """Render one user in the full-page detail state."""
 
         self.users_current_detail_row = dict(row)
@@ -6981,12 +6977,12 @@ class MainWindow(QWidget):
 
         self._show_user_form("create")
 
-    def edit_user_dialog(self, row: dict[str, object]) -> None:
+    def edit_user_dialog(self, row: ApiRow) -> None:
         """Compatibility wrapper: show the full-page edit user form."""
 
         self._show_user_form("edit", row)
 
-    def _show_user_form(self, mode: str, row: dict[str, object] | None = None) -> None:
+    def _show_user_form(self, mode: str, row: ApiRow | None = None) -> None:
         """Render the full-page create or edit user form."""
 
         is_edit = mode == "edit"
@@ -7123,7 +7119,7 @@ class MainWindow(QWidget):
 
         self.users_stack.setCurrentWidget(page)
 
-    def _submit_user_form(self, mode: str, row: dict[str, object]) -> None:
+    def _submit_user_form(self, mode: str, row: ApiRow) -> None:
         """Validate and submit the current full-page Users form."""
 
         is_edit = mode == "edit"
@@ -7147,7 +7143,7 @@ class MainWindow(QWidget):
 
         role_name = str(self.user_form_role_combo.currentData() or "Cashier")
         if is_edit:
-            payload: dict[str, object] = {
+            payload: ApiRow = {
                 "full_name": full_name,
                 "role_name": role_name,
                 "is_active": self.user_form_active_check.isChecked(),
@@ -7184,7 +7180,7 @@ class MainWindow(QWidget):
 
         self._run_api(action)
 
-    def _find_user_by_id(self, user_id: object) -> dict[str, object] | None:
+    def _find_user_by_id(self, user_id: object) -> ApiRow | None:
         """Find one loaded user row by ID."""
 
         for row in self.users_rows:
@@ -7214,7 +7210,7 @@ class MainWindow(QWidget):
         self._populate_users_role_filter()
         self._apply_users_filters()
 
-    def deactivate_user_action(self, row: dict[str, object]) -> None:
+    def deactivate_user_action(self, row: ApiRow) -> None:
         """Activate or deactivate a user and preserve the relevant Users state."""
 
         target_active = not bool(row.get("is_active"))
@@ -7376,10 +7372,10 @@ class MainWindow(QWidget):
                 "" if allowed else self.translator.text("common.permission_required")
             )
 
-    def resizeEvent(self, event: QResizeEvent) -> None:
+    def resizeEvent(self, a0: QResizeEvent | None) -> None:
         """Handle window resizing to toggle sidebar visibility based on width."""
 
-        super().resizeEvent(event)
+        super().resizeEvent(a0)
         # Auto-hide the navigation sidebar if the window width is below 1100 pixels
         self.nav.setHidden(self.width() < 1100)
         self._update_users_responsive_layout()
