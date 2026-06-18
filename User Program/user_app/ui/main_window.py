@@ -644,6 +644,97 @@ class MainWindow(QWidget):
                 font-size: 9pt;
                 font-weight: 500;
             }
+            
+            /* Users View Detail Page Styles */
+            QFrame#UsersProfileCardModern {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #ffffff, stop:1 #f8fafc);
+                border: 1px solid #e2e8f0;
+                border-radius: 16px;
+            }
+            QFrame#UsersDetailsCardModern {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 16px;
+            }
+            QLabel#UsersDetailAvatar {
+                border: 3px solid #ffffff;
+                border-radius: 45px;
+                color: #ffffff;
+                font-size: 28px;
+                font-weight: 800;
+                min-height: 90px;
+                max-height: 90px;
+                min-width: 90px;
+                max-width: 90px;
+            }
+            QLabel#UsersDetailAvatar[active="true"] {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #3b82f6, stop:1 #8b5cf6);
+            }
+            QLabel#UsersDetailAvatar[active="false"] {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #64748b, stop:1 #94a3b8);
+            }
+            QFrame#UsersFieldRow {
+                background: transparent;
+                border: none;
+                border-bottom: 1px solid #f1f5f9;
+            }
+            QFrame#UsersFieldRow:hover {
+                background: #f8fafc;
+            }
+            QLabel#UsersFieldValue {
+                color: #0f172a;
+                font-size: 11pt;
+                font-weight: 600;
+            }
+            QPushButton#UsersCopyButton {
+                background: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                color: #64748b;
+                font-size: 8pt;
+                font-weight: 600;
+                padding: 4px 8px;
+                min-width: 70px;
+            }
+            QPushButton#UsersCopyButton:hover {
+                background: #e2e8f0;
+                border-color: #cbd5e1;
+                color: #0f172a;
+            }
+            QPushButton#UsersCopyButton[copied="true"] {
+                background: #dcfce7;
+                border-color: #bbf7d0;
+                color: #166534;
+            }
+            QPushButton#UsersStatusToggleButton[status_active="true"] {
+                background: transparent;
+                border: 1px solid #fca5a5;
+                border-radius: 10px;
+                color: #b91c1c;
+                font-weight: 700;
+                padding: 8px 16px;
+            }
+            QPushButton#UsersStatusToggleButton[status_active="true"]:hover {
+                background: #fef2f2;
+                border-color: #ef4444;
+                color: #991b1b;
+            }
+            QPushButton#UsersStatusToggleButton[status_active="false"] {
+                background: transparent;
+                border: 1px solid #86efac;
+                border-radius: 10px;
+                color: #15803d;
+                font-weight: 700;
+                padding: 8px 16px;
+            }
+            QPushButton#UsersStatusToggleButton[status_active="false"]:hover {
+                background: #f0fdf4;
+                border-color: #22c55e;
+                color: #166534;
+            }
             """
         )
 
@@ -6509,6 +6600,8 @@ class MainWindow(QWidget):
         self.users_filtered_rows: list[ApiRow] = []
         self.users_status_filter = "all"
         self.users_current_detail_row: ApiRow | None = None
+        self.users_profile_card = None
+        self.users_detail_container_layout = None
         self.users_stat_columns = 0
         self.users_page_size = 10
         self.users_current_page = 0
@@ -7099,84 +7192,157 @@ class MainWindow(QWidget):
         self._render_user_detail(row)
         self.users_stack.setCurrentWidget(self.users_detail_page)
 
+    def _copy_to_clipboard(self, text: str, button: QPushButton) -> None:
+        """Copy text to system clipboard and update button state."""
+
+        from PyQt6.QtWidgets import QApplication
+        from PyQt6.QtCore import QTimer
+
+        QApplication.clipboard().setText(text)
+        button.setProperty("copied", True)
+        
+        lang = self.translator.language
+        copied_text = "Скопировано" if lang == "ru" else "Göçürildi" if lang == "tk" else "Copied"
+        button.setText("✓ " + copied_text)
+        
+        button.style().unpolish(button)
+        button.style().polish(button)
+
+        def reset():
+            button.setProperty("copied", False)
+            copy_label = "Копировать" if lang == "ru" else "Göçür" if lang == "tk" else "Copy"
+            button.setText("📋 " + copy_label)
+            button.style().unpolish(button)
+            button.style().polish(button)
+
+        QTimer.singleShot(1500, reset)
+
     def _render_user_detail(self, row: ApiRow) -> None:
         """Render one user in the full-page detail state."""
+
+        from PyQt6.QtWidgets import QBoxLayout
 
         self.users_current_detail_row = dict(row)
         self._clear_layout(self.users_detail_layout)
 
+        # Header Section
         header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        back = QPushButton(self.translator.text("users.back_to_list"))
+        header.setContentsMargins(0, 0, 0, 8)
+        
+        back = QPushButton("←  " + self.translator.text("users.back_to_list"))
+        back.setObjectName("UsersFormBackButton")
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._show_users_list_page)
+        
         title = QLabel(self.translator.text("users.details"))
         title.setObjectName("UsersPageHeading")
+        
         header.addWidget(back)
         header.addWidget(title)
         header.addStretch(1)
+        
         edit = QPushButton(self.translator.text("crud.edit"))
         edit.setObjectName("PrimaryButton")
         edit.clicked.connect(
             lambda _checked=False, current=row: self.edit_user_dialog(current)
         )
+        
         toggle = QPushButton(self._active_lifecycle_label(row))
+        toggle.setObjectName("UsersStatusToggleButton")
+        toggle.setProperty("status_active", bool(row.get("is_active")))
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
         toggle.clicked.connect(
             lambda _checked=False, current=row: self.deactivate_user_action(current)
         )
+        
         header.addWidget(toggle)
         header.addWidget(edit)
         self.users_detail_layout.addLayout(header)
 
+        # Scroll Area for responsive content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(14)
+        content_layout.setContentsMargins(0, 8, 0, 8)
+        content_layout.setSpacing(16)
 
+        # Responsive detail container
+        self.users_detail_container = QWidget()
+        self.users_detail_container_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.users_detail_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.users_detail_container_layout.setSpacing(20)
+        self.users_detail_container.setLayout(self.users_detail_container_layout)
+
+        # Left/Top Card: Profile Overview
         profile = QFrame()
-        profile.setObjectName("UsersProfileCard")
-        profile_layout = QHBoxLayout(profile)
-        profile_layout.setContentsMargins(18, 18, 18, 18)
-        profile_layout.setSpacing(14)
+        profile.setObjectName("UsersProfileCardModern")
+        self.users_profile_card = profile
+        
+        profile_layout = QVBoxLayout(profile)
+        profile_layout.setContentsMargins(24, 32, 24, 32)
+        profile_layout.setSpacing(16)
+        profile_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
         avatar = QLabel(self._user_initials(row))
-        avatar.setObjectName("UsersAvatar")
+        avatar.setObjectName("UsersDetailAvatar")
+        avatar.setProperty("active", bool(row.get("is_active")))
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        profile_text = QVBoxLayout()
-        profile_text.setSpacing(5)
+        
         name = QLabel(str(row.get("full_name") or row.get("username") or "-"))
         name.setObjectName("UsersPageHeading")
+        name.setStyleSheet("font-size: 14pt; font-weight: 800; color: #0f172a;")
         name.setWordWrap(True)
+        name.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
         username = QLabel(f"@{row.get('username') or '-'}")
         username.setObjectName("UsersSubtitle")
+        username.setStyleSheet("font-size: 10pt; color: #64748b; font-weight: 500;")
+        username.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
         badges = QHBoxLayout()
         badges.setSpacing(8)
+        badges.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badges.addWidget(self._make_role_badge(row.get("role_name")))
         badges.addWidget(
             self._make_status_badge(
                 bool(row.get("is_active")), self.translator.language
             )
         )
-        badges.addStretch(1)
-        profile_text.addWidget(name)
-        profile_text.addWidget(username)
-        profile_text.addLayout(badges)
+        
+        profile_layout.addStretch(1)
         profile_layout.addWidget(avatar)
-        profile_layout.addLayout(profile_text, 1)
-        content_layout.addWidget(profile)
+        profile_layout.addWidget(name)
+        profile_layout.addWidget(username)
+        profile_layout.addLayout(badges)
+        profile_layout.addStretch(1)
 
+        # Add drop shadow to Profile Card
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(14)
+        shadow.setColor(QColor(0, 0, 0, 15))
+        shadow.setOffset(0, 4)
+        profile.setGraphicsEffect(shadow)
+
+        # Right/Bottom Card: Account Details
         details = QFrame()
-        details.setObjectName("UsersDetailsCard")
-        details_layout = QGridLayout(details)
-        details_layout.setContentsMargins(18, 18, 18, 18)
-        details_layout.setHorizontalSpacing(18)
-        details_layout.setVerticalSpacing(12)
+        details.setObjectName("UsersDetailsCardModern")
+        
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(24, 24, 24, 24)
+        details_layout.setSpacing(0)
+
+        card_title = QLabel(self.translator.text("users.details"))
+        card_title.setObjectName("UsersPageHeading")
+        card_title.setStyleSheet("font-size: 13pt; font-weight: 800; color: #0f172a; margin-bottom: 16px;")
+        details_layout.addWidget(card_title)
+
         fields = (
-            ("users.table.id", row.get("id")),
-            ("users.table.username", row.get("username")),
-            ("users.table.full_name", row.get("full_name")),
-            ("users.table.role", row.get("role_name")),
+            ("users.table.id", str(row.get("id")), True),
+            ("users.table.username", str(row.get("username")), True),
+            ("users.table.full_name", str(row.get("full_name") or ""), True),
+            ("users.table.role", str(row.get("role_name") or ""), True),
             (
                 "users.table.active",
                 self.translator.text(
@@ -7184,23 +7350,70 @@ class MainWindow(QWidget):
                     if row.get("is_active")
                     else "users.status.inactive"
                 ),
+                False,
             ),
         )
-        for index, (key, value) in enumerate(fields):
-            label = QLabel(self.translator.text(key))
-            label.setObjectName("UsersFieldLabel")
-            value_label = QLabel(self._format_value(value))
-            value_label.setWordWrap(True)
-            value_label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse
-            )
-            details_layout.addWidget(label, index, 0)
-            details_layout.addWidget(value_label, index, 1)
-        details_layout.setColumnStretch(1, 1)
-        content_layout.addWidget(details)
+
+        for label_key, val_value, is_copyable in fields:
+            row_frame = QFrame()
+            row_frame.setObjectName("UsersFieldRow")
+            row_lay = QHBoxLayout(row_frame)
+            row_lay.setContentsMargins(12, 12, 12, 12)
+            row_lay.setSpacing(10)
+
+            # Left Text Group
+            text_container = QWidget()
+            text_lay = QVBoxLayout(text_container)
+            text_lay.setContentsMargins(0, 0, 0, 0)
+            text_lay.setSpacing(4)
+
+            lbl = QLabel(self.translator.text(label_key).upper())
+            lbl.setObjectName("UsersFieldLabel")
+            lbl.setStyleSheet("font-size: 8pt; font-weight: 700; color: #64748b; letter-spacing: 0.5px;")
+
+            val = QLabel(self._format_value(val_value))
+            val.setObjectName("UsersFieldValue")
+            val.setWordWrap(True)
+            val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+            text_lay.addWidget(lbl)
+            text_lay.addWidget(val)
+            row_lay.addWidget(text_container, 1)
+
+            # Copy Button
+            if is_copyable and val_value and val_value != "-":
+                copy_btn = QPushButton()
+                copy_btn.setObjectName("UsersCopyButton")
+                lang = self.translator.language
+                copy_label = "Копировать" if lang == "ru" else "Göçür" if lang == "tk" else "Copy"
+                copy_btn.setText("📋 " + copy_label)
+                copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                copy_btn.clicked.connect(
+                    lambda checked=False, text_to_copy=val_value, btn=copy_btn: self._copy_to_clipboard(text_to_copy, btn)
+                )
+                row_lay.addWidget(copy_btn)
+
+            details_layout.addWidget(row_frame)
+
+        # Add drop shadow to Details Card
+        shadow2 = QGraphicsDropShadowEffect()
+        shadow2.setBlurRadius(14)
+        shadow2.setColor(QColor(0, 0, 0, 15))
+        shadow2.setOffset(0, 4)
+        details.setGraphicsEffect(shadow2)
+
+        # Add profile and details cards to the dual container
+        self.users_detail_container_layout.addWidget(profile)
+        self.users_detail_container_layout.addWidget(details, 1)
+
+        content_layout.addWidget(self.users_detail_container)
         content_layout.addStretch(1)
+
         scroll.setWidget(content)
         self.users_detail_layout.addWidget(scroll, 1)
+
+        # Call responsive reflow to apply correct initial alignment
+        self._update_users_responsive_layout()
 
     def _user_role_options(
         self, selected_role: str | None = None
@@ -7786,6 +7999,24 @@ class MainWindow(QWidget):
             except Exception:
                 # best-effort; don't break layout on unexpected errors
                 pass
+
+        # Reflow the user details cards if visible
+        if (
+            hasattr(self, "users_detail_container_layout")
+            and self.users_detail_container_layout is not None
+            and hasattr(self, "users_profile_card")
+            and self.users_profile_card is not None
+        ):
+            from PyQt6.QtWidgets import QBoxLayout
+            if self.width() < 900:
+                if self.users_detail_container_layout.direction() != QBoxLayout.Direction.TopToBottom:
+                    self.users_detail_container_layout.setDirection(QBoxLayout.Direction.TopToBottom)
+                    self.users_profile_card.setMaximumWidth(16777215)
+            else:
+                if self.users_detail_container_layout.direction() != QBoxLayout.Direction.LeftToRight:
+                    self.users_detail_container_layout.setDirection(QBoxLayout.Direction.LeftToRight)
+                    self.users_profile_card.setMaximumWidth(360)
+                    self.users_profile_card.setMinimumWidth(300)
 
     def _apply_permissions(self) -> None:
         """Hide unavailable pages and disable actions blocked by role permissions."""
