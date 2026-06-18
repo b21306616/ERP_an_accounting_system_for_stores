@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QHeaderView,
     QLayout,
     QPlainTextEdit,
@@ -467,23 +468,20 @@ class MainWindow(QWidget):
                 font-weight: 700;
                 padding-bottom: 2px;
             }
-            QFrame#UsersFormDivider {
-                background: #e2e8f0;
-                border: none;
-                max-height: 1px;
-                min-height: 1px;
-            }
-            QLineEdit#UsersFormInput {
+            QFrame#UsersFormSectionCard {
                 background: #f8fafc;
                 border: 1px solid #e2e8f0;
+                border-radius: 12px;
+            }
+            QLineEdit#UsersFormInput {
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
                 border-radius: 10px;
                 color: #0f172a;
                 font-size: 10pt;
                 padding: 10px 14px;
-                max-width: 520px;
             }
             QLineEdit#UsersFormInput:focus {
-                background: #ffffff;
                 border-color: #3b82f6;
             }
             QLineEdit#UsersFormInput:read-only {
@@ -491,16 +489,14 @@ class MainWindow(QWidget):
                 color: #94a3b8;
             }
             QComboBox#UsersFormCombo {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
+                background: #ffffff;
+                border: 1px solid #cbd5e1;
                 border-radius: 10px;
                 color: #0f172a;
                 font-size: 10pt;
                 padding: 10px 14px;
-                max-width: 520px;
             }
             QComboBox#UsersFormCombo:focus {
-                background: #ffffff;
                 border-color: #3b82f6;
             }
             QComboBox#UsersFormCombo::drop-down {
@@ -521,36 +517,31 @@ class MainWindow(QWidget):
                 border-color: #3b82f6;
                 color: #3b82f6;
             }
-            QFrame#UsersPasswordStrengthBar {
+            QProgressBar {
                 background: #e2e8f0;
                 border: none;
                 border-radius: 3px;
                 max-height: 6px;
                 min-height: 6px;
             }
-            QFrame#UsersPasswordStrengthFillWeak {
+            QProgressBar::chunk {
+                border-radius: 3px;
+            }
+            QProgressBar#UsersPasswordStrengthBarWeak::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #ef4444, stop:1 #f87171);
-                border: none;
-                border-radius: 3px;
-                max-height: 6px;
-                min-height: 6px;
             }
-            QFrame#UsersPasswordStrengthFillMedium {
+            QProgressBar#UsersPasswordStrengthBarMedium::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #f59e0b, stop:1 #fbbf24);
-                border: none;
-                border-radius: 3px;
-                max-height: 6px;
-                min-height: 6px;
             }
-            QFrame#UsersPasswordStrengthFillStrong {
+            QProgressBar#UsersPasswordStrengthBarGood::chunk {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #8b5cf6);
+            }
+            QProgressBar#UsersPasswordStrengthBarStrong::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                     stop:0 #22c55e, stop:1 #4ade80);
-                border: none;
-                border-radius: 3px;
-                max-height: 6px;
-                min-height: 6px;
             }
             QLabel#UsersPasswordStrengthLabel {
                 font-size: 8pt;
@@ -563,6 +554,11 @@ class MainWindow(QWidget):
             }
             QLabel#UsersPasswordStrengthLabelMedium {
                 color: #f59e0b;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#UsersPasswordStrengthLabelGood {
+                color: #3b82f6;
                 font-size: 8pt;
                 font-weight: 700;
             }
@@ -6476,6 +6472,13 @@ class MainWindow(QWidget):
         for button in self.findChildren(QPushButton):
             text_key = button.property("textKey")
             if text_key:
+                if text_key == "users.back_to_list":
+                    button.setText("←  " + self.translator.text(str(text_key)))
+                else:
+                    button.setText(self.translator.text(str(text_key)))
+        for button in self.findChildren(QToolButton):
+            text_key = button.property("textKey")
+            if text_key:
                 button.setText(self.translator.text(str(text_key)))
         if hasattr(self, "settings_values") and self.settings_values:
             self._render_settings_forms(self.settings_values)
@@ -7238,6 +7241,7 @@ class MainWindow(QWidget):
         
         back = QPushButton("←  " + self.translator.text("users.back_to_list"))
         back.setObjectName("UsersFormBackButton")
+        back.setProperty("textKey", "users.back_to_list")
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._show_users_list_page)
         
@@ -7249,10 +7253,12 @@ class MainWindow(QWidget):
         title_key = "users.edit_title" if is_edit else "users.create"
         title = QLabel(self.translator.text(title_key))
         title.setObjectName("UsersPageHeading")
+        title.setProperty("titleKey", title_key)
         
         subtitle_key = "users.form.subtitle_edit" if is_edit else "users.form.subtitle_create"
         subtitle = QLabel(self.translator.text(subtitle_key))
         subtitle.setObjectName("UsersFormSubtitle")
+        subtitle.setProperty("titleKey", subtitle_key)
         
         title_box_layout.addWidget(title)
         title_box_layout.addWidget(subtitle)
@@ -7311,20 +7317,22 @@ class MainWindow(QWidget):
         self.user_form_username = QLineEdit(str(row.get("username") or ""))
         self.user_form_username.setObjectName("UsersFormInput")
         self.user_form_username.setPlaceholderText(self.translator.text("users.form.username"))
+        self.user_form_username.setProperty("placeholderKey", "users.form.username")
         self.user_form_username.setReadOnly(is_edit)
         
         self.user_form_full_name = QLineEdit(str(row.get("full_name") or ""))
         self.user_form_full_name.setObjectName("UsersFormInput")
         self.user_form_full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        self.user_form_full_name.setProperty("placeholderKey", "users.form.full_name")
         # Hook up initials updater
         self.user_form_full_name.textChanged.connect(lambda text: avatar_circle.setText(get_initials(text)))
 
         self.user_form_password = QLineEdit()
         self.user_form_password.setObjectName("UsersFormInput")
         self.user_form_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.user_form_password.setPlaceholderText(
-            self.translator.text("users.form.password_hint" if is_edit else "users.form.password")
-        )
+        pass_hint_key = "users.form.password_hint" if is_edit else "users.form.password"
+        self.user_form_password.setPlaceholderText(self.translator.text(pass_hint_key))
+        self.user_form_password.setProperty("placeholderKey", pass_hint_key)
 
         # Password show/hide tool
         password_box = QWidget()
@@ -7335,6 +7343,7 @@ class MainWindow(QWidget):
         self.user_form_password_toggle = QToolButton()
         self.user_form_password_toggle.setObjectName("UsersFormPasswordToggle")
         self.user_form_password_toggle.setText(self.translator.text("users.form.show_password"))
+        self.user_form_password_toggle.setProperty("textKey", "users.form.show_password")
         self.user_form_password_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def toggle_password() -> None:
@@ -7342,9 +7351,9 @@ class MainWindow(QWidget):
             self.user_form_password.setEchoMode(
                 QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
             )
-            self.user_form_password_toggle.setText(
-                self.translator.text("users.form.hide_password" if visible else "users.form.show_password")
-            )
+            key = "users.form.hide_password" if visible else "users.form.show_password"
+            self.user_form_password_toggle.setText(self.translator.text(key))
+            self.user_form_password_toggle.setProperty("textKey", key)
 
         self.user_form_password_toggle.clicked.connect(toggle_password)
         password_layout.addWidget(self.user_form_password, 1)
@@ -7359,26 +7368,22 @@ class MainWindow(QWidget):
         strength_header = QHBoxLayout()
         strength_title = QLabel(self.translator.text("users.form.password"))
         strength_title.setObjectName("UsersFormFieldLabel")
+        strength_title.setProperty("titleKey", "users.form.password")
         strength_text = QLabel("")
         strength_text.setObjectName("UsersPasswordStrengthLabel")
         strength_header.addWidget(strength_title)
         strength_header.addStretch(1)
         strength_header.addWidget(strength_text)
         
-        strength_bg = QFrame()
-        strength_bg.setObjectName("UsersPasswordStrengthBar")
-        strength_bg_layout = QHBoxLayout(strength_bg)
-        strength_bg_layout.setContentsMargins(0, 0, 0, 0)
-        strength_bg_layout.setSpacing(0)
-        
-        strength_fill = QFrame()
-        strength_fill.setObjectName("UsersPasswordStrengthFillWeak")
-        strength_fill.setFixedWidth(0)
-        strength_bg_layout.addWidget(strength_fill, 0, Qt.AlignmentFlag.AlignLeft)
-        strength_bg_layout.addStretch(1)
+        strength_bar = QProgressBar()
+        strength_bar.setObjectName("UsersPasswordStrengthBarWeak")
+        strength_bar.setTextVisible(False)
+        strength_bar.setRange(0, 100)
+        strength_bar.setValue(0)
+        strength_bar.setFixedHeight(6)
         
         strength_layout.addLayout(strength_header)
-        strength_layout.addWidget(strength_bg)
+        strength_layout.addWidget(strength_bar)
         strength_container.hide()
 
         def update_password_strength(text: str) -> None:
@@ -7386,36 +7391,45 @@ class MainWindow(QWidget):
                 strength_container.hide()
                 return
             strength_container.show()
-            length = len(text)
+
+            # Categories: uppercase, lowercase, digits, symbols
             has_upper = any(c.isupper() for c in text)
+            has_lower = any(c.islower() for c in text)
             has_digit = any(c.isdigit() for c in text)
             has_special = any(not c.isalnum() for c in text)
-            
-            score = 0
-            if length >= 6: score += 1
-            if length >= 10: score += 1
-            if has_upper: score += 1
-            if has_digit: score += 1
-            if has_special: score += 1
-            
-            if score <= 2:
-                strength_fill.setObjectName("UsersPasswordStrengthFillWeak")
-                strength_fill.setFixedWidth(120)
-                strength_text.setText(self.translator.text("users.form.password_strength_weak"))
-                strength_text.setObjectName("UsersPasswordStrengthLabelWeak")
-            elif score <= 4:
-                strength_fill.setObjectName("UsersPasswordStrengthFillMedium")
-                strength_fill.setFixedWidth(240)
-                strength_text.setText(self.translator.text("users.form.password_strength_medium"))
-                strength_text.setObjectName("UsersPasswordStrengthLabelMedium")
-            else:
-                strength_fill.setObjectName("UsersPasswordStrengthFillStrong")
-                strength_fill.setFixedWidth(360)
+
+            categories_present = sum((has_upper, has_lower, has_digit, has_special))
+
+            # Classification per requirement:
+            # 4 categories -> strong, 3 -> good, 2 -> medium, 1 -> weak
+            if categories_present >= 4:
+                strength_bar.setObjectName("UsersPasswordStrengthBarStrong")
+                strength_bar.setValue(100)
                 strength_text.setText(self.translator.text("users.form.password_strength_strong"))
                 strength_text.setObjectName("UsersPasswordStrengthLabelStrong")
-            
-            strength_fill.style().unpolish(strength_fill)
-            strength_fill.style().polish(strength_fill)
+                strength_text.setProperty("titleKey", "users.form.password_strength_strong")
+            elif categories_present == 3:
+                strength_bar.setObjectName("UsersPasswordStrengthBarGood")
+                strength_bar.setValue(75)
+                strength_text.setText(self.translator.text("users.form.password_strength_good"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelGood")
+                strength_text.setProperty("titleKey", "users.form.password_strength_good")
+            elif categories_present == 2:
+                strength_bar.setObjectName("UsersPasswordStrengthBarMedium")
+                strength_bar.setValue(50)
+                strength_text.setText(self.translator.text("users.form.password_strength_medium"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelMedium")
+                strength_text.setProperty("titleKey", "users.form.password_strength_medium")
+            else:
+                strength_bar.setObjectName("UsersPasswordStrengthBarWeak")
+                strength_bar.setValue(25)
+                strength_text.setText(self.translator.text("users.form.password_strength_weak"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelWeak")
+                strength_text.setProperty("titleKey", "users.form.password_strength_weak")
+
+            # Re-apply style so objectName changes take effect
+            strength_bar.style().unpolish(strength_bar)
+            strength_bar.style().polish(strength_bar)
             strength_text.style().unpolish(strength_text)
             strength_text.style().polish(strength_text)
 
@@ -7439,39 +7453,54 @@ class MainWindow(QWidget):
 
         status_label = QLabel()
         status_label.setObjectName("UsersFormToggleLabelActive" if self.user_form_active_check.isChecked() else "UsersFormToggleLabel")
-        status_label.setText(self.translator.text("users.status.active") if self.user_form_active_check.isChecked() else self.translator.text("users.status.inactive"))
+        stat_key = "users.status.active" if self.user_form_active_check.isChecked() else "users.status.inactive"
+        status_label.setText(self.translator.text(stat_key))
+        status_label.setProperty("titleKey", stat_key)
 
         def toggle_status_label(checked: bool) -> None:
-            status_label.setText(self.translator.text("users.status.active") if checked else self.translator.text("users.status.inactive"))
+            key = "users.status.active" if checked else "users.status.inactive"
+            status_label.setText(self.translator.text(key))
             status_label.setObjectName("UsersFormToggleLabelActive" if checked else "UsersFormToggleLabel")
+            status_label.setProperty("titleKey", key)
             status_label.style().unpolish(status_label)
             status_label.style().polish(status_label)
             
         self.user_form_active_check.toggled.connect(toggle_status_label)
 
         # Form Section helper
-        def add_section_header(icon_char: str, section_title_key: str):
-            section_widget = QWidget()
-            sec_layout = QHBoxLayout(section_widget)
-            sec_layout.setContentsMargins(0, 10, 0, 0)
-            sec_layout.setSpacing(8)
+        def create_section(icon_char: str, section_title_key: str) -> tuple[QFrame, QVBoxLayout]:
+            sec_card = QFrame()
+            sec_card.setObjectName("UsersFormSectionCard")
+            sec_lay = QVBoxLayout(sec_card)
+            sec_lay.setContentsMargins(20, 20, 20, 20)
+            sec_lay.setSpacing(16)
+            
+            # Header Layout
+            header_widget = QWidget()
+            header_lay = QHBoxLayout(header_widget)
+            header_lay.setContentsMargins(0, 0, 0, 0)
+            header_lay.setSpacing(8)
             
             icon_lbl = QLabel(icon_char)
             icon_lbl.setObjectName("UsersFormSectionIcon")
             title_lbl = QLabel(self.translator.text(section_title_key))
             title_lbl.setObjectName("UsersFormSectionHeader")
+            title_lbl.setProperty("titleKey", section_title_key)
             
-            sec_layout.addWidget(icon_lbl)
-            sec_layout.addWidget(title_lbl)
-            sec_layout.addStretch(1)
+            header_lay.addWidget(icon_lbl)
+            header_lay.addWidget(title_lbl)
+            header_lay.addStretch(1)
             
+            sec_lay.addWidget(header_widget)
+            
+            # Sub-card divider line
             divider = QFrame()
-            divider.setObjectName("UsersFormDivider")
+            divider.setStyleSheet("background: #e2e8f0; max-height: 1px; min-height: 1px; border: none;")
+            sec_lay.addWidget(divider)
             
-            card_layout.addWidget(section_widget)
-            card_layout.addWidget(divider)
+            return sec_card, sec_lay
 
-        def add_field(label_key: str, input_widget: QWidget):
+        def add_field_to_section(sec_lay: QVBoxLayout, label_key: str, input_widget: QWidget):
             field_widget = QWidget()
             field_lay = QVBoxLayout(field_widget)
             field_lay.setContentsMargins(0, 0, 0, 0)
@@ -7479,44 +7508,50 @@ class MainWindow(QWidget):
             
             label = QLabel(self.translator.text(label_key))
             label.setObjectName("UsersFormFieldLabel")
+            label.setProperty("titleKey", label_key)
             
             field_lay.addWidget(label)
             field_lay.addWidget(input_widget)
-            card_layout.addWidget(field_widget)
+            sec_lay.addWidget(field_widget)
 
         # Section 1: Account Info
-        add_section_header("👤", "users.form.section_account")
-        add_field("users.form.username", self.user_form_username)
-        add_field("users.form.full_name", self.user_form_full_name)
+        sec_account, sec_account_layout = create_section("👤", "users.form.section_account")
+        add_field_to_section(sec_account_layout, "users.form.username", self.user_form_username)
+        add_field_to_section(sec_account_layout, "users.form.full_name", self.user_form_full_name)
+        card_layout.addWidget(sec_account)
 
         # Section 2: Security
-        add_section_header("🔑", "users.form.section_security")
+        sec_security, sec_security_layout = create_section("🔑", "users.form.section_security")
         
-        # Add password field
         pass_field_widget = QWidget()
         pass_field_lay = QVBoxLayout(pass_field_widget)
         pass_field_lay.setContentsMargins(0, 0, 0, 0)
         pass_field_lay.setSpacing(6)
         pass_label = QLabel(self.translator.text("users.form.password"))
         pass_label.setObjectName("UsersFormFieldLabel")
+        pass_label.setProperty("titleKey", "users.form.password")
         pass_field_lay.addWidget(pass_label)
         pass_field_lay.addWidget(password_box)
-        card_layout.addWidget(pass_field_widget)
-        card_layout.addWidget(strength_container)
+        
+        sec_security_layout.addWidget(pass_field_widget)
+        sec_security_layout.addWidget(strength_container)
+        card_layout.addWidget(sec_security)
 
         # Section 3: Permissions
-        add_section_header("🛡️", "users.form.section_permissions")
-        add_field("users.form.role", self.user_form_role_combo)
+        sec_perms, sec_perms_layout = create_section("🛡️", "users.form.section_permissions")
+        add_field_to_section(sec_perms_layout, "users.form.role", self.user_form_role_combo)
         
         # Add toggle switch field
         toggle_widget = QWidget()
         toggle_lay = QHBoxLayout(toggle_widget)
-        toggle_lay.setContentsMargins(0, 6, 0, 0)
+        toggle_lay.setContentsMargins(0, 4, 0, 0)
         toggle_lay.setSpacing(12)
         toggle_lay.addWidget(self.user_form_active_check)
         toggle_lay.addWidget(status_label)
         toggle_lay.addStretch(1)
-        card_layout.addWidget(toggle_widget)
+        
+        sec_perms_layout.addWidget(toggle_widget)
+        card_layout.addWidget(sec_perms)
 
         # Add card to wrapper to center it
         wrapper = QWidget()
@@ -7537,11 +7572,13 @@ class MainWindow(QWidget):
         
         cancel = QPushButton(self.translator.text("crud.cancel"))
         cancel.setObjectName("UsersFormCancelButton")
+        cancel.setProperty("textKey", "crud.cancel")
         cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.clicked.connect(self._show_users_list_page)
         
         self.user_form_save_button = QPushButton(self.translator.text("users.save"))
         self.user_form_save_button.setObjectName("UsersFormSaveButton")
+        self.user_form_save_button.setProperty("textKey", "users.save")
         self.user_form_save_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.user_form_save_button.clicked.connect(
             lambda _checked=False: self._submit_user_form(mode, row)
