@@ -7240,23 +7240,6 @@ class MainWindow(QWidget):
         header.addWidget(back)
         header.addWidget(title)
         header.addStretch(1)
-        
-        edit = QPushButton(self.translator.text("crud.edit"))
-        edit.setObjectName("PrimaryButton")
-        edit.clicked.connect(
-            lambda _checked=False, current=row: self.edit_user_dialog(current)
-        )
-        
-        toggle = QPushButton(self._active_lifecycle_label(row))
-        toggle.setObjectName("UsersStatusToggleButton")
-        toggle.setProperty("status_active", bool(row.get("is_active")))
-        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        toggle.clicked.connect(
-            lambda _checked=False, current=row: self.deactivate_user_action(current)
-        )
-        
-        header.addWidget(toggle)
-        header.addWidget(edit)
         self.users_detail_layout.addLayout(header)
 
         # Scroll Area for responsive content
@@ -7411,6 +7394,30 @@ class MainWindow(QWidget):
 
         scroll.setWidget(content)
         self.users_detail_layout.addWidget(scroll, 1)
+
+        # Footer Button Row
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 8, 0, 0)
+        
+        toggle = QPushButton(self._active_lifecycle_label(row))
+        toggle.setObjectName("UsersStatusToggleButton")
+        toggle.setProperty("status_active", bool(row.get("is_active")))
+        toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        toggle.clicked.connect(
+            lambda _checked=False, current=row: self.deactivate_user_action(current)
+        )
+        
+        edit = QPushButton(self.translator.text("crud.edit"))
+        edit.setObjectName("PrimaryButton")
+        edit.setCursor(Qt.CursorShape.PointingHandCursor)
+        edit.clicked.connect(
+            lambda _checked=False, current=row: self.edit_user_dialog(current)
+        )
+        
+        button_row.addStretch(1)
+        button_row.addWidget(toggle)
+        button_row.addWidget(edit)
+        self.users_detail_layout.addLayout(button_row)
 
         # Call responsive reflow to apply correct initial alignment
         self._update_users_responsive_layout()
