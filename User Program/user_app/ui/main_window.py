@@ -408,6 +408,246 @@ class MainWindow(QWidget):
                 min-width: 70px;
                 padding: 4px 8px;
             }
+            QFrame#UsersFormCardModern {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
+                border-top: 3px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #8b5cf6);
+            }
+            QFrame#UsersFormCardModernEdit {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
+                border-top: 3px solid qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #22c55e, stop:1 #14b8a6);
+            }
+            QLabel#UsersFormAvatarCircle {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #dbeafe, stop:1 #ede9fe);
+                border: 2px solid #bfdbfe;
+                border-radius: 40px;
+                color: #3b82f6;
+                font-size: 26px;
+                font-weight: 800;
+                min-height: 80px;
+                max-height: 80px;
+                min-width: 80px;
+                max-width: 80px;
+            }
+            QLabel#UsersFormAvatarCircleEdit {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #dcfce7, stop:1 #d1fae5);
+                border: 2px solid #86efac;
+                border-radius: 40px;
+                color: #16a34a;
+                font-size: 26px;
+                font-weight: 800;
+                min-height: 80px;
+                max-height: 80px;
+                min-width: 80px;
+                max-width: 80px;
+            }
+            QLabel#UsersFormSectionIcon {
+                color: #3b82f6;
+                font-size: 16px;
+                font-weight: 800;
+                min-width: 20px;
+                max-width: 20px;
+            }
+            QLabel#UsersFormSectionHeader {
+                color: #0f172a;
+                font-size: 13px;
+                font-weight: 800;
+                letter-spacing: 0.5px;
+            }
+            QLabel#UsersFormFieldLabel {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 700;
+                padding-bottom: 2px;
+            }
+            QFrame#UsersFormDivider {
+                background: #e2e8f0;
+                border: none;
+                max-height: 1px;
+                min-height: 1px;
+            }
+            QLineEdit#UsersFormInput {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                color: #0f172a;
+                font-size: 10pt;
+                padding: 10px 14px;
+                max-width: 520px;
+            }
+            QLineEdit#UsersFormInput:focus {
+                background: #ffffff;
+                border-color: #3b82f6;
+            }
+            QLineEdit#UsersFormInput:read-only {
+                background: #f1f5f9;
+                color: #94a3b8;
+            }
+            QComboBox#UsersFormCombo {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                color: #0f172a;
+                font-size: 10pt;
+                padding: 10px 14px;
+                max-width: 520px;
+            }
+            QComboBox#UsersFormCombo:focus {
+                background: #ffffff;
+                border-color: #3b82f6;
+            }
+            QComboBox#UsersFormCombo::drop-down {
+                border: none;
+                width: 30px;
+            }
+            QToolButton#UsersFormPasswordToggle {
+                background: transparent;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 600;
+                padding: 8px 12px;
+            }
+            QToolButton#UsersFormPasswordToggle:hover {
+                background: #f1f5f9;
+                border-color: #3b82f6;
+                color: #3b82f6;
+            }
+            QFrame#UsersPasswordStrengthBar {
+                background: #e2e8f0;
+                border: none;
+                border-radius: 3px;
+                max-height: 6px;
+                min-height: 6px;
+            }
+            QFrame#UsersPasswordStrengthFillWeak {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #ef4444, stop:1 #f87171);
+                border: none;
+                border-radius: 3px;
+                max-height: 6px;
+                min-height: 6px;
+            }
+            QFrame#UsersPasswordStrengthFillMedium {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #f59e0b, stop:1 #fbbf24);
+                border: none;
+                border-radius: 3px;
+                max-height: 6px;
+                min-height: 6px;
+            }
+            QFrame#UsersPasswordStrengthFillStrong {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #22c55e, stop:1 #4ade80);
+                border: none;
+                border-radius: 3px;
+                max-height: 6px;
+                min-height: 6px;
+            }
+            QLabel#UsersPasswordStrengthLabel {
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#UsersPasswordStrengthLabelWeak {
+                color: #ef4444;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#UsersPasswordStrengthLabelMedium {
+                color: #f59e0b;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#UsersPasswordStrengthLabelStrong {
+                color: #22c55e;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QCheckBox#UsersFormToggle {
+                spacing: 0px;
+            }
+            QCheckBox#UsersFormToggle::indicator {
+                width: 44px;
+                height: 24px;
+                border-radius: 12px;
+                background: #cbd5e1;
+                border: 2px solid #94a3b8;
+            }
+            QCheckBox#UsersFormToggle::indicator:checked {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #8b5cf6);
+                border-color: #3b82f6;
+            }
+            QCheckBox#UsersFormToggle::indicator:hover {
+                border-color: #3b82f6;
+            }
+            QLabel#UsersFormToggleLabel {
+                color: #475569;
+                font-size: 10pt;
+                font-weight: 600;
+            }
+            QLabel#UsersFormToggleLabelActive {
+                color: #16a34a;
+                font-size: 10pt;
+                font-weight: 700;
+            }
+            QPushButton#UsersFormBackButton {
+                background: transparent;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                color: #475569;
+                font-weight: 700;
+                padding: 8px 16px;
+            }
+            QPushButton#UsersFormBackButton:hover {
+                background: #f1f5f9;
+                border-color: #94a3b8;
+                color: #0f172a;
+            }
+            QPushButton#UsersFormCancelButton {
+                background: transparent;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+                color: #64748b;
+                font-weight: 700;
+                padding: 10px 24px;
+            }
+            QPushButton#UsersFormCancelButton:hover {
+                background: #f8fafc;
+                border-color: #94a3b8;
+                color: #475569;
+            }
+            QPushButton#UsersFormSaveButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #3b82f6, stop:1 #8b5cf6);
+                border: none;
+                border-radius: 10px;
+                color: #ffffff;
+                font-size: 10pt;
+                font-weight: 800;
+                padding: 10px 32px;
+            }
+            QPushButton#UsersFormSaveButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2563eb, stop:1 #7c3aed);
+            }
+            QPushButton#UsersFormSaveButton:disabled {
+                background: #cbd5e1;
+                color: #94a3b8;
+            }
+            QLabel#UsersFormSubtitle {
+                color: #94a3b8;
+                font-size: 9pt;
+                font-weight: 500;
+            }
             """
         )
 
@@ -6991,67 +7231,110 @@ class MainWindow(QWidget):
         layout = self.users_edit_layout if is_edit else self.users_create_layout
         self._clear_layout(layout)
 
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 0)
-        back = QPushButton(self.translator.text("users.back_to_list"))
+        # Header section
+        header_container = QWidget()
+        header_layout = QHBoxLayout(header_container)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        
+        back = QPushButton("←  " + self.translator.text("users.back_to_list"))
+        back.setObjectName("UsersFormBackButton")
         back.setCursor(Qt.CursorShape.PointingHandCursor)
         back.clicked.connect(self._show_users_list_page)
+        
+        title_box = QWidget()
+        title_box_layout = QVBoxLayout(title_box)
+        title_box_layout.setContentsMargins(0, 0, 0, 0)
+        title_box_layout.setSpacing(4)
+        
         title_key = "users.edit_title" if is_edit else "users.create"
         title = QLabel(self.translator.text(title_key))
         title.setObjectName("UsersPageHeading")
-        header.addWidget(back)
-        header.addWidget(title)
-        header.addStretch(1)
-        layout.addLayout(header)
+        
+        subtitle_key = "users.form.subtitle_edit" if is_edit else "users.form.subtitle_create"
+        subtitle = QLabel(self.translator.text(subtitle_key))
+        subtitle.setObjectName("UsersFormSubtitle")
+        
+        title_box_layout.addWidget(title)
+        title_box_layout.addWidget(subtitle)
+        
+        header_layout.addWidget(back)
+        header_layout.addWidget(title_box)
+        header_layout.addStretch(1)
+        layout.addWidget(header_container)
 
+        # Scroll Area for Form Content
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(12)
-        form_card = QFrame()
-        form_card.setObjectName("UsersFormCard")
-        form_layout = QFormLayout(form_card)
-        form_layout.setContentsMargins(18, 18, 18, 18)
-        form_layout.setHorizontalSpacing(18)
-        form_layout.setVerticalSpacing(12)
-        form_layout.setFieldGrowthPolicy(
-            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
-        )
+        content_layout.setContentsMargins(0, 16, 0, 16)
+        content_layout.setSpacing(16)
 
+        # Main modern form card
+        form_card = QFrame()
+        form_card.setObjectName("UsersFormCardModernEdit" if is_edit else "UsersFormCardModern")
+        
+        card_layout = QVBoxLayout(form_card)
+        card_layout.setContentsMargins(32, 32, 32, 32)
+        card_layout.setSpacing(24)
+
+        # Error display
         self.user_form_error_label = QLabel()
         self.user_form_error_label.setObjectName("UsersFormError")
         self.user_form_error_label.setWordWrap(True)
         self.user_form_error_label.hide()
-        form_layout.addRow(self.user_form_error_label)
+        card_layout.addWidget(self.user_form_error_label)
 
+        # 1. Avatar Section at the top of the card
+        avatar_layout = QHBoxLayout()
+        avatar_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        avatar_circle = QLabel()
+        avatar_circle.setObjectName("UsersFormAvatarCircleEdit" if is_edit else "UsersFormAvatarCircle")
+        avatar_circle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Initials helper
+        def get_initials(name_str: str) -> str:
+            parts = name_str.strip().split()
+            if not parts:
+                return "?"
+            if len(parts) == 1:
+                return parts[0][:2].upper()
+            return (parts[0][0] + parts[1][0]).upper()
+
+        initial_name = str(row.get("full_name") or row.get("username") or "")
+        avatar_circle.setText(get_initials(initial_name))
+        avatar_layout.addWidget(avatar_circle)
+        card_layout.addLayout(avatar_layout)
+
+        # Fields inputs initialization
         self.user_form_username = QLineEdit(str(row.get("username") or ""))
-        self.user_form_username.setPlaceholderText(
-            self.translator.text("users.form.username")
-        )
+        self.user_form_username.setObjectName("UsersFormInput")
+        self.user_form_username.setPlaceholderText(self.translator.text("users.form.username"))
         self.user_form_username.setReadOnly(is_edit)
+        
         self.user_form_full_name = QLineEdit(str(row.get("full_name") or ""))
-        self.user_form_full_name.setPlaceholderText(
-            self.translator.text("users.form.full_name")
-        )
+        self.user_form_full_name.setObjectName("UsersFormInput")
+        self.user_form_full_name.setPlaceholderText(self.translator.text("users.form.full_name"))
+        # Hook up initials updater
+        self.user_form_full_name.textChanged.connect(lambda text: avatar_circle.setText(get_initials(text)))
+
         self.user_form_password = QLineEdit()
+        self.user_form_password.setObjectName("UsersFormInput")
         self.user_form_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.user_form_password.setPlaceholderText(
-            self.translator.text(
-                "users.form.password_hint" if is_edit else "users.form.password"
-            )
+            self.translator.text("users.form.password_hint" if is_edit else "users.form.password")
         )
 
+        # Password show/hide tool
         password_box = QWidget()
         password_layout = QHBoxLayout(password_box)
         password_layout.setContentsMargins(0, 0, 0, 0)
-        password_layout.setSpacing(8)
+        password_layout.setSpacing(10)
+        
         self.user_form_password_toggle = QToolButton()
-        self.user_form_password_toggle.setObjectName("UsersPasswordToggle")
-        self.user_form_password_toggle.setText(
-            self.translator.text("users.form.show_password")
-        )
+        self.user_form_password_toggle.setObjectName("UsersFormPasswordToggle")
+        self.user_form_password_toggle.setText(self.translator.text("users.form.show_password"))
         self.user_form_password_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
 
         def toggle_password() -> None:
@@ -7060,18 +7343,87 @@ class MainWindow(QWidget):
                 QLineEdit.EchoMode.Normal if visible else QLineEdit.EchoMode.Password
             )
             self.user_form_password_toggle.setText(
-                self.translator.text(
-                    "users.form.hide_password"
-                    if visible
-                    else "users.form.show_password"
-                )
+                self.translator.text("users.form.hide_password" if visible else "users.form.show_password")
             )
 
         self.user_form_password_toggle.clicked.connect(toggle_password)
         password_layout.addWidget(self.user_form_password, 1)
         password_layout.addWidget(self.user_form_password_toggle)
 
+        # Password strength bar
+        strength_container = QWidget()
+        strength_layout = QVBoxLayout(strength_container)
+        strength_layout.setContentsMargins(0, 4, 0, 0)
+        strength_layout.setSpacing(6)
+        
+        strength_header = QHBoxLayout()
+        strength_title = QLabel(self.translator.text("users.form.password"))
+        strength_title.setObjectName("UsersFormFieldLabel")
+        strength_text = QLabel("")
+        strength_text.setObjectName("UsersPasswordStrengthLabel")
+        strength_header.addWidget(strength_title)
+        strength_header.addStretch(1)
+        strength_header.addWidget(strength_text)
+        
+        strength_bg = QFrame()
+        strength_bg.setObjectName("UsersPasswordStrengthBar")
+        strength_bg_layout = QHBoxLayout(strength_bg)
+        strength_bg_layout.setContentsMargins(0, 0, 0, 0)
+        strength_bg_layout.setSpacing(0)
+        
+        strength_fill = QFrame()
+        strength_fill.setObjectName("UsersPasswordStrengthFillWeak")
+        strength_fill.setFixedWidth(0)
+        strength_bg_layout.addWidget(strength_fill, 0, Qt.AlignmentFlag.AlignLeft)
+        strength_bg_layout.addStretch(1)
+        
+        strength_layout.addLayout(strength_header)
+        strength_layout.addWidget(strength_bg)
+        strength_container.hide()
+
+        def update_password_strength(text: str) -> None:
+            if not text:
+                strength_container.hide()
+                return
+            strength_container.show()
+            length = len(text)
+            has_upper = any(c.isupper() for c in text)
+            has_digit = any(c.isdigit() for c in text)
+            has_special = any(not c.isalnum() for c in text)
+            
+            score = 0
+            if length >= 6: score += 1
+            if length >= 10: score += 1
+            if has_upper: score += 1
+            if has_digit: score += 1
+            if has_special: score += 1
+            
+            if score <= 2:
+                strength_fill.setObjectName("UsersPasswordStrengthFillWeak")
+                strength_fill.setFixedWidth(120)
+                strength_text.setText(self.translator.text("users.form.password_strength_weak"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelWeak")
+            elif score <= 4:
+                strength_fill.setObjectName("UsersPasswordStrengthFillMedium")
+                strength_fill.setFixedWidth(240)
+                strength_text.setText(self.translator.text("users.form.password_strength_medium"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelMedium")
+            else:
+                strength_fill.setObjectName("UsersPasswordStrengthFillStrong")
+                strength_fill.setFixedWidth(360)
+                strength_text.setText(self.translator.text("users.form.password_strength_strong"))
+                strength_text.setObjectName("UsersPasswordStrengthLabelStrong")
+            
+            strength_fill.style().unpolish(strength_fill)
+            strength_fill.style().polish(strength_fill)
+            strength_text.style().unpolish(strength_text)
+            strength_text.style().polish(strength_text)
+
+        self.user_form_password.textChanged.connect(update_password_strength)
+
+        # Role Combobox
         self.user_form_role_combo = QComboBox()
+        self.user_form_role_combo.setObjectName("UsersFormCombo")
         current_role = str(row.get("role_name") or "")
         for label, value in self._user_role_options(current_role or None):
             self.user_form_role_combo.addItem(label, value)
@@ -7079,39 +7431,122 @@ class MainWindow(QWidget):
         if selected_role >= 0:
             self.user_form_role_combo.setCurrentIndex(selected_role)
 
-        self.user_form_active_check = QCheckBox(
-            self.translator.text("users.status.active")
-        )
+        # Active Checkbox
+        self.user_form_active_check = QCheckBox()
+        self.user_form_active_check.setObjectName("UsersFormToggle")
         self.user_form_active_check.setChecked(bool(row.get("is_active", True)))
         self.user_form_active_check.setCursor(Qt.CursorShape.PointingHandCursor)
 
-        form_layout.addRow(
-            self.translator.text("users.form.username"), self.user_form_username
-        )
-        form_layout.addRow(
-            self.translator.text("users.form.full_name"), self.user_form_full_name
-        )
-        form_layout.addRow(self.translator.text("users.form.password"), password_box)
-        form_layout.addRow(
-            self.translator.text("users.form.role"), self.user_form_role_combo
-        )
-        form_layout.addRow(
-            self.translator.text("ui.active"), self.user_form_active_check
-        )
-        content_layout.addWidget(form_card)
+        status_label = QLabel()
+        status_label.setObjectName("UsersFormToggleLabelActive" if self.user_form_active_check.isChecked() else "UsersFormToggleLabel")
+        status_label.setText(self.translator.text("users.status.active") if self.user_form_active_check.isChecked() else self.translator.text("users.status.inactive"))
+
+        def toggle_status_label(checked: bool) -> None:
+            status_label.setText(self.translator.text("users.status.active") if checked else self.translator.text("users.status.inactive"))
+            status_label.setObjectName("UsersFormToggleLabelActive" if checked else "UsersFormToggleLabel")
+            status_label.style().unpolish(status_label)
+            status_label.style().polish(status_label)
+            
+        self.user_form_active_check.toggled.connect(toggle_status_label)
+
+        # Form Section helper
+        def add_section_header(icon_char: str, section_title_key: str):
+            section_widget = QWidget()
+            sec_layout = QHBoxLayout(section_widget)
+            sec_layout.setContentsMargins(0, 10, 0, 0)
+            sec_layout.setSpacing(8)
+            
+            icon_lbl = QLabel(icon_char)
+            icon_lbl.setObjectName("UsersFormSectionIcon")
+            title_lbl = QLabel(self.translator.text(section_title_key))
+            title_lbl.setObjectName("UsersFormSectionHeader")
+            
+            sec_layout.addWidget(icon_lbl)
+            sec_layout.addWidget(title_lbl)
+            sec_layout.addStretch(1)
+            
+            divider = QFrame()
+            divider.setObjectName("UsersFormDivider")
+            
+            card_layout.addWidget(section_widget)
+            card_layout.addWidget(divider)
+
+        def add_field(label_key: str, input_widget: QWidget):
+            field_widget = QWidget()
+            field_lay = QVBoxLayout(field_widget)
+            field_lay.setContentsMargins(0, 0, 0, 0)
+            field_lay.setSpacing(6)
+            
+            label = QLabel(self.translator.text(label_key))
+            label.setObjectName("UsersFormFieldLabel")
+            
+            field_lay.addWidget(label)
+            field_lay.addWidget(input_widget)
+            card_layout.addWidget(field_widget)
+
+        # Section 1: Account Info
+        add_section_header("👤", "users.form.section_account")
+        add_field("users.form.username", self.user_form_username)
+        add_field("users.form.full_name", self.user_form_full_name)
+
+        # Section 2: Security
+        add_section_header("🔑", "users.form.section_security")
+        
+        # Add password field
+        pass_field_widget = QWidget()
+        pass_field_lay = QVBoxLayout(pass_field_widget)
+        pass_field_lay.setContentsMargins(0, 0, 0, 0)
+        pass_field_lay.setSpacing(6)
+        pass_label = QLabel(self.translator.text("users.form.password"))
+        pass_label.setObjectName("UsersFormFieldLabel")
+        pass_field_lay.addWidget(pass_label)
+        pass_field_lay.addWidget(password_box)
+        card_layout.addWidget(pass_field_widget)
+        card_layout.addWidget(strength_container)
+
+        # Section 3: Permissions
+        add_section_header("🛡️", "users.form.section_permissions")
+        add_field("users.form.role", self.user_form_role_combo)
+        
+        # Add toggle switch field
+        toggle_widget = QWidget()
+        toggle_lay = QHBoxLayout(toggle_widget)
+        toggle_lay.setContentsMargins(0, 6, 0, 0)
+        toggle_lay.setSpacing(12)
+        toggle_lay.addWidget(self.user_form_active_check)
+        toggle_lay.addWidget(status_label)
+        toggle_lay.addStretch(1)
+        card_layout.addWidget(toggle_widget)
+
+        # Add card to wrapper to center it
+        wrapper = QWidget()
+        wrapper_layout = QHBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.addStretch(1)
+        wrapper_layout.addWidget(form_card, 2)
+        wrapper_layout.addStretch(1)
+        
+        content_layout.addWidget(wrapper)
         content_layout.addStretch(1)
         scroll.setWidget(content)
         layout.addWidget(scroll, 1)
 
+        # Footer Button Row
         button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setContentsMargins(0, 8, 0, 0)
+        
         cancel = QPushButton(self.translator.text("crud.cancel"))
+        cancel.setObjectName("UsersFormCancelButton")
+        cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel.clicked.connect(self._show_users_list_page)
+        
         self.user_form_save_button = QPushButton(self.translator.text("users.save"))
-        self.user_form_save_button.setObjectName("PrimaryButton")
+        self.user_form_save_button.setObjectName("UsersFormSaveButton")
+        self.user_form_save_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.user_form_save_button.clicked.connect(
             lambda _checked=False: self._submit_user_form(mode, row)
         )
+        
         button_row.addStretch(1)
         button_row.addWidget(cancel)
         button_row.addWidget(self.user_form_save_button)
