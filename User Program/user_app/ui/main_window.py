@@ -8,7 +8,7 @@ import json
 from typing import Any, Callable, Sequence
 
 from PyQt6.QtCore import QPoint, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QResizeEvent
+from PyQt6.QtGui import QColor, QResizeEvent, QFontMetrics
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -335,7 +335,7 @@ class MainWindow(QWidget):
                 background: #dbeafe;
                 border-color: #93c5fd;
                 color: #1d4ed8;
-                font-weight: 700;
+                font-weight: 600;
             }
             QPushButton#UsersInlineButton,
             QPushButton#UsersInlineDangerButton,
@@ -6493,6 +6493,11 @@ class MainWindow(QWidget):
             and self.users_current_detail_row
         ):
             self._render_user_detail(self.users_current_detail_row)
+        # Re-apply responsive layout adjustments after translations change
+        try:
+            self._update_users_responsive_layout()
+        except Exception:
+            pass
 
     def _build_users_page(self) -> QWidget:
         """Build the full-page Users workflow."""
@@ -6558,7 +6563,12 @@ class MainWindow(QWidget):
         subtitle = QLabel(self.translator.text("users.subtitle"))
         subtitle.setObjectName("UsersSubtitle")
         subtitle.setProperty("titleKey", "users.subtitle")
-        subtitle.setWordWrap(True)
+        # Keep the subtitle as a single line and elide on resize instead
+        subtitle.setWordWrap(False)
+        subtitle.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        # expose for responsive updates
+        self.users_title_label = title
+        self.users_subtitle_label = subtitle
         title_layout.addWidget(title)
         title_layout.addWidget(subtitle)
 
@@ -7743,28 +7753,39 @@ class MainWindow(QWidget):
 
         if not hasattr(self, "users_toolbar_grid"):
             return
-        compact = self.width() < 1180
         for widget in (
             self.users_header_title_box,
             self.users_header_actions_box,
             self.users_filter_box,
         ):
             self.users_toolbar_grid.removeWidget(widget)
-        if compact:
-            self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0, 1, 2)
-            self.users_toolbar_grid.addWidget(self.users_header_actions_box, 1, 0, 1, 2)
-            self.users_toolbar_grid.addWidget(self.users_filter_box, 2, 0, 1, 2)
-        else:
-            self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0)
-            self.users_toolbar_grid.addWidget(self.users_header_actions_box, 0, 1)
-            self.users_toolbar_grid.addWidget(self.users_filter_box, 1, 0, 1, 2)
-        columns = 1 if self.width() < 1120 else 3
+        self.users_toolbar_grid.addWidget(self.users_header_title_box, 0, 0)
+        self.users_toolbar_grid.addWidget(self.users_header_actions_box, 0, 1)
+        self.users_toolbar_grid.addWidget(self.users_filter_box, 1, 0, 1, 2)
+        columns = 3
         if columns != self.users_stat_columns:
             self.users_stat_columns = columns
             for card in self.users_stat_cards:
                 self.users_stats_grid.removeWidget(card)
             for index, card in enumerate(self.users_stat_cards):
                 self.users_stats_grid.addWidget(card, index // columns, index % columns)
+        # Ensure the subtitle fits on a single line by eliding if necessary.
+        if hasattr(self, "users_subtitle_label") and hasattr(
+            self, "users_header_title_box"
+        ):
+            try:
+                subtitle = self.users_subtitle_label
+                fm = QFontMetrics(subtitle.font())
+                available = max(0, self.users_header_title_box.width() - 8)
+                if available > 20:
+                    full_text = self.translator.text("users.subtitle")
+                    elided = fm.elidedText(
+                        full_text, Qt.TextElideMode.ElideRight, available
+                    )
+                    subtitle.setText(elided)
+            except Exception:
+                # best-effort; don't break layout on unexpected errors
+                pass
 
     def _apply_permissions(self) -> None:
         """Hide unavailable pages and disable actions blocked by role permissions."""
