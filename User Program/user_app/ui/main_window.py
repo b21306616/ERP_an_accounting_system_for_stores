@@ -7,7 +7,7 @@ from decimal import Decimal
 import json
 from typing import Any, Callable, Sequence
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QResizeEvent, QFontMetrics
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -658,15 +658,15 @@ class MainWindow(QWidget):
                 border-radius: 16px;
             }
             QLabel#UsersDetailAvatar {
-                border: 3px solid #ffffff;
-                border-radius: 45px;
+                border: 4px solid #ffffff;
+                border-radius: 60px;
                 color: #ffffff;
-                font-size: 28px;
+                font-size: 32px;
                 font-weight: 800;
-                min-height: 90px;
-                max-height: 90px;
-                min-width: 90px;
-                max-width: 90px;
+                min-height: 120px;
+                max-height: 120px;
+                min-width: 120px;
+                max-width: 120px;
             }
             QLabel#UsersDetailAvatar[active="true"] {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -674,7 +674,7 @@ class MainWindow(QWidget):
             }
             QLabel#UsersDetailAvatar[active="false"] {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #64748b, stop:1 #94a3b8);
+                    stop:0 #475569, stop:1 #64748b);
             }
             QFrame#UsersFieldRow {
                 background: transparent;
@@ -734,6 +734,181 @@ class MainWindow(QWidget):
                 background: #f0fdf4;
                 border-color: #22c55e;
                 color: #166534;
+            }
+            QFrame#RolesToolbar,
+            QFrame#RolesStatCardTotal,
+            QFrame#RolesStatCardPermissions,
+            QFrame#RolesStatCardGranted,
+            QFrame#RolesListCard,
+            QFrame#RolesPermissionsDrawer,
+            QFrame#RolesEmptyState,
+            QFrame#RolesPermissionsEmptyState {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+            }
+            QFrame#RolesToolbar {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 #ffffff, stop:1 #f8fafc);
+            }
+            QFrame#RolesStatCardTotal {
+                border-left: 4px solid #3b82f6;
+            }
+            QFrame#RolesStatCardPermissions {
+                border-left: 4px solid #8b5cf6;
+            }
+            QFrame#RolesStatCardGranted {
+                border-left: 4px solid #14b8a6;
+            }
+            QLabel#RolesPageHeading {
+                color: #0f172a;
+                font-size: 22px;
+                font-weight: 800;
+                letter-spacing: 0.3px;
+            }
+            QLabel#RolesDrawerHeading {
+                color: #0f172a;
+                font-size: 17px;
+                font-weight: 800;
+            }
+            QLabel#RolesSubtitle,
+            QLabel#RolesVisibleCount,
+            QLabel#RolesDrawerDescription,
+            QLabel#RolesPermissionDescription,
+            QLabel#RolesEmptyBody {
+                color: #64748b;
+                font-size: 9pt;
+            }
+            QLabel#RolesStatTitle {
+                color: #64748b;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#RolesStatValue {
+                color: #0f172a;
+                font-size: 24px;
+                font-weight: 800;
+            }
+            QLabel#RolesPermissionCountBadge {
+                background: #ccfbf1;
+                border-radius: 11px;
+                color: #0f766e;
+                font-size: 9pt;
+                font-weight: 800;
+                padding: 5px 10px;
+            }
+            QFrame#RolesListCard {
+                border-radius: 12px;
+            }
+            QTableWidget#RolesTable {
+                border: 0;
+                border-radius: 0;
+                padding-left: 10px;
+                padding-right: 10px;
+            }
+            QTableWidget#RolesTable QScrollBar:vertical {
+                width: 0px;
+            }
+            QTableWidget#RolesTable::item:hover {
+                background: #eff6ff;
+            }
+            QFrame#RolesPaginationBar {
+                background: #f8fafc;
+                border: 0;
+                border-top: 1px solid #e2e8f0;
+                border-bottom-left-radius: 12px;
+                border-bottom-right-radius: 12px;
+            }
+            QPushButton#RolesPaginationButton {
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 6px;
+                color: #475569;
+                font-weight: 600;
+                min-width: 32px;
+                min-height: 32px;
+                padding: 3px 9px;
+            }
+            QPushButton#RolesPaginationButton:hover {
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #1e293b;
+            }
+            QPushButton#RolesPaginationButton:disabled {
+                background: #f8fafc;
+                border-color: #f1f5f9;
+                color: #cbd5e1;
+            }
+            QPushButton#RolesPaginationButtonActive {
+                background: #1f6feb;
+                border: 1px solid #1f6feb;
+                border-radius: 6px;
+                color: #ffffff;
+                font-weight: 700;
+                min-width: 32px;
+                min-height: 32px;
+                padding: 3px 9px;
+            }
+            QLabel#RolesPaginationInfo {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 600;
+            }
+            QComboBox#RolesPageSizeCombo {
+                min-width: 68px;
+                padding: 4px 8px;
+            }
+            QFrame#RolesPermissionsDrawer {
+                border-top: 3px solid #14b8a6;
+            }
+            QPushButton#RolesDrawerClose {
+                background: transparent;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                color: #64748b;
+                font-size: 15px;
+                min-height: 30px;
+                min-width: 30px;
+                max-height: 30px;
+                max-width: 30px;
+                padding: 0;
+            }
+            QPushButton#RolesDrawerClose:hover {
+                background: #f1f5f9;
+                color: #0f172a;
+            }
+            QPushButton#RolesBackButton {
+                background: transparent;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
+                color: #475569;
+                padding: 7px 12px;
+            }
+            QFrame#RolesPermissionCard {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
+            }
+            QFrame#RolesPermissionCard:hover {
+                background: #f0fdfa;
+                border-color: #99f6e4;
+            }
+            QLabel#RolesPermissionModule {
+                background: #ede9fe;
+                border-radius: 8px;
+                color: #6d28d9;
+                font-size: 8pt;
+                font-weight: 800;
+                padding: 3px 7px;
+            }
+            QLabel#RolesPermissionCode {
+                color: #0f172a;
+                font-size: 10pt;
+                font-weight: 700;
+            }
+            QScrollArea#RolesPermissionScroll {
+                background: transparent;
+                border: 0;
             }
             """
         )
@@ -1833,20 +2008,101 @@ class MainWindow(QWidget):
         return page
 
     def _build_roles_page(self) -> QWidget:
-        """Build roles page."""
+        """Build the responsive Roles and Permissions list workflow."""
 
         page, layout, _title = self._page("roles.title")
-        self.roles_text = QPlainTextEdit()
-        self.roles_text.setReadOnly(True)
-        self.roles_text.hide()
-        refresh = QPushButton()
-        refresh.setProperty("textKey", "dashboard.refresh")
+        _title.hide()
+
+        self.roles_rows: list[ApiRow] = []
+        self.roles_filtered_rows: list[ApiRow] = []
+        self.roles_permission_catalog: dict[str, ApiRow] = {}
+        self.roles_selected_role_id: object | None = None
+        self.roles_current_page = 0
+        self.roles_page_size = 10
+        self.roles_narrow_mode = False
+        self.roles_drawer_animation: QPropertyAnimation | None = None
+
+        toolbar = QFrame()
+        toolbar.setObjectName("RolesToolbar")
+        toolbar_layout = QGridLayout(toolbar)
+        toolbar_layout.setContentsMargins(16, 14, 16, 14)
+        toolbar_layout.setHorizontalSpacing(12)
+        toolbar_layout.setVerticalSpacing(12)
+
+        title_box = QWidget()
+        title_layout = QVBoxLayout(title_box)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(3)
+        title = QLabel(self.translator.text("roles.title"))
+        title.setObjectName("RolesPageHeading")
+        title.setProperty("titleKey", "roles.title")
+        subtitle = QLabel(self.translator.text("roles.subtitle"))
+        subtitle.setObjectName("RolesSubtitle")
+        subtitle.setProperty("titleKey", "roles.subtitle")
+        subtitle.setWordWrap(True)
+        title_layout.addWidget(title)
+        title_layout.addWidget(subtitle)
+
+        actions_box = QWidget()
+        actions_layout = QHBoxLayout(actions_box)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(8)
+        actions_layout.addStretch(1)
+        refresh = QPushButton(self.translator.text("roles.refresh"))
+        refresh.setProperty("textKey", "roles.refresh")
+        refresh.setCursor(Qt.CursorShape.PointingHandCursor)
         refresh.clicked.connect(self.refresh_roles)
-        create = QPushButton()
+        create = QPushButton(self.translator.text("roles.create"))
+        create.setObjectName("PrimaryButton")
         create.setProperty("textKey", "roles.create")
+        create.setCursor(Qt.CursorShape.PointingHandCursor)
         create.clicked.connect(self.create_role_dialog)
+        actions_layout.addWidget(refresh)
+        actions_layout.addWidget(create)
+
+        self.roles_search = QLineEdit()
+        self.roles_search.setProperty("placeholderKey", "roles.search_placeholder")
+        self.roles_search.setPlaceholderText(
+            self.translator.text("roles.search_placeholder")
+        )
+        self.roles_search.setClearButtonEnabled(True)
+        self.roles_search.textChanged.connect(self._apply_roles_filter)
+
+        toolbar_layout.addWidget(title_box, 0, 0)
+        toolbar_layout.addWidget(actions_box, 0, 1)
+        toolbar_layout.addWidget(self.roles_search, 1, 0, 1, 2)
+        toolbar_layout.setColumnStretch(0, 1)
+
+        self.roles_stats_widget = QWidget()
+        roles_stats_layout = QHBoxLayout(self.roles_stats_widget)
+        roles_stats_layout.setContentsMargins(0, 0, 0, 0)
+        roles_stats_layout.setSpacing(10)
+        total_card, self.roles_total_value = self._make_roles_stat_card(
+            "roles.stats.total", "RolesStatCardTotal"
+        )
+        permission_card, self.roles_available_permissions_value = (
+            self._make_roles_stat_card(
+                "roles.stats.available_permissions", "RolesStatCardPermissions"
+            )
+        )
+        granted_card, self.roles_granted_permissions_value = (
+            self._make_roles_stat_card(
+                "roles.stats.selected_granted", "RolesStatCardGranted"
+            )
+        )
+        roles_stats_layout.addWidget(total_card, 1)
+        roles_stats_layout.addWidget(permission_card, 1)
+        roles_stats_layout.addWidget(granted_card, 1)
+
         self.roles_table = QTableWidget(0, 3)
+        self.roles_table.setObjectName("RolesTable")
         self._configure_table(self.roles_table)
+        self.roles_table.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        roles_vertical_header = self.roles_table.verticalHeader()
+        if roles_vertical_header is not None:
+            roles_vertical_header.setDefaultSectionSize(46)
         self._set_roles_table_headers()
         self.roles_table.itemSelectionChanged.connect(
             self._render_selected_role_permissions
@@ -1860,21 +2116,190 @@ class MainWindow(QWidget):
             lifecycle=self.delete_role_action,
             lifecycle_label=lambda _row: self.translator.text("crud.delete"),
         )
-        self.role_permissions_table = QTableWidget(0, 2)
-        self._configure_table(self.role_permissions_table)
-        self._set_role_permissions_table_headers()
-        actions = QHBoxLayout()
-        actions.addWidget(refresh)
-        actions.addWidget(create)
-        actions.addStretch(1)
-        layout.addLayout(actions)
-        layout.addWidget(self.roles_table, 1)
-        permissions_label = QLabel(self._ui("permissions"))
-        permissions_label.setProperty("titleKey", "ui.permissions")
-        permissions_label.setObjectName("SectionTitle")
-        layout.addWidget(permissions_label)
-        layout.addWidget(self.role_permissions_table, 1)
+
+        self.roles_empty_state = self._build_roles_empty_state()
+        self.roles_table_stack = QStackedWidget()
+        self.roles_table_stack.addWidget(self.roles_table)
+        self.roles_table_stack.addWidget(self.roles_empty_state)
+
+        list_card = QFrame()
+        list_card.setObjectName("RolesListCard")
+        list_layout = QVBoxLayout(list_card)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(0)
+        list_meta = QHBoxLayout()
+        list_meta.setContentsMargins(16, 12, 16, 8)
+        self.roles_visible_count_label = QLabel()
+        self.roles_visible_count_label.setObjectName("RolesVisibleCount")
+        list_meta.addWidget(self.roles_visible_count_label)
+        list_meta.addStretch(1)
+        list_layout.addLayout(list_meta)
+        list_layout.addWidget(self.roles_table_stack, 1)
+        self.roles_pagination_bar = self._build_roles_pagination_bar()
+        list_layout.addWidget(self.roles_pagination_bar)
+        self.roles_list_card = list_card
+
+        self.roles_permissions_drawer = self._build_roles_permissions_drawer()
+        self.roles_permissions_drawer.hide()
+        self.roles_permissions_drawer.setMinimumWidth(0)
+        self.roles_permissions_drawer.setMaximumWidth(0)
+
+        self.roles_desktop_page = QWidget()
+        self.roles_desktop_split = QHBoxLayout(self.roles_desktop_page)
+        self.roles_desktop_split.setContentsMargins(0, 0, 0, 0)
+        self.roles_desktop_split.setSpacing(12)
+        self.roles_desktop_split.addWidget(self.roles_list_card, 1)
+        self.roles_desktop_split.addWidget(self.roles_permissions_drawer)
+
+        self.roles_narrow_detail_page = QWidget()
+        self.roles_narrow_detail_layout = QVBoxLayout(
+            self.roles_narrow_detail_page
+        )
+        self.roles_narrow_detail_layout.setContentsMargins(0, 0, 0, 0)
+        self.roles_narrow_detail_layout.setSpacing(0)
+
+        self.roles_content_stack = QStackedWidget()
+        self.roles_content_stack.addWidget(self.roles_desktop_page)
+        self.roles_content_stack.addWidget(self.roles_narrow_detail_page)
+
+        layout.addWidget(toolbar)
+        layout.addWidget(self.roles_stats_widget)
+        layout.addWidget(self.roles_content_stack, 1)
         return page
+
+    def _make_roles_stat_card(
+        self, title_key: str, card_name: str
+    ) -> tuple[QFrame, QLabel]:
+        """Create one Roles summary card."""
+
+        card = QFrame()
+        card.setObjectName(card_name)
+        card.setMinimumHeight(76)
+        shadow = QGraphicsDropShadowEffect(card)
+        shadow.setBlurRadius(12)
+        shadow.setColor(QColor(15, 23, 42, 12))
+        shadow.setOffset(0, 3)
+        card.setGraphicsEffect(shadow)
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(14, 12, 14, 12)
+        card_layout.setSpacing(3)
+        title = QLabel(self.translator.text(title_key))
+        title.setObjectName("RolesStatTitle")
+        title.setProperty("titleKey", title_key)
+        value = QLabel("0")
+        value.setObjectName("RolesStatValue")
+        card_layout.addWidget(title)
+        card_layout.addWidget(value)
+        card_layout.addStretch(1)
+        return card, value
+
+    def _build_roles_empty_state(self) -> QFrame:
+        """Create the empty state used by the Roles list."""
+
+        frame = QFrame()
+        frame.setObjectName("RolesEmptyState")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(22, 22, 22, 22)
+        frame_layout.setSpacing(6)
+        frame_layout.addStretch(1)
+        self.roles_empty_title = QLabel()
+        self.roles_empty_title.setObjectName("RolesPageHeading")
+        self.roles_empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.roles_empty_body = QLabel()
+        self.roles_empty_body.setObjectName("RolesEmptyBody")
+        self.roles_empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.roles_empty_body.setWordWrap(True)
+        frame_layout.addWidget(self.roles_empty_title)
+        frame_layout.addWidget(self.roles_empty_body)
+        frame_layout.addStretch(1)
+        return frame
+
+    def _build_roles_permissions_drawer(self) -> QFrame:
+        """Create the selected-role permission detail card."""
+
+        drawer = QFrame()
+        drawer.setObjectName("RolesPermissionsDrawer")
+        drawer_layout = QVBoxLayout(drawer)
+        drawer_layout.setContentsMargins(18, 16, 18, 16)
+        drawer_layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self.roles_drawer_back = QPushButton(
+            self.translator.text("roles.back_to_roles")
+        )
+        self.roles_drawer_back.setObjectName("RolesBackButton")
+        self.roles_drawer_back.setProperty("textKey", "roles.back_to_roles")
+        self.roles_drawer_back.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.roles_drawer_back.clicked.connect(self._close_role_permissions)
+        self.roles_drawer_back.hide()
+        header.addWidget(self.roles_drawer_back)
+        header.addStretch(1)
+        self.roles_drawer_close = QPushButton("\u00d7")
+        self.roles_drawer_close.setObjectName("RolesDrawerClose")
+        self.roles_drawer_close.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.roles_drawer_close.setToolTip(
+            self.translator.text("roles.close_permissions")
+        )
+        self.roles_drawer_close.clicked.connect(self._close_role_permissions)
+        header.addWidget(self.roles_drawer_close)
+        drawer_layout.addLayout(header)
+
+        self.roles_drawer_title = QLabel()
+        self.roles_drawer_title.setObjectName("RolesDrawerHeading")
+        self.roles_drawer_title.setWordWrap(True)
+        self.roles_drawer_description = QLabel()
+        self.roles_drawer_description.setObjectName("RolesDrawerDescription")
+        self.roles_drawer_description.setWordWrap(True)
+        drawer_layout.addWidget(self.roles_drawer_title)
+        drawer_layout.addWidget(self.roles_drawer_description)
+
+        summary = QHBoxLayout()
+        summary_label = QLabel(self.translator.text("roles.drawer.assigned"))
+        summary_label.setObjectName("RolesSubtitle")
+        summary_label.setProperty("titleKey", "roles.drawer.assigned")
+        self.roles_drawer_count = QLabel("0")
+        self.roles_drawer_count.setObjectName("RolesPermissionCountBadge")
+        summary.addWidget(summary_label)
+        summary.addStretch(1)
+        summary.addWidget(self.roles_drawer_count)
+        drawer_layout.addLayout(summary)
+
+        self.roles_permission_search = QLineEdit()
+        self.roles_permission_search.setProperty(
+            "placeholderKey", "roles.permissions.search_placeholder"
+        )
+        self.roles_permission_search.setPlaceholderText(
+            self.translator.text("roles.permissions.search_placeholder")
+        )
+        self.roles_permission_search.setClearButtonEnabled(True)
+        self.roles_permission_search.textChanged.connect(
+            self._render_role_permission_cards
+        )
+        self.roles_permission_module_filter = QComboBox()
+        self.roles_permission_module_filter.currentIndexChanged.connect(
+            lambda _index: self._render_role_permission_cards()
+        )
+        drawer_layout.addWidget(self.roles_permission_search)
+        drawer_layout.addWidget(self.roles_permission_module_filter)
+
+        self.roles_permission_scroll = QScrollArea()
+        self.roles_permission_scroll.setObjectName("RolesPermissionScroll")
+        self.roles_permission_scroll.setWidgetResizable(True)
+        self.roles_permission_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.roles_permission_cards_container = QWidget()
+        self.roles_permission_cards_layout = QVBoxLayout(
+            self.roles_permission_cards_container
+        )
+        self.roles_permission_cards_layout.setContentsMargins(0, 0, 4, 0)
+        self.roles_permission_cards_layout.setSpacing(8)
+        self.roles_permission_scroll.setWidget(
+            self.roles_permission_cards_container
+        )
+        drawer_layout.addWidget(self.roles_permission_scroll, 1)
+        return drawer
 
     def _build_settings_page(self) -> QWidget:
         """Build settings page."""
@@ -2749,29 +3174,497 @@ class MainWindow(QWidget):
                     keys.append(key)
         return [(key, self._humanize_key(key)) for key in keys]
 
-    def _render_selected_role_permissions(self) -> None:
-        """Render permission details for the selected role."""
+    def _build_roles_pagination_bar(self) -> QFrame:
+        """Build pagination controls for the role table."""
 
-        selected = self.roles_table.selectedItems()
-        if not selected:
-            self.role_permissions_table.setRowCount(0)
-            return
-        role = selected[0].data(Qt.ItemDataRole.UserRole)
-        if not isinstance(role, dict):
-            self.role_permissions_table.setRowCount(0)
-            return
-        permissions = role.get("permissions")
-        rows: list[ApiRow] = []
-        if isinstance(permissions, list):
-            for permission in permissions:
-                code = str(permission)
-                module = code.split(".", 1)[0] if "." in code else "-"
-                rows.append({"module": module, "permission": code})
-        self._populate_table(
-            self.role_permissions_table,
-            rows,
-            [("module", self._ui("module")), ("permission", self._ui("permission"))],
+        bar = QFrame()
+        bar.setObjectName("RolesPaginationBar")
+        bar_layout = QHBoxLayout(bar)
+        bar_layout.setContentsMargins(16, 10, 16, 10)
+        bar_layout.setSpacing(8)
+
+        size_label = QLabel(self.translator.text("roles.pagination.per_page"))
+        size_label.setObjectName("RolesPaginationInfo")
+        size_label.setProperty("titleKey", "roles.pagination.per_page")
+        self.roles_page_size_combo = QComboBox()
+        self.roles_page_size_combo.setObjectName("RolesPageSizeCombo")
+        self.roles_page_size_combo.setCursor(Qt.CursorShape.PointingHandCursor)
+        for size in (5, 10, 15, 25):
+            self.roles_page_size_combo.addItem(str(size), size)
+        self.roles_page_size_combo.setCurrentIndex(1)
+        self.roles_page_size_combo.currentIndexChanged.connect(
+            lambda _index: self._change_roles_page_size(
+                int(self.roles_page_size_combo.currentData() or 10)
+            )
         )
+        bar_layout.addWidget(size_label)
+        bar_layout.addWidget(self.roles_page_size_combo)
+        bar_layout.addStretch(1)
+
+        self.roles_pagination_info = QLabel()
+        self.roles_pagination_info.setObjectName("RolesPaginationInfo")
+        bar_layout.addWidget(self.roles_pagination_info)
+        bar_layout.addStretch(1)
+
+        self.roles_page_nav_layout = QHBoxLayout()
+        self.roles_page_nav_layout.setSpacing(4)
+        self.roles_btn_first = QPushButton("\u00ab")
+        self.roles_btn_prev = QPushButton("\u2039")
+        self.roles_btn_next = QPushButton("\u203a")
+        self.roles_btn_last = QPushButton("\u00bb")
+        for button in (
+            self.roles_btn_first,
+            self.roles_btn_prev,
+            self.roles_btn_next,
+            self.roles_btn_last,
+        ):
+            button.setObjectName("RolesPaginationButton")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.roles_btn_first.clicked.connect(lambda: self._go_to_roles_page(0))
+        self.roles_btn_prev.clicked.connect(
+            lambda: self._go_to_roles_page(self.roles_current_page - 1)
+        )
+        self.roles_btn_next.clicked.connect(
+            lambda: self._go_to_roles_page(self.roles_current_page + 1)
+        )
+        self.roles_btn_last.clicked.connect(
+            lambda: self._go_to_roles_page(self._roles_total_pages() - 1)
+        )
+        self.roles_page_nav_layout.addWidget(self.roles_btn_first)
+        self.roles_page_nav_layout.addWidget(self.roles_btn_prev)
+        self.roles_page_buttons_container = QWidget()
+        self.roles_page_buttons_layout = QHBoxLayout(
+            self.roles_page_buttons_container
+        )
+        self.roles_page_buttons_layout.setContentsMargins(0, 0, 0, 0)
+        self.roles_page_buttons_layout.setSpacing(4)
+        self.roles_page_nav_layout.addWidget(self.roles_page_buttons_container)
+        self.roles_page_nav_layout.addWidget(self.roles_btn_next)
+        self.roles_page_nav_layout.addWidget(self.roles_btn_last)
+        bar_layout.addLayout(self.roles_page_nav_layout)
+        return bar
+
+    def _apply_roles_filter(self, _text: str = "") -> None:
+        """Filter role rows by name, description, or permission code."""
+
+        if not hasattr(self, "roles_table"):
+            return
+        self.roles_current_page = 0
+        query = self.roles_search.text().strip().casefold()
+        filtered: list[ApiRow] = []
+        for role in self.roles_rows:
+            permissions = role.get("permissions") or []
+            haystack = " ".join(
+                [
+                    str(role.get("name") or ""),
+                    str(role.get("description") or ""),
+                    " ".join(str(code) for code in permissions),
+                ]
+            ).casefold()
+            if not query or query in haystack:
+                filtered.append(role)
+        self.roles_filtered_rows = filtered
+        self._render_roles_table()
+
+    def _render_roles_table(self) -> None:
+        """Render the current page of filtered roles."""
+
+        total = len(self.roles_filtered_rows)
+        total_pages = self._roles_total_pages()
+        self.roles_current_page = min(
+            self.roles_current_page, max(0, total_pages - 1)
+        )
+        start = self.roles_current_page * self.roles_page_size
+        end = min(start + self.roles_page_size, total)
+        page_rows = self.roles_filtered_rows[start:end]
+        selected_id = self.roles_selected_role_id
+
+        self.roles_table.blockSignals(True)
+        self.roles_table.setSortingEnabled(False)
+        self.roles_table.clearSelection()
+        self.roles_table.setRowCount(len(page_rows))
+        selected_row = -1
+        for row_index, role in enumerate(page_rows):
+            values = (
+                role.get("name"),
+                role.get("description"),
+                len(role.get("permissions") or []),
+            )
+            for column_index, value in enumerate(values):
+                item = self._table_item(value)
+                item.setData(Qt.ItemDataRole.UserRole, role)
+                self.roles_table.setItem(row_index, column_index, item)
+            self.roles_table.setRowHeight(row_index, 46)
+            if selected_id is not None and str(role.get("id")) == str(selected_id):
+                selected_row = row_index
+        self._configure_roles_table_columns()
+        if selected_row >= 0:
+            self.roles_table.selectRow(selected_row)
+        self.roles_table.blockSignals(False)
+
+        if selected_id is not None and selected_row < 0:
+            self._close_role_permissions(clear_selection=True, animate=False)
+        self.roles_visible_count_label.setText(
+            self.translator.text("roles.visible_count").format(
+                visible=total, total=len(self.roles_rows)
+            )
+        )
+        self._update_roles_empty_state(total)
+        self._update_roles_pagination()
+
+    def _update_roles_empty_state(self, visible_count: int) -> None:
+        """Switch between the role table and its empty state."""
+
+        if visible_count:
+            self.roles_table_stack.setCurrentWidget(self.roles_table)
+            return
+        has_roles = bool(self.roles_rows)
+        self.roles_empty_title.setText(
+            self.translator.text(
+                "roles.empty.filtered_title"
+                if has_roles
+                else "roles.empty.no_roles_title"
+            )
+        )
+        self.roles_empty_body.setText(
+            self.translator.text(
+                "roles.empty.filtered_body"
+                if has_roles
+                else "roles.empty.no_roles_body"
+            )
+        )
+        self.roles_table_stack.setCurrentWidget(self.roles_empty_state)
+
+    def _roles_total_pages(self) -> int:
+        """Return the number of pages required by the filtered role rows."""
+
+        total = len(self.roles_filtered_rows)
+        return max(1, (total + self.roles_page_size - 1) // self.roles_page_size)
+
+    def _update_roles_pagination(self) -> None:
+        """Refresh role pagination text, buttons, and active page."""
+
+        total = len(self.roles_filtered_rows)
+        total_pages = self._roles_total_pages()
+        start = self.roles_current_page * self.roles_page_size + 1
+        end = min(start + self.roles_page_size - 1, total)
+        if total == 0:
+            start = 0
+            end = 0
+        self.roles_pagination_info.setText(
+            self.translator.text("roles.pagination.showing").format(
+                start=start, end=end, total=total
+            )
+        )
+        self.roles_btn_first.setEnabled(self.roles_current_page > 0)
+        self.roles_btn_prev.setEnabled(self.roles_current_page > 0)
+        self.roles_btn_next.setEnabled(self.roles_current_page < total_pages - 1)
+        self.roles_btn_last.setEnabled(self.roles_current_page < total_pages - 1)
+
+        while self.roles_page_buttons_layout.count():
+            child = self.roles_page_buttons_layout.takeAt(0)
+            if child is not None and child.widget() is not None:
+                child.widget().deleteLater()
+        max_visible = 5
+        first_page = max(
+            0,
+            min(
+                self.roles_current_page - max_visible // 2,
+                total_pages - max_visible,
+            ),
+        )
+        for page_index in range(
+            first_page, min(total_pages, first_page + max_visible)
+        ):
+            button = QPushButton(str(page_index + 1))
+            button.setObjectName(
+                "RolesPaginationButtonActive"
+                if page_index == self.roles_current_page
+                else "RolesPaginationButton"
+            )
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(
+                lambda _checked=False, page=page_index: self._go_to_roles_page(page)
+            )
+            self.roles_page_buttons_layout.addWidget(button)
+
+    def _go_to_roles_page(self, page: int) -> None:
+        """Navigate to a role table page."""
+
+        self.roles_current_page = max(0, min(page, self._roles_total_pages() - 1))
+        self._render_roles_table()
+
+    def _change_roles_page_size(self, size: int) -> None:
+        """Change the role page size and return to the first page."""
+
+        self.roles_page_size = max(1, size)
+        self.roles_current_page = 0
+        self._render_roles_table()
+
+    def _configure_roles_table_columns(self) -> None:
+        """Apply responsive sizing to role table columns."""
+
+        header = self.roles_table.horizontalHeader()
+        if header is None or self.roles_table.columnCount() < 3:
+            return
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+
+    def _selected_role(self) -> ApiRow | None:
+        """Return the currently selected role from loaded state."""
+
+        if self.roles_selected_role_id is None:
+            return None
+        for role in self.roles_rows:
+            if str(role.get("id")) == str(self.roles_selected_role_id):
+                return role
+        return None
+
+    def _render_selected_role_permissions(self) -> None:
+        """Open and render permissions for the selected role."""
+
+        role = self._selected_table_row(self.roles_table)
+        if role is None:
+            return
+        self.roles_selected_role_id = role.get("id")
+        permissions = [str(code) for code in role.get("permissions") or []]
+        self.roles_drawer_title.setText(str(role.get("name") or "-"))
+        self.roles_drawer_description.setText(
+            str(
+                role.get("description")
+                or self.translator.text("roles.drawer.no_description")
+            )
+        )
+        self.roles_drawer_count.setText(str(len(permissions)))
+        self.roles_granted_permissions_value.setText(str(len(permissions)))
+        self.roles_permission_search.blockSignals(True)
+        self.roles_permission_search.clear()
+        self.roles_permission_search.blockSignals(False)
+        self._populate_role_permission_module_filter(permissions)
+        self._render_role_permission_cards()
+        self._open_role_permissions()
+
+    def _permission_rows_for_selected_role(self) -> list[ApiRow]:
+        """Return metadata-enriched permissions assigned to the selected role."""
+
+        role = self._selected_role()
+        if role is None:
+            return []
+        rows: list[ApiRow] = []
+        for value in role.get("permissions") or []:
+            code = str(value)
+            metadata = self.roles_permission_catalog.get(code, {})
+            rows.append(
+                {
+                    "code": code,
+                    "module": metadata.get("module")
+                    or (code.split(".", 1)[0] if "." in code else "-"),
+                    "description": metadata.get("description") or "",
+                }
+            )
+        return sorted(rows, key=lambda row: (str(row["module"]), str(row["code"])))
+
+    def _populate_role_permission_module_filter(
+        self, permissions: Sequence[str]
+    ) -> None:
+        """Populate module choices for the selected role."""
+
+        selected = self.roles_permission_module_filter.currentData()
+        modules = sorted(
+            {
+                str(
+                    self.roles_permission_catalog.get(code, {}).get("module")
+                    or (code.split(".", 1)[0] if "." in code else "-")
+                )
+                for code in permissions
+            }
+        )
+        self.roles_permission_module_filter.blockSignals(True)
+        self.roles_permission_module_filter.clear()
+        self.roles_permission_module_filter.addItem(
+            self.translator.text("roles.permissions.all_modules"), "all"
+        )
+        for module in modules:
+            self.roles_permission_module_filter.addItem(module, module)
+        index = self.roles_permission_module_filter.findData(selected)
+        self.roles_permission_module_filter.setCurrentIndex(index if index >= 0 else 0)
+        self.roles_permission_module_filter.blockSignals(False)
+
+    def _render_role_permission_cards(self, _value: object = None) -> None:
+        """Render assigned permissions using the active search and module filter."""
+
+        if not hasattr(self, "roles_permission_cards_layout"):
+            return
+        self._clear_layout(self.roles_permission_cards_layout)
+        query = self.roles_permission_search.text().strip().casefold()
+        module_filter = self.roles_permission_module_filter.currentData()
+        visible: list[ApiRow] = []
+        for permission in self._permission_rows_for_selected_role():
+            if module_filter not in (None, "all") and str(
+                permission.get("module")
+            ) != str(module_filter):
+                continue
+            haystack = " ".join(
+                str(permission.get(key) or "")
+                for key in ("code", "module", "description")
+            ).casefold()
+            if query and query not in haystack:
+                continue
+            visible.append(permission)
+
+        if not visible:
+            empty = QFrame()
+            empty.setObjectName("RolesPermissionsEmptyState")
+            empty_layout = QVBoxLayout(empty)
+            empty_layout.setContentsMargins(16, 24, 16, 24)
+            empty_title = QLabel(
+                self.translator.text("roles.permissions.empty_title")
+            )
+            empty_title.setObjectName("RolesDrawerHeading")
+            empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_body = QLabel(
+                self.translator.text("roles.permissions.empty_body")
+            )
+            empty_body.setObjectName("RolesEmptyBody")
+            empty_body.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_body.setWordWrap(True)
+            empty_layout.addWidget(empty_title)
+            empty_layout.addWidget(empty_body)
+            self.roles_permission_cards_layout.addWidget(empty)
+            self.roles_permission_cards_layout.addStretch(1)
+            return
+
+        for permission in visible:
+            card = QFrame()
+            card.setObjectName("RolesPermissionCard")
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(6)
+            top = QHBoxLayout()
+            code = QLabel(str(permission.get("code") or "-"))
+            code.setObjectName("RolesPermissionCode")
+            code.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            module = QLabel(str(permission.get("module") or "-"))
+            module.setObjectName("RolesPermissionModule")
+            top.addWidget(code, 1)
+            top.addWidget(module)
+            card_layout.addLayout(top)
+            description = str(permission.get("description") or "")
+            if description:
+                description_label = QLabel(description)
+                description_label.setObjectName("RolesPermissionDescription")
+                description_label.setWordWrap(True)
+                card_layout.addWidget(description_label)
+            self.roles_permission_cards_layout.addWidget(card)
+        self.roles_permission_cards_layout.addStretch(1)
+
+    def _open_role_permissions(self) -> None:
+        """Open the permission detail in docked or narrow mode."""
+
+        self._update_roles_responsive_layout()
+        self.roles_permissions_drawer.show()
+        if self.roles_narrow_mode:
+            self.roles_content_stack.setCurrentWidget(
+                self.roles_narrow_detail_page
+            )
+            self.roles_permissions_drawer.setMaximumWidth(16777215)
+            return
+        self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
+        self._animate_roles_drawer(420)
+
+    def _close_role_permissions(
+        self, *, clear_selection: bool = True, animate: bool = True
+    ) -> None:
+        """Close the selected-role detail and clear selection state."""
+
+        if clear_selection:
+            self.roles_selected_role_id = None
+            self.roles_table.blockSignals(True)
+            self.roles_table.clearSelection()
+            self.roles_table.blockSignals(False)
+        self.roles_granted_permissions_value.setText("0")
+        if self.roles_narrow_mode:
+            self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
+            self.roles_permissions_drawer.hide()
+            return
+        if animate and self.roles_permissions_drawer.isVisible():
+            self._animate_roles_drawer(0, hide_when_finished=True)
+        else:
+            self.roles_permissions_drawer.setMaximumWidth(0)
+            self.roles_permissions_drawer.hide()
+
+    def _animate_roles_drawer(
+        self, target_width: int, *, hide_when_finished: bool = False
+    ) -> None:
+        """Animate the docked drawer's maximum width."""
+
+        if self.roles_drawer_animation is not None:
+            self.roles_drawer_animation.stop()
+        animation = QPropertyAnimation(
+            self.roles_permissions_drawer, b"maximumWidth", self
+        )
+        animation.setDuration(180)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.setStartValue(self.roles_permissions_drawer.maximumWidth())
+        animation.setEndValue(target_width)
+        if hide_when_finished:
+            animation.finished.connect(self.roles_permissions_drawer.hide)
+        self.roles_drawer_animation = animation
+        animation.start()
+
+    def _update_roles_responsive_layout(self) -> None:
+        """Move the permission card between docked and narrow detail layouts."""
+
+        if not hasattr(self, "roles_permissions_drawer"):
+            return
+        narrow = self.width() < 1280
+        if narrow == self.roles_narrow_mode and (
+            self.roles_desktop_split.indexOf(self.roles_permissions_drawer) >= 0
+            or self.roles_narrow_detail_layout.indexOf(
+                self.roles_permissions_drawer
+            )
+            >= 0
+        ):
+            return
+        if self.roles_drawer_animation is not None:
+            self.roles_drawer_animation.stop()
+        self.roles_narrow_mode = narrow
+        self.roles_desktop_split.removeWidget(self.roles_permissions_drawer)
+        self.roles_narrow_detail_layout.removeWidget(
+            self.roles_permissions_drawer
+        )
+        selected = self._selected_role() is not None
+        if narrow:
+            self.roles_narrow_detail_layout.addWidget(
+                self.roles_permissions_drawer
+            )
+            self.roles_drawer_back.show()
+            self.roles_drawer_close.hide()
+            self.roles_permissions_drawer.setMaximumWidth(16777215)
+            if selected:
+                self.roles_permissions_drawer.show()
+                self.roles_content_stack.setCurrentWidget(
+                    self.roles_narrow_detail_page
+                )
+            else:
+                self.roles_permissions_drawer.hide()
+                self.roles_content_stack.setCurrentWidget(
+                    self.roles_desktop_page
+                )
+            return
+        self.roles_desktop_split.addWidget(self.roles_permissions_drawer)
+        self.roles_drawer_back.hide()
+        self.roles_drawer_close.show()
+        self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
+        if selected:
+            self.roles_permissions_drawer.show()
+            self.roles_permissions_drawer.setMaximumWidth(420)
+        else:
+            self.roles_permissions_drawer.setMaximumWidth(0)
+            self.roles_permissions_drawer.hide()
 
     def _render_settings_forms(self, settings: ApiRow) -> None:
         """Render editable settings forms without exposing raw JSON."""
@@ -6273,28 +7166,71 @@ class MainWindow(QWidget):
         self._run_api(action)
 
     def refresh_roles(self) -> None:
-        """Refresh roles."""
+        """Refresh roles and optional permission metadata."""
 
         def action() -> None:
+            selected_id = self.roles_selected_role_id
             roles = self.api_client.get_roles()
-            self.roles_text.setPlainText(
-                json.dumps(roles, indent=2, ensure_ascii=False)
+            self.roles_rows = [dict(role) for role in roles]
+            permission_rows: list[ApiRow] = []
+            permission_method = getattr(self.api_client, "get_permissions", None)
+            if callable(permission_method):
+                try:
+                    result = permission_method()
+                    if isinstance(result, list):
+                        permission_rows = [
+                            dict(permission)
+                            for permission in result
+                            if isinstance(permission, dict)
+                        ]
+                except Exception:
+                    permission_rows = []
+            self.roles_permission_catalog = {
+                str(permission.get("code")): permission
+                for permission in permission_rows
+                if permission.get("code")
+            }
+            selection_was_removed = selected_id is not None and not any(
+                str(role.get("id")) == str(selected_id)
+                for role in self.roles_rows
             )
-            self._populate_table(
-                self.roles_table,
-                roles,
-                [
-                    ("name", self._ui("role")),
-                    ("description", self._ui("description")),
-                    (
-                        lambda row: len(row.get("permissions") or []),
-                        self._ui("permissions"),
-                    ),
-                ],
+            if selection_was_removed:
+                self.roles_selected_role_id = None
+                self._close_role_permissions(
+                    clear_selection=True, animate=False
+                )
+            self.roles_total_value.setText(str(len(self.roles_rows)))
+            available_codes = set(self.roles_permission_catalog)
+            if not available_codes:
+                available_codes = {
+                    str(code)
+                    for role in self.roles_rows
+                    for code in role.get("permissions") or []
+                }
+            self.roles_available_permissions_value.setText(
+                str(len(available_codes))
             )
-            if roles:
-                self.roles_table.selectRow(0)
-            self._render_selected_role_permissions()
+            self._apply_roles_filter()
+            role = self._selected_role()
+            if role is not None:
+                self.roles_granted_permissions_value.setText(
+                    str(len(role.get("permissions") or []))
+                )
+                self.roles_drawer_title.setText(str(role.get("name") or "-"))
+                self.roles_drawer_description.setText(
+                    str(
+                        role.get("description")
+                        or self.translator.text("roles.drawer.no_description")
+                    )
+                )
+                permissions = [
+                    str(code) for code in role.get("permissions") or []
+                ]
+                self.roles_drawer_count.setText(str(len(permissions)))
+                self._populate_role_permission_module_filter(permissions)
+                self._render_role_permission_cards()
+            else:
+                self.roles_granted_permissions_value.setText("0")
 
         self._run_api(action)
 
@@ -6442,16 +7378,13 @@ class MainWindow(QWidget):
     def _set_roles_table_headers(self) -> None:
         """Apply translated column headers to the roles table."""
 
+        if not hasattr(self, "roles_table"):
+            return
+        self.roles_table.setColumnCount(3)
         self.roles_table.setHorizontalHeaderLabels(
             [self._ui("role"), self._ui("description"), self._ui("permissions")]
         )
-
-    def _set_role_permissions_table_headers(self) -> None:
-        """Apply translated column headers to the selected-role permissions table."""
-
-        self.role_permissions_table.setHorizontalHeaderLabels(
-            [self._ui("module"), self._ui("permission")]
-        )
+        self._configure_roles_table_columns()
 
     def _set_report_saved_filters_table_headers(self) -> None:
         """Apply translated column headers to the saved report filters table."""
@@ -6523,8 +7456,6 @@ class MainWindow(QWidget):
         self._set_cashier_table_headers()
         if hasattr(self, "roles_table"):
             self._set_roles_table_headers()
-        if hasattr(self, "role_permissions_table"):
-            self._set_role_permissions_table_headers()
         if hasattr(self, "report_saved_filters_table"):
             self._set_report_saved_filters_table_headers()
         self._set_tab_labels()
@@ -6577,6 +7508,21 @@ class MainWindow(QWidget):
             self._populate_users_role_filter()
         if hasattr(self, "users_table") and hasattr(self, "users_rows"):
             self._apply_users_filters()
+        if hasattr(self, "roles_table") and hasattr(self, "roles_rows"):
+            self._render_roles_table()
+        if hasattr(self, "roles_drawer_close"):
+            self.roles_drawer_close.setToolTip(
+                self.translator.text("roles.close_permissions")
+            )
+        selected_role = self._selected_role() if hasattr(
+            self, "roles_selected_role_id"
+        ) else None
+        if selected_role is not None:
+            permissions = [
+                str(code) for code in selected_role.get("permissions") or []
+            ]
+            self._populate_role_permission_module_filter(permissions)
+            self._render_role_permission_cards()
         if (
             hasattr(self, "users_stack")
             and self.users_stack.currentWidget()
@@ -6589,6 +7535,7 @@ class MainWindow(QWidget):
             self._update_users_responsive_layout()
         except Exception:
             pass
+        self._update_roles_responsive_layout()
 
     def _build_users_page(self) -> QWidget:
         """Build the full-page Users workflow."""
@@ -7264,8 +8211,8 @@ class MainWindow(QWidget):
         self.users_profile_card = profile
         
         profile_layout = QVBoxLayout(profile)
-        profile_layout.setContentsMargins(24, 32, 24, 32)
-        profile_layout.setSpacing(16)
+        profile_layout.setContentsMargins(24, 36, 24, 36)
+        profile_layout.setSpacing(12)
         profile_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
         avatar = QLabel(self._user_initials(row))
@@ -7273,16 +8220,26 @@ class MainWindow(QWidget):
         avatar.setProperty("active", bool(row.get("is_active")))
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
+        # Add drop shadow to Avatar
+        avatar_shadow = QGraphicsDropShadowEffect()
+        avatar_shadow.setBlurRadius(10)
+        avatar_shadow.setColor(QColor(0, 0, 0, 30))
+        avatar_shadow.setOffset(0, 4)
+        avatar.setGraphicsEffect(avatar_shadow)
+        
         name = QLabel(str(row.get("full_name") or row.get("username") or "-"))
         name.setObjectName("UsersPageHeading")
-        name.setStyleSheet("font-size: 14pt; font-weight: 800; color: #0f172a;")
+        name.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0f172a; margin-top: 10px;")
         name.setWordWrap(True)
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         username = QLabel(f"@{row.get('username') or '-'}")
         username.setObjectName("UsersSubtitle")
-        username.setStyleSheet("font-size: 10pt; color: #64748b; font-weight: 500;")
+        username.setStyleSheet("font-size: 10pt; color: #3b82f6; font-weight: 600;")
         username.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        separator = QFrame()
+        separator.setStyleSheet("background: #e2e8f0; max-height: 1px; min-height: 1px; border: none;")
         
         badges = QHBoxLayout()
         badges.setSpacing(8)
@@ -7295,9 +8252,10 @@ class MainWindow(QWidget):
         )
         
         profile_layout.addStretch(1)
-        profile_layout.addWidget(avatar)
-        profile_layout.addWidget(name)
-        profile_layout.addWidget(username)
+        profile_layout.addWidget(avatar, 0, Qt.AlignmentFlag.AlignCenter)
+        profile_layout.addWidget(name, 0, Qt.AlignmentFlag.AlignCenter)
+        profile_layout.addWidget(username, 0, Qt.AlignmentFlag.AlignCenter)
+        profile_layout.addWidget(separator)
         profile_layout.addLayout(badges)
         profile_layout.addStretch(1)
 
@@ -8110,3 +9068,4 @@ class MainWindow(QWidget):
         # Auto-hide the navigation sidebar if the window width is below 1100 pixels
         self.nav.setHidden(self.width() < 1100)
         self._update_users_responsive_layout()
+        self._update_roles_responsive_layout()

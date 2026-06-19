@@ -714,6 +714,180 @@ class ClientCoreTests(unittest.TestCase):
             for key in keys:
                 self.assertNotEqual(translator.text(key), key)
 
+    def test_roles_redesign_paginates_filters_and_opens_drawer_offscreen(self) -> None:
+        """Roles should paginate without a scrollbar and render selected permissions."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication, QFrame
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Admin",
+                    role_name="Super Admin",
+                    permissions=["admin.manage_users", "admin.manage_roles"],
+                )
+                self.fail_permission_metadata = False
+                self.roles = [
+                    {
+                        "id": index,
+                        "name": f"Role {index:02d}",
+                        "description": f"Description {index}",
+                        "permissions": [
+                            "admin.view",
+                            "reports.view",
+                            *(["sale.create"] if index % 2 else []),
+                        ],
+                    }
+                    for index in range(1, 18)
+                ]
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [dict(role) for role in self.roles]
+
+            def get_permissions(self) -> list[dict[str, object]]:
+                if self.fail_permission_metadata:
+                    raise RuntimeError("metadata unavailable")
+                return [
+                    {
+                        "id": 1,
+                        "code": "admin.view",
+                        "module": "admin",
+                        "description": "View administration",
+                    },
+                    {
+                        "id": 2,
+                        "code": "reports.view",
+                        "module": "reports",
+                        "description": "View reports",
+                    },
+                    {
+                        "id": 3,
+                        "code": "sale.create",
+                        "module": "sale",
+                        "description": "Create sales",
+                    },
+                ]
+
+        app = QApplication.instance() or QApplication([])
+        api_client = FakeApiClient()
+        window = MainWindow(api_client, Translator("en"))  # type: ignore[arg-type]
+        try:
+            window.resize(1440, 900)
+            window.show()
+            for index in range(window.nav.count()):
+                if (
+                    window.nav.item(index).data(Qt.ItemDataRole.UserRole)
+                    == "roles"
+                ):
+                    window.nav.setCurrentRow(index)
+                    break
+            app.processEvents()
+
+            self.assertEqual(window.roles_table.rowCount(), 10)
+            self.assertEqual(
+                window.roles_table.verticalScrollBarPolicy(),
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+            )
+            self.assertEqual(
+                window.roles_permission_scroll.horizontalScrollBarPolicy(),
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
+            )
+            self.assertEqual(window.roles_total_value.text(), "17")
+            self.assertEqual(window.roles_available_permissions_value.text(), "3")
+
+            window.roles_table.selectRow(0)
+            app.processEvents()
+            self.assertEqual(window.roles_drawer_title.text(), "Role 01")
+            self.assertEqual(window.roles_drawer_count.text(), "3")
+            self.assertTrue(window.roles_permissions_drawer.isVisible())
+            permission_cards = [
+                frame
+                for frame in window.roles_permission_cards_container.findChildren(QFrame)
+                if frame.objectName() == "RolesPermissionCard"
+            ]
+            self.assertEqual(len(permission_cards), 3)
+
+            window.roles_permission_search.setText("sales")
+            app.processEvents()
+            permission_cards = [
+                frame
+                for frame in window.roles_permission_cards_container.findChildren(QFrame)
+                if frame.objectName() == "RolesPermissionCard"
+            ]
+            self.assertEqual(len(permission_cards), 1)
+
+            api_client.fail_permission_metadata = True
+            window.refresh_roles()
+            app.processEvents()
+            self.assertEqual(window.roles_selected_role_id, 1)
+            self.assertEqual(window.roles_available_permissions_value.text(), "3")
+
+            window.roles_search.setText("Role 17")
+            app.processEvents()
+            self.assertEqual(len(window.roles_filtered_rows), 1)
+            self.assertIsNone(window.roles_selected_role_id)
+
+            window.roles_search.clear()
+            window.roles_page_size_combo.setCurrentIndex(0)
+            window._go_to_roles_page(2)
+            app.processEvents()
+            self.assertEqual(window.roles_table.item(0, 0).text(), "Role 11")
+
+            window.resize(1100, 800)
+            app.processEvents()
+            window.roles_table.selectRow(0)
+            app.processEvents()
+            self.assertTrue(window.roles_narrow_mode)
+            self.assertIs(
+                window.roles_content_stack.currentWidget(),
+                window.roles_narrow_detail_page,
+            )
+            window.roles_drawer_back.click()
+            self.assertIs(
+                window.roles_content_stack.currentWidget(),
+                window.roles_desktop_page,
+            )
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_roles_redesign_translation_keys_exist(self) -> None:
+        """Every new Roles surface label should exist in all three languages."""
+
+        keys = [
+            "roles.refresh",
+            "roles.subtitle",
+            "roles.search_placeholder",
+            "roles.stats.total",
+            "roles.stats.available_permissions",
+            "roles.stats.selected_granted",
+            "roles.visible_count",
+            "roles.pagination.per_page",
+            "roles.pagination.showing",
+            "roles.empty.filtered_title",
+            "roles.empty.filtered_body",
+            "roles.empty.no_roles_title",
+            "roles.empty.no_roles_body",
+            "roles.back_to_roles",
+            "roles.close_permissions",
+            "roles.drawer.assigned",
+            "roles.drawer.no_description",
+            "roles.permissions.search_placeholder",
+            "roles.permissions.all_modules",
+            "roles.permissions.empty_title",
+            "roles.permissions.empty_body",
+        ]
+        for language in ("ru", "tk", "en"):
+            translator = Translator(language)  # type: ignore[arg-type]
+            for key in keys:
+                self.assertNotEqual(translator.text(key), key)
+
     def test_settings_page_uses_editable_form_offscreen(self) -> None:
         """Settings should render as editable fields and save key/value payloads."""
 
