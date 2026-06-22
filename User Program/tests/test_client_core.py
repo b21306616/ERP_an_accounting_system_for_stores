@@ -837,7 +837,8 @@ class ClientCoreTests(unittest.TestCase):
             window.roles_page_size_combo.setCurrentIndex(0)
             window._go_to_roles_page(2)
             app.processEvents()
-            self.assertEqual(window.roles_table.item(0, 0).text(), "Role 11")
+            self.assertEqual(window.roles_table.item(0, 0).text(), "11")
+            self.assertEqual(window.roles_table.item(0, 1).text(), "Role 11")
 
             window.resize(1100, 800)
             app.processEvents()

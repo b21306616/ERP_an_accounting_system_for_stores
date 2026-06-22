@@ -739,7 +739,6 @@ class MainWindow(QWidget):
             QFrame#RolesStatCardTotal,
             QFrame#RolesStatCardPermissions,
             QFrame#RolesStatCardGranted,
-            QFrame#RolesListCard,
             QFrame#RolesPermissionsDrawer,
             QFrame#RolesEmptyState,
             QFrame#RolesPermissionsEmptyState {
@@ -798,13 +797,14 @@ class MainWindow(QWidget):
                 padding: 5px 10px;
             }
             QFrame#RolesListCard {
-                border-radius: 12px;
+                background: transparent;
+                border: 0;
             }
             QTableWidget#RolesTable {
-                border: 0;
-                border-radius: 0;
-                padding-left: 10px;
-                padding-right: 10px;
+                border: 1px solid #dce5ef;
+                border-radius: 10px;
+                padding-left: 16px;
+                padding-right: 16px;
             }
             QTableWidget#RolesTable QScrollBar:vertical {
                 width: 0px;
@@ -813,11 +813,9 @@ class MainWindow(QWidget):
                 background: #eff6ff;
             }
             QFrame#RolesPaginationBar {
-                background: #f8fafc;
-                border: 0;
-                border-top: 1px solid #e2e8f0;
-                border-bottom-left-radius: 12px;
-                border-bottom-right-radius: 12px;
+                background: #ffffff;
+                border: 1px solid #e2e8f0;
+                border-radius: 10px;
             }
             QPushButton#RolesPaginationButton {
                 background: #ffffff;
@@ -825,9 +823,9 @@ class MainWindow(QWidget):
                 border-radius: 6px;
                 color: #475569;
                 font-weight: 600;
-                min-width: 32px;
-                min-height: 32px;
-                padding: 3px 9px;
+                min-width: 34px;
+                min-height: 34px;
+                padding: 4px 10px;
             }
             QPushButton#RolesPaginationButton:hover {
                 background: #f1f5f9;
@@ -845,9 +843,9 @@ class MainWindow(QWidget):
                 border-radius: 6px;
                 color: #ffffff;
                 font-weight: 700;
-                min-width: 32px;
-                min-height: 32px;
-                padding: 3px 9px;
+                min-width: 34px;
+                min-height: 34px;
+                padding: 4px 10px;
             }
             QLabel#RolesPaginationInfo {
                 color: #64748b;
@@ -855,7 +853,7 @@ class MainWindow(QWidget):
                 font-weight: 600;
             }
             QComboBox#RolesPageSizeCombo {
-                min-width: 68px;
+                min-width: 70px;
                 padding: 4px 8px;
             }
             QFrame#RolesPermissionsDrawer {
@@ -2122,34 +2120,39 @@ class MainWindow(QWidget):
         self.roles_table_stack.addWidget(self.roles_table)
         self.roles_table_stack.addWidget(self.roles_empty_state)
 
-        list_card = QFrame()
-        list_card.setObjectName("RolesListCard")
-        list_layout = QVBoxLayout(list_card)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(0)
-        list_meta = QHBoxLayout()
-        list_meta.setContentsMargins(16, 12, 16, 8)
-        self.roles_visible_count_label = QLabel()
-        self.roles_visible_count_label.setObjectName("RolesVisibleCount")
-        list_meta.addWidget(self.roles_visible_count_label)
-        list_meta.addStretch(1)
-        list_layout.addLayout(list_meta)
-        list_layout.addWidget(self.roles_table_stack, 1)
-        self.roles_pagination_bar = self._build_roles_pagination_bar()
-        list_layout.addWidget(self.roles_pagination_bar)
-        self.roles_list_card = list_card
-
         self.roles_permissions_drawer = self._build_roles_permissions_drawer()
         self.roles_permissions_drawer.hide()
         self.roles_permissions_drawer.setMinimumWidth(0)
         self.roles_permissions_drawer.setMaximumWidth(0)
 
+        self.roles_table_container = QWidget()
+        self.roles_table_container_layout = QHBoxLayout(self.roles_table_container)
+        self.roles_table_container_layout.setContentsMargins(0, 0, 0, 0)
+        self.roles_table_container_layout.setSpacing(12)
+        self.roles_table_container_layout.addWidget(self.roles_table_stack, 1)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer)
+
+        list_card = QFrame()
+        list_card.setObjectName("RolesListCard")
+        list_layout = QVBoxLayout(list_card)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        list_layout.setSpacing(14)
+        list_meta = QHBoxLayout()
+        list_meta.setContentsMargins(0, 0, 0, 0)
+        self.roles_visible_count_label = QLabel()
+        self.roles_visible_count_label.setObjectName("RolesVisibleCount")
+        list_meta.addWidget(self.roles_visible_count_label)
+        list_meta.addStretch(1)
+        list_layout.addLayout(list_meta)
+        list_layout.addWidget(self.roles_table_container, 1)
+        self.roles_pagination_bar = self._build_roles_pagination_bar()
+        list_layout.addWidget(self.roles_pagination_bar)
+        self.roles_list_card = list_card
+
         self.roles_desktop_page = QWidget()
-        self.roles_desktop_split = QHBoxLayout(self.roles_desktop_page)
-        self.roles_desktop_split.setContentsMargins(0, 0, 0, 0)
-        self.roles_desktop_split.setSpacing(12)
-        self.roles_desktop_split.addWidget(self.roles_list_card, 1)
-        self.roles_desktop_split.addWidget(self.roles_permissions_drawer)
+        self.roles_desktop_layout = QVBoxLayout(self.roles_desktop_page)
+        self.roles_desktop_layout.setContentsMargins(0, 0, 0, 0)
+        self.roles_desktop_layout.addWidget(self.roles_list_card, 1)
 
         self.roles_narrow_detail_page = QWidget()
         self.roles_narrow_detail_layout = QVBoxLayout(
@@ -3286,9 +3289,9 @@ class MainWindow(QWidget):
         selected_row = -1
         for row_index, role in enumerate(page_rows):
             values = (
+                role.get("id"),
                 role.get("name"),
                 role.get("description"),
-                len(role.get("permissions") or []),
             )
             for column_index, value in enumerate(values):
                 item = self._table_item(value)
@@ -3405,11 +3408,10 @@ class MainWindow(QWidget):
         """Apply responsive sizing to role table columns."""
 
         header = self.roles_table.horizontalHeader()
-        if header is None or self.roles_table.columnCount() < 3:
+        if header is None:
             return
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        for i in range(self.roles_table.columnCount()):
+            header.setSectionResizeMode(i, QHeaderView.ResizeMode.Stretch)
 
     def _selected_role(self) -> ApiRow | None:
         """Return the currently selected role from loaded state."""
@@ -3618,11 +3620,11 @@ class MainWindow(QWidget):
     def _update_roles_responsive_layout(self) -> None:
         """Move the permission card between docked and narrow detail layouts."""
 
-        if not hasattr(self, "roles_permissions_drawer"):
+        if not hasattr(self, "roles_permissions_drawer") or not hasattr(self, "roles_table_container_layout"):
             return
         narrow = self.width() < 1280
         if narrow == self.roles_narrow_mode and (
-            self.roles_desktop_split.indexOf(self.roles_permissions_drawer) >= 0
+            self.roles_table_container_layout.indexOf(self.roles_permissions_drawer) >= 0
             or self.roles_narrow_detail_layout.indexOf(
                 self.roles_permissions_drawer
             )
@@ -3632,7 +3634,7 @@ class MainWindow(QWidget):
         if self.roles_drawer_animation is not None:
             self.roles_drawer_animation.stop()
         self.roles_narrow_mode = narrow
-        self.roles_desktop_split.removeWidget(self.roles_permissions_drawer)
+        self.roles_table_container_layout.removeWidget(self.roles_permissions_drawer)
         self.roles_narrow_detail_layout.removeWidget(
             self.roles_permissions_drawer
         )
@@ -3655,7 +3657,7 @@ class MainWindow(QWidget):
                     self.roles_desktop_page
                 )
             return
-        self.roles_desktop_split.addWidget(self.roles_permissions_drawer)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer)
         self.roles_drawer_back.hide()
         self.roles_drawer_close.show()
         self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
@@ -7382,7 +7384,11 @@ class MainWindow(QWidget):
             return
         self.roles_table.setColumnCount(3)
         self.roles_table.setHorizontalHeaderLabels(
-            [self._ui("role"), self._ui("description"), self._ui("permissions")]
+            [
+                self._ui("role_id"),
+                self._ui("role"),
+                self._ui("description"),
+            ]
         )
         self._configure_roles_table_columns()
 
