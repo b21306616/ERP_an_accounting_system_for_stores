@@ -58,11 +58,20 @@ from user_app.core.i18n import (
 )
 from user_app.hardware.simulator import HardwareSimulator
 from user_app.ui.selectors import ReferenceSelectorDialog
-
 ApiRow = dict[str, Any]
 TableColumn = tuple[str | Callable[[ApiRow], object], str]
 Metric = tuple[str, object]
 SelectorColumn = tuple[str, str]
+
+
+class ClickableFrame(QFrame):
+    """A helper QFrame that emits a clicked signal when left-clicked."""
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event: Any) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class MainWindow(QWidget):
@@ -951,6 +960,36 @@ class MainWindow(QWidget):
             QFrame#RolesPermissionCard:hover {
                 background: #f0fdfa;
                 border: 1px solid #5eead4;
+            }
+            QFrame#RolesPermissionAccordion {
+                background: transparent;
+                border: 0;
+            }
+            QFrame#RolesPermissionAccordionHeader {
+                background: #ffffff;
+                border: 1px solid #dbe4ee;
+                border-radius: 11px;
+            }
+            QFrame#RolesPermissionAccordionHeader:hover {
+                background: #f0fdfa;
+                border: 1px solid #5eead4;
+            }
+            QLabel#RolesPermissionAccordionChevron {
+                color: #64748b;
+                font-size: 10pt;
+                font-weight: 800;
+            }
+            QLabel#RolesPermissionAccordionCount {
+                background: #ccfbf1;
+                border-radius: 9px;
+                color: #0f766e;
+                font-size: 8pt;
+                font-weight: 800;
+                padding: 3px 7px;
+            }
+            QFrame#RolesPermissionAccordionBody {
+                background: transparent;
+                border: 0;
             }
             QLabel#RolesPermissionModule {
                 background: #ede9fe;
@@ -2215,8 +2254,8 @@ class MainWindow(QWidget):
         self.roles_table_container_layout = QHBoxLayout(self.roles_table_container)
         self.roles_table_container_layout.setContentsMargins(0, 0, 0, 0)
         self.roles_table_container_layout.setSpacing(12)
-        self.roles_table_container_layout.addWidget(self.roles_table_stack, 16)
-        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 9)
+        self.roles_table_container_layout.addWidget(self.roles_table_stack, 1)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 1)
 
         list_card = QFrame()
         list_card.setObjectName("RolesListCard")
@@ -2346,9 +2385,10 @@ class MainWindow(QWidget):
         header.addWidget(self.roles_drawer_close)
         drawer_layout.addLayout(header)
 
-        hero = QFrame()
-        hero.setObjectName("RolesDrawerHero")
-        hero_layout = QHBoxLayout(hero)
+        self.roles_drawer_hero = QFrame()
+        self.roles_drawer_hero.setObjectName("RolesDrawerHero")
+        self.roles_drawer_hero.setHidden(not self.roles_narrow_mode)
+        hero_layout = QHBoxLayout(self.roles_drawer_hero)
         hero_layout.setContentsMargins(14, 14, 14, 14)
         hero_layout.setSpacing(12)
         self.roles_drawer_avatar = QLabel("R")
@@ -2379,7 +2419,7 @@ class MainWindow(QWidget):
         hero_layout.addWidget(
             self.roles_drawer_count, 0, Qt.AlignmentFlag.AlignTop
         )
-        drawer_layout.addWidget(hero)
+        drawer_layout.addWidget(self.roles_drawer_hero)
 
         self.roles_permission_search = QLineEdit()
         self.roles_permission_search.setObjectName("RolesPermissionSearch")
@@ -2492,7 +2532,7 @@ class MainWindow(QWidget):
 
         if not hasattr(self, "roles_permission_filters_layout"):
             return
-        horizontal = bool(getattr(self, "roles_narrow_mode", False))
+        horizontal = True
         if self.roles_permission_filters_horizontal == horizontal:
             return
         widgets = (
@@ -2504,42 +2544,23 @@ class MainWindow(QWidget):
         )
         for widget in widgets:
             self.roles_permission_filters_layout.removeWidget(widget)
-        if horizontal:
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_search_label, 0, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_module_label, 0, 1
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_search, 1, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_module_filter, 1, 1
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_results, 2, 0, 1, 2
-            )
-            self.roles_permission_filters_layout.setColumnStretch(0, 3)
-            self.roles_permission_filters_layout.setColumnStretch(1, 2)
-        else:
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_search_label, 0, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_search, 1, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_module_label, 2, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_module_filter, 3, 0
-            )
-            self.roles_permission_filters_layout.addWidget(
-                self.roles_permission_results, 4, 0
-            )
-            self.roles_permission_filters_layout.setColumnStretch(0, 1)
-            self.roles_permission_filters_layout.setColumnStretch(1, 0)
+        self.roles_permission_filters_layout.addWidget(
+            self.roles_permission_search_label, 0, 0
+        )
+        self.roles_permission_filters_layout.addWidget(
+            self.roles_permission_module_label, 0, 1
+        )
+        self.roles_permission_filters_layout.addWidget(
+            self.roles_permission_search, 1, 0
+        )
+        self.roles_permission_filters_layout.addWidget(
+            self.roles_permission_module_filter, 1, 1
+        )
+        self.roles_permission_filters_layout.addWidget(
+            self.roles_permission_results, 2, 0, 1, 2
+        )
+        self.roles_permission_filters_layout.setColumnStretch(0, 3)
+        self.roles_permission_filters_layout.setColumnStretch(1, 2)
         self.roles_permission_filters_horizontal = horizontal
 
     def _build_settings_page(self) -> QWidget:
@@ -3790,46 +3811,105 @@ class MainWindow(QWidget):
             self.roles_permission_cards_layout.addStretch(1)
             return
 
+        # Group by module
+        groups: dict[str, list[ApiRow]] = {}
         for permission in visible:
-            card = QFrame()
-            card.setObjectName("RolesPermissionCard")
-            card.setProperty("interactive", True)
-            card.setProperty("permissionCode", str(permission.get("code") or ""))
-            card.setProperty("permissionModule", str(permission.get("module") or ""))
-            card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(13, 12, 13, 12)
-            card_layout.setSpacing(7)
-            top = QHBoxLayout()
-            module = QLabel(str(permission.get("module") or "-"))
-            module.setObjectName("RolesPermissionModule")
-            module.setToolTip(str(permission.get("module") or "-"))
-            grant_icon = QLabel("✓")
-            grant_icon.setObjectName("RolesPermissionGrantIcon")
-            grant_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            grant_icon.setToolTip(
-                self.translator.text("roles.permissions.granted")
-            )
-            top.addWidget(module)
-            top.addStretch(1)
-            top.addWidget(grant_icon)
-            card_layout.addLayout(top)
-            code = QLabel(str(permission.get("code") or "-"))
-            code.setObjectName("RolesPermissionCode")
-            code.setWordWrap(True)
-            code.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextSelectableByMouse
-            )
-            card_layout.addWidget(code)
-            description = str(permission.get("description") or "")
-            if description:
-                description_label = QLabel(description)
-                description_label.setObjectName("RolesPermissionDescription")
-                description_label.setWordWrap(True)
-                description_label.setTextInteractionFlags(
-                    Qt.TextInteractionFlag.TextSelectableByMouse
-                )
-                card_layout.addWidget(description_label)
-            self.roles_permission_cards_layout.addWidget(card)
+            mod = str(permission.get("module") or "-")
+            groups.setdefault(mod, []).append(permission)
+
+        for mod_name, items in groups.items():
+            # Create container for the accordion section
+            accordion_container = QFrame()
+            accordion_container.setObjectName("RolesPermissionAccordion")
+            acc_layout = QVBoxLayout(accordion_container)
+            acc_layout.setContentsMargins(0, 0, 0, 0)
+            acc_layout.setSpacing(4)
+
+            # Header
+            header = ClickableFrame()
+            header.setObjectName("RolesPermissionAccordionHeader")
+            header.setCursor(Qt.CursorShape.PointingHandCursor)
+            
+            header_layout = QHBoxLayout(header)
+            header_layout.setContentsMargins(12, 10, 12, 10)
+            header_layout.setSpacing(8)
+
+            chevron = QLabel("▼")
+            chevron.setObjectName("RolesPermissionAccordionChevron")
+
+            module_badge = QLabel(mod_name)
+            module_badge.setObjectName("RolesPermissionModule")
+            module_badge.setToolTip(mod_name)
+
+            count_badge = QLabel(str(len(items)))
+            count_badge.setObjectName("RolesPermissionAccordionCount")
+
+            header_layout.addWidget(chevron)
+            header_layout.addWidget(module_badge)
+            header_layout.addStretch(1)
+            header_layout.addWidget(count_badge)
+
+            # Body
+            body = QFrame()
+            body.setObjectName("RolesPermissionAccordionBody")
+            body_layout = QVBoxLayout(body)
+            body_layout.setContentsMargins(12, 4, 0, 4)
+            body_layout.setSpacing(8)
+
+            for permission in items:
+                card = QFrame()
+                card.setObjectName("RolesPermissionCard")
+                card.setProperty("interactive", True)
+                card.setProperty("permissionCode", str(permission.get("code") or ""))
+                card.setProperty("permissionModule", str(permission.get("module") or ""))
+
+                row_layout = QHBoxLayout(card)
+                row_layout.setContentsMargins(13, 12, 13, 12)
+                row_layout.setSpacing(12)
+
+                text_layout = QVBoxLayout()
+                text_layout.setContentsMargins(0, 0, 0, 0)
+                text_layout.setSpacing(4)
+
+                code = QLabel(str(permission.get("code") or "-"))
+                code.setObjectName("RolesPermissionCode")
+                code.setWordWrap(True)
+                code.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                text_layout.addWidget(code)
+
+                description = str(permission.get("description") or "")
+                if description:
+                    description_label = QLabel(description)
+                    description_label.setObjectName("RolesPermissionDescription")
+                    description_label.setWordWrap(True)
+                    description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    text_layout.addWidget(description_label)
+
+                row_layout.addLayout(text_layout, 1)
+
+                grant_icon = QLabel("✓")
+                grant_icon.setObjectName("RolesPermissionGrantIcon")
+                grant_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                grant_icon.setToolTip(self.translator.text("roles.permissions.granted"))
+                row_layout.addWidget(grant_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
+                body_layout.addWidget(card)
+
+            # Toggle connection
+            def make_toggle(b=body, c=chevron):
+                def toggle():
+                    is_visible = b.isVisible()
+                    b.setVisible(not is_visible)
+                    c.setText("▶" if is_visible else "▼")
+                return toggle
+
+            header.clicked.connect(make_toggle())
+
+            acc_layout.addWidget(header)
+            acc_layout.addWidget(body)
+
+            self.roles_permission_cards_layout.addWidget(accordion_container)
+
         self.roles_permission_cards_layout.addStretch(1)
 
     def _roles_drawer_target_width(self) -> int:
@@ -3838,7 +3918,7 @@ class MainWindow(QWidget):
         available = self.roles_table_container.width()
         if available <= 0:
             available = max(1000, self.width() - 280)
-        return min(460, max(380, int(available * 0.36)))
+        return max(380, int(available * 0.5))
 
     def _apply_roles_drawer_open_width(self) -> None:
         """Apply stable docked drawer constraints after opening or resizing."""
@@ -3930,6 +4010,8 @@ class MainWindow(QWidget):
             return
         content_width = self.roles_table_container.width()
         narrow = self.width() < 1320 or (0 < content_width < 900)
+        if hasattr(self, "roles_drawer_hero"):
+            self.roles_drawer_hero.setHidden(not narrow)
         if narrow == self.roles_narrow_mode and (
             self.roles_table_container_layout.indexOf(self.roles_permissions_drawer) >= 0
             or self.roles_narrow_detail_layout.indexOf(
@@ -3973,7 +4055,7 @@ class MainWindow(QWidget):
                     self.roles_desktop_page
                 )
             return
-        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 9)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 1)
         self.roles_drawer_back.hide()
         self.roles_drawer_close.show()
         self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)

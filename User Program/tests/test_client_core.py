@@ -814,9 +814,9 @@ class ClientCoreTests(unittest.TestCase):
             )
             self.assertTrue(window.roles_permissions_drawer.isVisible())
             self.assertFalse(window.roles_narrow_mode)
-            self.assertFalse(window.roles_permission_filters_horizontal)
-            self.assertGreaterEqual(window.roles_permissions_drawer.width(), 380)
-            self.assertLessEqual(window.roles_permissions_drawer.width(), 460)
+            self.assertTrue(window.roles_permission_filters_horizontal)
+            self.assertGreaterEqual(window.roles_permissions_drawer.width(), 500)
+            self.assertLessEqual(window.roles_permissions_drawer.width(), 650)
             permission_cards = [
                 frame
                 for frame in window.roles_permission_cards_container.findChildren(QFrame)
