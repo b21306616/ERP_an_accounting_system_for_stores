@@ -2129,8 +2129,8 @@ class MainWindow(QWidget):
         self.roles_table_container_layout = QHBoxLayout(self.roles_table_container)
         self.roles_table_container_layout.setContentsMargins(0, 0, 0, 0)
         self.roles_table_container_layout.setSpacing(12)
-        self.roles_table_container_layout.addWidget(self.roles_table_stack, 1)
-        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer)
+        self.roles_table_container_layout.addWidget(self.roles_table_stack, 7)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 3)
 
         list_card = QFrame()
         list_card.setObjectName("RolesListCard")
@@ -3575,7 +3575,10 @@ class MainWindow(QWidget):
             self.roles_permissions_drawer.setMaximumWidth(16777215)
             return
         self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
-        self._animate_roles_drawer(420)
+        target_width = int(self.roles_table_container.width() * 0.3)
+        if target_width < 100:
+            target_width = 420
+        self._animate_roles_drawer(target_width)
 
     def _close_role_permissions(
         self, *, clear_selection: bool = True, animate: bool = True
@@ -3593,6 +3596,7 @@ class MainWindow(QWidget):
             self.roles_permissions_drawer.hide()
             return
         if animate and self.roles_permissions_drawer.isVisible():
+            self.roles_permissions_drawer.setMaximumWidth(self.roles_permissions_drawer.width())
             self._animate_roles_drawer(0, hide_when_finished=True)
         else:
             self.roles_permissions_drawer.setMaximumWidth(0)
@@ -3614,6 +3618,11 @@ class MainWindow(QWidget):
         animation.setEndValue(target_width)
         if hide_when_finished:
             animation.finished.connect(self.roles_permissions_drawer.hide)
+        else:
+            def on_finished():
+                if not self.roles_narrow_mode and self.roles_permissions_drawer.isVisible() and self._selected_role() is not None:
+                    self.roles_permissions_drawer.setMaximumWidth(16777215)
+            animation.finished.connect(on_finished)
         self.roles_drawer_animation = animation
         animation.start()
 
@@ -3657,13 +3666,13 @@ class MainWindow(QWidget):
                     self.roles_desktop_page
                 )
             return
-        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer)
+        self.roles_table_container_layout.addWidget(self.roles_permissions_drawer, 3)
         self.roles_drawer_back.hide()
         self.roles_drawer_close.show()
         self.roles_content_stack.setCurrentWidget(self.roles_desktop_page)
         if selected:
             self.roles_permissions_drawer.show()
-            self.roles_permissions_drawer.setMaximumWidth(420)
+            self.roles_permissions_drawer.setMaximumWidth(16777215)
         else:
             self.roles_permissions_drawer.setMaximumWidth(0)
             self.roles_permissions_drawer.hide()
