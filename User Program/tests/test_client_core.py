@@ -719,6 +719,7 @@ class ClientCoreTests(unittest.TestCase):
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt6.QtCore import Qt
+        from PyQt6.QtTest import QTest
         from PyQt6.QtWidgets import QApplication, QFrame
         from user_app.ui.main_window import MainWindow
 
@@ -802,16 +803,29 @@ class ClientCoreTests(unittest.TestCase):
             self.assertEqual(window.roles_available_permissions_value.text(), "3")
 
             window.roles_table.selectRow(0)
+            QTest.qWait(220)
             app.processEvents()
             self.assertEqual(window.roles_drawer_title.text(), "Role 01")
+            self.assertEqual(window.roles_drawer_avatar.text(), "R0")
             self.assertEqual(window.roles_drawer_count.text(), "3")
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Showing 3 of 3 permissions",
+            )
             self.assertTrue(window.roles_permissions_drawer.isVisible())
+            self.assertFalse(window.roles_narrow_mode)
+            self.assertFalse(window.roles_permission_filters_horizontal)
+            self.assertGreaterEqual(window.roles_permissions_drawer.width(), 380)
+            self.assertLessEqual(window.roles_permissions_drawer.width(), 460)
             permission_cards = [
                 frame
                 for frame in window.roles_permission_cards_container.findChildren(QFrame)
                 if frame.objectName() == "RolesPermissionCard"
             ]
             self.assertEqual(len(permission_cards), 3)
+            self.assertTrue(
+                all(card.property("interactive") for card in permission_cards)
+            )
 
             window.roles_permission_search.setText("sales")
             app.processEvents()
@@ -821,6 +835,19 @@ class ClientCoreTests(unittest.TestCase):
                 if frame.objectName() == "RolesPermissionCard"
             ]
             self.assertEqual(len(permission_cards), 1)
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Showing 1 of 3 permissions",
+            )
+
+            window.roles_permission_search.clear()
+            reports_index = window.roles_permission_module_filter.findData("reports")
+            window.roles_permission_module_filter.setCurrentIndex(reports_index)
+            app.processEvents()
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Showing 1 of 3 permissions",
+            )
 
             api_client.fail_permission_metadata = True
             window.refresh_roles()
@@ -845,6 +872,7 @@ class ClientCoreTests(unittest.TestCase):
             window.roles_table.selectRow(0)
             app.processEvents()
             self.assertTrue(window.roles_narrow_mode)
+            self.assertTrue(window.roles_permission_filters_horizontal)
             self.assertIs(
                 window.roles_content_stack.currentWidget(),
                 window.roles_narrow_detail_page,
@@ -877,10 +905,19 @@ class ClientCoreTests(unittest.TestCase):
             "roles.empty.no_roles_body",
             "roles.back_to_roles",
             "roles.close_permissions",
+            "roles.drawer.title",
             "roles.drawer.assigned",
             "roles.drawer.no_description",
+            "roles.permissions.search_label",
+            "roles.permissions.module_label",
             "roles.permissions.search_placeholder",
             "roles.permissions.all_modules",
+            "roles.permissions.results",
+            "roles.permissions.granted",
+            "roles.permissions.no_assigned_title",
+            "roles.permissions.no_assigned_body",
+            "roles.permissions.no_matches_title",
+            "roles.permissions.no_matches_body",
             "roles.permissions.empty_title",
             "roles.permissions.empty_body",
         ]
@@ -888,6 +925,118 @@ class ClientCoreTests(unittest.TestCase):
             translator = Translator(language)  # type: ignore[arg-type]
             for key in keys:
                 self.assertNotEqual(translator.text(key), key)
+
+    def test_roles_drawer_empty_states_and_live_translation_offscreen(self) -> None:
+        """Drawer should distinguish empty causes and retranslate while open."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication, QLabel
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Admin",
+                    role_name="Super Admin",
+                    permissions=["admin.manage_roles"],
+                )
+                self.roles = [
+                    {
+                        "id": 1,
+                        "name": "Audit Review",
+                        "description": "",
+                        "permissions": [],
+                    }
+                ]
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "ok"}
+
+            def get_roles(self) -> list[dict[str, object]]:
+                return [dict(role) for role in self.roles]
+
+            def get_permissions(self) -> list[dict[str, object]]:
+                return [
+                    {
+                        "id": 1,
+                        "code": "reports.view",
+                        "module": "reports",
+                        "description": "View reports",
+                    }
+                ]
+
+        app = QApplication.instance() or QApplication([])
+        translator = Translator("en")
+        window = MainWindow(FakeApiClient(), translator)  # type: ignore[arg-type]
+        try:
+            window.resize(1440, 900)
+            window.show()
+            for index in range(window.nav.count()):
+                if (
+                    window.nav.item(index).data(Qt.ItemDataRole.UserRole)
+                    == "roles"
+                ):
+                    window.nav.setCurrentRow(index)
+                    break
+            app.processEvents()
+            window.roles_table.selectRow(0)
+            app.processEvents()
+
+            empty_texts = {
+                label.text()
+                for label in window.roles_permission_cards_container.findChildren(
+                    QLabel
+                )
+            }
+            self.assertIn("No permissions assigned yet", empty_texts)
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Showing 0 of 0 permissions",
+            )
+            self.assertEqual(
+                window.roles_drawer_description.text(),
+                "No description provided",
+            )
+
+            selected_role = window._selected_role()
+            self.assertIsNotNone(selected_role)
+            selected_role["permissions"] = ["reports.view"]  # type: ignore[index]
+            window._render_role_permissions_header(selected_role)  # type: ignore[arg-type]
+            window._populate_role_permission_module_filter(["reports.view"])
+            window.roles_permission_search.setText("missing")
+            app.processEvents()
+            empty_texts = {
+                label.text()
+                for label in window.roles_permission_cards_container.findChildren(
+                    QLabel
+                )
+            }
+            self.assertIn("No matching permissions", empty_texts)
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Showing 0 of 1 permissions",
+            )
+
+            translator.set_language("ru")
+            window.retranslate()
+            app.processEvents()
+            self.assertEqual(window.roles_drawer_eyebrow.text(), "Права роли")
+            self.assertEqual(
+                window.roles_permission_results.text(),
+                "Показано 0 из 1 прав",
+            )
+            self.assertEqual(
+                window.roles_drawer_description.text(),
+                "Описание отсутствует",
+            )
+            self.assertEqual(
+                window.roles_permission_module_filter.itemText(0),
+                "Все модули",
+            )
+        finally:
+            window.close()
+            app.processEvents()
 
     def test_settings_page_uses_editable_form_offscreen(self) -> None:
         """Settings should render as editable fields and save key/value payloads."""
