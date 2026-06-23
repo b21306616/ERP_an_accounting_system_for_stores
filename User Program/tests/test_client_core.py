@@ -720,7 +720,7 @@ class ClientCoreTests(unittest.TestCase):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt6.QtCore import Qt
         from PyQt6.QtTest import QTest
-        from PyQt6.QtWidgets import QApplication, QFrame
+        from PyQt6.QtWidgets import QApplication, QFrame, QPushButton
         from user_app.ui.main_window import MainWindow
 
         class FakeApiClient:
@@ -818,21 +818,24 @@ class ClientCoreTests(unittest.TestCase):
             self.assertGreaterEqual(window.roles_permissions_drawer.width(), 500)
             self.assertLessEqual(window.roles_permissions_drawer.width(), 650)
             permission_cards = [
-                frame
-                for frame in window.roles_permission_cards_container.findChildren(QFrame)
-                if frame.objectName() == "RolesPermissionCard"
+                btn
+                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
+                if btn.objectName() == "RolesPermissionChip"
             ]
-            self.assertEqual(len(permission_cards), 3)
-            self.assertTrue(
-                all(card.property("interactive") for card in permission_cards)
-            )
+            module_chips = [
+                btn
+                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
+                if btn.objectName() == "RolesModuleChip"
+            ]
+            self.assertEqual(len(module_chips), 3)
+            self.assertGreaterEqual(len(permission_cards), 1)
 
             window.roles_permission_search.setText("sales")
             app.processEvents()
             permission_cards = [
-                frame
-                for frame in window.roles_permission_cards_container.findChildren(QFrame)
-                if frame.objectName() == "RolesPermissionCard"
+                btn
+                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
+                if btn.objectName() == "RolesPermissionChip"
             ]
             self.assertEqual(len(permission_cards), 1)
             self.assertEqual(

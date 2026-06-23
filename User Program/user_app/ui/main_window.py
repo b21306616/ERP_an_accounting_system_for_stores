@@ -7,7 +7,7 @@ from decimal import Decimal
 import json
 from typing import Any, Callable, Sequence
 
-from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QResizeEvent, QFontMetrics
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -72,6 +72,75 @@ class ClickableFrame(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit()
         super().mousePressEvent(event)
+
+
+class FlowLayout(QLayout):
+    """A layout that arranges widgets in a wrapping, left-to-right flow."""
+
+    def __init__(self, parent: QWidget | None = None, h_spacing: int = 6, v_spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+        self._items: list[Any] = []
+
+    def addItem(self, item: Any) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> Any:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> Any:
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        m = self.contentsMargins()
+        size += QSize(m.left() + m.right(), m.top() + m.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, *, test_only: bool) -> int:
+        m = self.contentsMargins()
+        effective = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            h = item.sizeHint().height()
+            if x + w > effective.right() + 1 and line_height > 0:
+                x = effective.x()
+                y = y + line_height + self._v_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(x, y, w, h))
+            x += w + self._h_spacing
+            line_height = max(line_height, h)
+        return y + line_height - rect.y() + m.bottom()
 
 
 class MainWindow(QWidget):
@@ -952,70 +1021,84 @@ class MainWindow(QWidget):
                 border-color: #99f6e4;
                 color: #0f766e;
             }
-            QFrame#RolesPermissionCard {
-                background: #ffffff;
-                border: 1px solid #dbe4ee;
-                border-radius: 11px;
-            }
-            QFrame#RolesPermissionCard:hover {
-                background: #f0fdfa;
-                border: 1px solid #5eead4;
-            }
-            QFrame#RolesPermissionAccordion {
-                background: transparent;
-                border: 0;
-            }
-            QFrame#RolesPermissionAccordionHeader {
-                background: #ffffff;
-                border: 1px solid #dbe4ee;
-                border-radius: 11px;
-            }
-            QFrame#RolesPermissionAccordionHeader:hover {
-                background: #f0fdfa;
-                border: 1px solid #5eead4;
-            }
-            QLabel#RolesPermissionAccordionChevron {
-                color: #64748b;
-                font-size: 10pt;
-                font-weight: 800;
-            }
-            QLabel#RolesPermissionAccordionCount {
-                background: #ccfbf1;
-                border-radius: 9px;
-                color: #0f766e;
+            QPushButton#RolesModuleChip {
+                background: #f1f5f9;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
+                color: #475569;
                 font-size: 8pt;
-                font-weight: 800;
-                padding: 3px 7px;
+                font-weight: 700;
+                padding: 5px 14px;
             }
-            QFrame#RolesPermissionAccordionBody {
-                background: transparent;
-                border: 0;
-            }
-            QLabel#RolesPermissionModule {
+            QPushButton#RolesModuleChip:hover {
                 background: #ede9fe;
-                border: 1px solid #ddd6fe;
-                border-radius: 9px;
+                border-color: #c4b5fd;
                 color: #6d28d9;
-                font-size: 8pt;
-                font-weight: 800;
-                padding: 4px 8px;
             }
-            QLabel#RolesPermissionGrantIcon {
+            QPushButton#RolesModuleChip[selected="true"] {
+                background: #7c3aed;
+                border-color: #7c3aed;
+                color: #ffffff;
+            }
+            QPushButton#RolesModuleChip[selected="true"]:hover {
+                background: #6d28d9;
+                border-color: #6d28d9;
+                color: #ffffff;
+            }
+            QFrame#RolesModuleChipsBar {
+                background: transparent;
+                border: 0;
+            }
+            QLabel#RolesModuleChipCount {
+                background: transparent;
+                border: 0;
+                color: #94a3b8;
+                font-size: 7pt;
+                font-weight: 700;
+            }
+            QPushButton#RolesModuleChip[selected="true"] QLabel#RolesModuleChipCount {
+                color: #e0e7ff;
+            }
+            QFrame#RolesPermissionChipsArea {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
+            }
+            QPushButton#RolesPermissionChip {
+                background: #ffffff;
+                border: 1px solid #dbe4ee;
+                border-radius: 14px;
+                color: #0f172a;
+                font-size: 8pt;
+                font-weight: 700;
+                padding: 6px 14px;
+            }
+            QPushButton#RolesPermissionChip:hover {
+                background: #f0fdfa;
+                border-color: #5eead4;
+                color: #0f766e;
+            }
+            QLabel#RolesPermissionChipIcon {
                 background: #ccfbf1;
                 border: 1px solid #99f6e4;
-                border-radius: 10px;
+                border-radius: 8px;
                 color: #0f766e;
-                font-size: 8pt;
+                font-size: 7pt;
                 font-weight: 900;
-                min-height: 20px;
-                min-width: 20px;
-                max-height: 20px;
-                max-width: 20px;
+                min-height: 16px;
+                min-width: 16px;
+                max-height: 16px;
+                max-width: 16px;
             }
-            QLabel#RolesPermissionCode {
-                color: #0f172a;
-                font-size: 10pt;
+            QLabel#RolesPermChipsHeading {
+                color: #334155;
+                font-size: 9pt;
                 font-weight: 800;
+            }
+            QLabel#RolesPermChipsSubtext {
+                color: #94a3b8;
+                font-size: 8pt;
+                font-weight: 600;
             }
             QLabel#RolesPermissionEmptyIcon {
                 background: #f1f5f9;
@@ -2140,6 +2223,7 @@ class MainWindow(QWidget):
         self.roles_filtered_rows: list[ApiRow] = []
         self.roles_permission_catalog: dict[str, ApiRow] = {}
         self.roles_selected_role_id: object | None = None
+        self.roles_selected_permission_module: str | None = None
         self.roles_current_page = 0
         self.roles_page_size = 10
         self.roles_narrow_mode = False
@@ -3689,6 +3773,7 @@ class MainWindow(QWidget):
         if role is None:
             return
         self.roles_selected_role_id = role.get("id")
+        self.roles_selected_permission_module = None
         permissions = [str(code) for code in role.get("permissions") or []]
         self._render_role_permissions_header(role)
         self.roles_granted_permissions_value.setText(str(len(permissions)))
@@ -3746,7 +3831,7 @@ class MainWindow(QWidget):
         self.roles_permission_module_filter.blockSignals(False)
 
     def _render_role_permission_cards(self, _value: object = None) -> None:
-        """Render assigned permissions using the active search and module filter."""
+        """Render assigned permissions as module chips + permission chips."""
 
         if not hasattr(self, "roles_permission_cards_layout"):
             return
@@ -3811,104 +3896,91 @@ class MainWindow(QWidget):
             self.roles_permission_cards_layout.addStretch(1)
             return
 
-        # Group by module
+        # ── Group by module ──
         groups: dict[str, list[ApiRow]] = {}
         for permission in visible:
             mod = str(permission.get("module") or "-")
             groups.setdefault(mod, []).append(permission)
 
-        for mod_name, items in groups.items():
-            # Create container for the accordion section
-            accordion_container = QFrame()
-            accordion_container.setObjectName("RolesPermissionAccordion")
-            acc_layout = QVBoxLayout(accordion_container)
-            acc_layout.setContentsMargins(0, 0, 0, 0)
-            acc_layout.setSpacing(4)
+        # Auto-select first module if current selection is invalid
+        module_names = list(groups.keys())
+        if (
+            self.roles_selected_permission_module is None
+            or self.roles_selected_permission_module not in groups
+        ):
+            self.roles_selected_permission_module = module_names[0] if module_names else None
 
-            # Header
-            header = ClickableFrame()
-            header.setObjectName("RolesPermissionAccordionHeader")
-            header.setCursor(Qt.CursorShape.PointingHandCursor)
-            
-            header_layout = QHBoxLayout(header)
-            header_layout.setContentsMargins(12, 10, 12, 10)
-            header_layout.setSpacing(8)
+        # ── Module selector chips (top) ──
+        module_chips_container = QFrame()
+        module_chips_container.setObjectName("RolesModuleChipsBar")
+        module_chips_flow = FlowLayout(module_chips_container, h_spacing=6, v_spacing=6)
+        module_chips_flow.setContentsMargins(0, 0, 0, 0)
 
-            chevron = QLabel("▼")
-            chevron.setObjectName("RolesPermissionAccordionChevron")
+        for mod_name in module_names:
+            chip = QPushButton(f"  {mod_name}  ({len(groups[mod_name])})")
+            chip.setObjectName("RolesModuleChip")
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            is_selected = mod_name == self.roles_selected_permission_module
+            chip.setProperty("selected", is_selected)
+            chip.setToolTip(
+                self.translator.text("roles.permissions.module_label") + ": " + mod_name
+            )
 
-            module_badge = QLabel(mod_name)
-            module_badge.setObjectName("RolesPermissionModule")
-            module_badge.setToolTip(mod_name)
+            def make_select(m: str = mod_name) -> Callable[[], None]:
+                def select() -> None:
+                    self.roles_selected_permission_module = m
+                    self._render_role_permission_cards()
+                return select
 
-            count_badge = QLabel(str(len(items)))
-            count_badge.setObjectName("RolesPermissionAccordionCount")
+            chip.clicked.connect(make_select())
+            module_chips_flow.addWidget(chip)
 
-            header_layout.addWidget(chevron)
-            header_layout.addWidget(module_badge)
-            header_layout.addStretch(1)
-            header_layout.addWidget(count_badge)
+        self.roles_permission_cards_layout.addWidget(module_chips_container)
 
-            # Body
-            body = QFrame()
-            body.setObjectName("RolesPermissionAccordionBody")
-            body_layout = QVBoxLayout(body)
-            body_layout.setContentsMargins(12, 4, 0, 4)
-            body_layout.setSpacing(8)
+        # ── Permission chips for the selected module ──
+        selected_mod = self.roles_selected_permission_module
+        if selected_mod and selected_mod in groups:
+            selected_items = groups[selected_mod]
 
-            for permission in items:
-                card = QFrame()
-                card.setObjectName("RolesPermissionCard")
-                card.setProperty("interactive", True)
-                card.setProperty("permissionCode", str(permission.get("code") or ""))
-                card.setProperty("permissionModule", str(permission.get("module") or ""))
+            perm_area = QFrame()
+            perm_area.setObjectName("RolesPermissionChipsArea")
+            perm_area_layout = QVBoxLayout(perm_area)
+            perm_area_layout.setContentsMargins(14, 14, 14, 14)
+            perm_area_layout.setSpacing(10)
 
-                row_layout = QHBoxLayout(card)
-                row_layout.setContentsMargins(13, 12, 13, 12)
-                row_layout.setSpacing(12)
+            # Section heading
+            heading_row = QHBoxLayout()
+            heading_row.setSpacing(8)
+            heading_label = QLabel(selected_mod)
+            heading_label.setObjectName("RolesPermChipsHeading")
+            count_label = QLabel(
+                f"{len(selected_items)} "
+                + self.translator.text("roles.permissions.granted")
+            )
+            count_label.setObjectName("RolesPermChipsSubtext")
+            heading_row.addWidget(heading_label)
+            heading_row.addWidget(count_label)
+            heading_row.addStretch(1)
+            perm_area_layout.addLayout(heading_row)
 
-                text_layout = QVBoxLayout()
-                text_layout.setContentsMargins(0, 0, 0, 0)
-                text_layout.setSpacing(4)
+            # Permission chips in a flow layout
+            perm_chips_widget = QWidget()
+            perm_flow = FlowLayout(perm_chips_widget, h_spacing=8, v_spacing=8)
+            perm_flow.setContentsMargins(0, 0, 0, 0)
 
-                code = QLabel(str(permission.get("code") or "-"))
-                code.setObjectName("RolesPermissionCode")
-                code.setWordWrap(True)
-                code.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                text_layout.addWidget(code)
-
+            for permission in selected_items:
+                code = str(permission.get("code") or "-")
                 description = str(permission.get("description") or "")
-                if description:
-                    description_label = QLabel(description)
-                    description_label.setObjectName("RolesPermissionDescription")
-                    description_label.setWordWrap(True)
-                    description_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                    text_layout.addWidget(description_label)
+                tooltip = f"{code}\n{description}" if description else code
 
-                row_layout.addLayout(text_layout, 1)
+                chip = QPushButton(f" ✓  {code}")
+                chip.setObjectName("RolesPermissionChip")
+                chip.setCursor(Qt.CursorShape.PointingHandCursor)
+                chip.setToolTip(tooltip)
+                perm_flow.addWidget(chip)
 
-                grant_icon = QLabel("✓")
-                grant_icon.setObjectName("RolesPermissionGrantIcon")
-                grant_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                grant_icon.setToolTip(self.translator.text("roles.permissions.granted"))
-                row_layout.addWidget(grant_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-
-                body_layout.addWidget(card)
-
-            # Toggle connection
-            def make_toggle(b=body, c=chevron):
-                def toggle():
-                    is_visible = b.isVisible()
-                    b.setVisible(not is_visible)
-                    c.setText("▶" if is_visible else "▼")
-                return toggle
-
-            header.clicked.connect(make_toggle())
-
-            acc_layout.addWidget(header)
-            acc_layout.addWidget(body)
-
-            self.roles_permission_cards_layout.addWidget(accordion_container)
+            perm_area_layout.addWidget(perm_chips_widget)
+            self.roles_permission_cards_layout.addWidget(perm_area)
 
         self.roles_permission_cards_layout.addStretch(1)
 
