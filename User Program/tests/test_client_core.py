@@ -720,7 +720,7 @@ class ClientCoreTests(unittest.TestCase):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt6.QtCore import Qt
         from PyQt6.QtTest import QTest
-        from PyQt6.QtWidgets import QApplication, QFrame, QPushButton
+        from PyQt6.QtWidgets import QApplication, QFrame, QLabel, QPushButton
         from user_app.ui.main_window import MainWindow
 
         class FakeApiClient:
@@ -735,7 +735,12 @@ class ClientCoreTests(unittest.TestCase):
                     {
                         "id": index,
                         "name": f"Role {index:02d}",
-                        "description": f"Description {index}",
+                        "description": (
+                            "A long role description that should wrap cleanly "
+                            "inside the responsive permissions summary."
+                            if index == 1
+                            else f"Description {index}"
+                        ),
                         "permissions": [
                             "admin.view",
                             "reports.view",
@@ -808,6 +813,12 @@ class ClientCoreTests(unittest.TestCase):
             self.assertEqual(window.roles_drawer_title.text(), "Role 01")
             self.assertEqual(window.roles_drawer_avatar.text(), "R0")
             self.assertEqual(window.roles_drawer_count.text(), "3")
+            self.assertTrue(window.roles_drawer_hero.isVisible())
+            self.assertTrue(window.roles_drawer_description.wordWrap())
+            self.assertIn(
+                "should wrap cleanly",
+                window.roles_drawer_description.text(),
+            )
             self.assertEqual(
                 window.roles_permission_results.text(),
                 "Showing 3 of 3 permissions",
@@ -818,9 +829,9 @@ class ClientCoreTests(unittest.TestCase):
             self.assertGreaterEqual(window.roles_permissions_drawer.width(), 500)
             self.assertLessEqual(window.roles_permissions_drawer.width(), 650)
             permission_cards = [
-                btn
-                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
-                if btn.objectName() == "RolesPermissionChip"
+                frame
+                for frame in window.roles_permission_cards_container.findChildren(QFrame)
+                if frame.objectName() == "RolesPermissionCard"
             ]
             module_chips = [
                 btn
@@ -829,13 +840,32 @@ class ClientCoreTests(unittest.TestCase):
             ]
             self.assertEqual(len(module_chips), 3)
             self.assertGreaterEqual(len(permission_cards), 1)
+            self.assertTrue(
+                all(
+                    card.focusPolicy() == Qt.FocusPolicy.StrongFocus
+                    for card in permission_cards
+                )
+            )
+            self.assertTrue(
+                all(
+                    card.findChild(QLabel, "RolesPermissionCheck") is not None
+                    for card in permission_cards
+                )
+            )
+
+            window.roles_table.selectRow(1)
+            app.processEvents()
+            self.assertEqual(window.roles_drawer_title.text(), "Role 02")
+            self.assertEqual(window.roles_drawer_count.text(), "2")
+            window.roles_table.selectRow(0)
+            app.processEvents()
 
             window.roles_permission_search.setText("sales")
             app.processEvents()
             permission_cards = [
-                btn
-                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
-                if btn.objectName() == "RolesPermissionChip"
+                frame
+                for frame in window.roles_permission_cards_container.findChildren(QFrame)
+                if frame.objectName() == "RolesPermissionCard"
             ]
             self.assertEqual(len(permission_cards), 1)
             self.assertEqual(
@@ -844,13 +874,25 @@ class ClientCoreTests(unittest.TestCase):
             )
 
             window.roles_permission_search.clear()
-            reports_index = window.roles_permission_module_filter.findData("reports")
-            window.roles_permission_module_filter.setCurrentIndex(reports_index)
+            app.processEvents()
+            module_chips = [
+                btn
+                for btn in window.roles_permission_cards_container.findChildren(QPushButton)
+                if btn.objectName() == "RolesModuleChip" and "reports" in btn.text().lower()
+            ]
+            self.assertTrue(len(module_chips) > 0)
+            module_chips[0].click()
             app.processEvents()
             self.assertEqual(
                 window.roles_permission_results.text(),
-                "Showing 1 of 3 permissions",
+                "Showing 3 of 3 permissions",
             )
+            permission_cards = [
+                frame
+                for frame in window.roles_permission_cards_container.findChildren(QFrame)
+                if frame.objectName() == "RolesPermissionCard"
+            ]
+            self.assertEqual(len(permission_cards), 1)
 
             api_client.fail_permission_metadata = True
             window.refresh_roles()
@@ -885,6 +927,23 @@ class ClientCoreTests(unittest.TestCase):
                 window.roles_content_stack.currentWidget(),
                 window.roles_desktop_page,
             )
+
+            window.resize(980, 720)
+            app.processEvents()
+            window.roles_table.selectRow(1)
+            app.processEvents()
+            window.roles_permissions_drawer.setMaximumWidth(520)
+            window.roles_permissions_drawer.resize(520, 680)
+            app.processEvents()
+            window._update_roles_drawer_compact_layout()
+            self.assertTrue(window.roles_narrow_mode)
+            self.assertTrue(window.roles_drawer_compact)
+            self.assertFalse(window.roles_permission_filters_horizontal)
+            self.assertTrue(window.roles_drawer_hero.isVisible())
+            self.assertIs(
+                window.roles_content_stack.currentWidget(),
+                window.roles_narrow_detail_page,
+            )
         finally:
             window.close()
             app.processEvents()
@@ -917,6 +976,19 @@ class ClientCoreTests(unittest.TestCase):
             "roles.permissions.all_modules",
             "roles.permissions.results",
             "roles.permissions.granted",
+            "roles.permissions.granted_count",
+            "roles.permissions.modules.admin",
+            "roles.permissions.modules.audit",
+            "roles.permissions.modules.cashier",
+            "roles.permissions.modules.counterparty",
+            "roles.permissions.modules.goods",
+            "roles.permissions.modules.pricing",
+            "roles.permissions.modules.purchase",
+            "roles.permissions.modules.reports",
+            "roles.permissions.modules.sale",
+            "roles.permissions.modules.sale_return",
+            "roles.permissions.modules.settings",
+            "roles.permissions.modules.warehouse",
             "roles.permissions.no_assigned_title",
             "roles.permissions.no_assigned_body",
             "roles.permissions.no_matches_title",
@@ -934,7 +1006,7 @@ class ClientCoreTests(unittest.TestCase):
 
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         from PyQt6.QtCore import Qt
-        from PyQt6.QtWidgets import QApplication, QLabel
+        from PyQt6.QtWidgets import QApplication, QLabel, QPushButton
         from user_app.ui.main_window import MainWindow
 
         class FakeApiClient:
@@ -1033,9 +1105,20 @@ class ClientCoreTests(unittest.TestCase):
                 window.roles_drawer_description.text(),
                 "Описание отсутствует",
             )
+            window.roles_permission_search.clear()
+            app.processEvents()
+            module_chips = [
+                button
+                for button in window.roles_permission_cards_container.findChildren(
+                    QPushButton
+                )
+                if button.objectName() == "RolesModuleChip"
+            ]
+            self.assertEqual(len(module_chips), 1)
+            self.assertIn("Отчёты", module_chips[0].text())
             self.assertEqual(
-                window.roles_permission_module_filter.itemText(0),
-                "Все модули",
+                window.roles_drawer_count.toolTip(),
+                "Назначено: 1",
             )
         finally:
             window.close()
