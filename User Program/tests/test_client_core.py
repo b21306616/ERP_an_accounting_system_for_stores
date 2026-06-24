@@ -442,6 +442,148 @@ class ClientCoreTests(unittest.TestCase):
         window.close()
         app.processEvents()
 
+    def test_dashboard_redesign_renders_business_metrics_offscreen(self) -> None:
+        """Dashboard should render report totals, low stock, chart, and recent docs."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Manager",
+                    role_name="Cashier",
+                    permissions=[
+                        "sale.view",
+                        "sale.create",
+                        "warehouse.view",
+                        "goods.view",
+                        "purchase.view",
+                        "purchase.invoice_create",
+                        "purchase.post",
+                        "counterparty.view",
+                        "counterparty.create",
+                        "cashier.view",
+                        "cashier.shift_open",
+                    ],
+                )
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "running"}
+
+            def get_dashboard_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                if filters and filters.get("date_from") == filters.get("date_to"):
+                    return {"net_sales_tmt": "14320.00"}
+                return {
+                    "receivable_tmt": "82400.00",
+                    "payable_tmt": "41100.00",
+                    "open_shift_count": 2,
+                }
+
+            def get_sales_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                return {
+                    "rows": [
+                        {"doc_date": "2026-06-01", "signed_amount_tmt": "100.00"},
+                        {"doc_date": "2026-06-02", "signed_amount_tmt": "150.00"},
+                    ]
+                }
+
+            def get_products(self) -> list[dict[str, object]]:
+                return [
+                    {"id": 1, "name": "Sugar", "min_stock": "10", "is_active": True},
+                    {"id": 2, "name": "Tea", "min_stock": "0", "is_active": True},
+                ]
+
+            def get_stock_balances(self) -> list[dict[str, object]]:
+                return [{"product_id": 1, "quantity": "5"}]
+
+            def get_sales(self) -> list[dict[str, object]]:
+                return [
+                    {
+                        "doc_number": "SAL-001",
+                        "counterparty_name": "Customer",
+                        "total_amount_tmt": "100.00",
+                        "status": "posted",
+                    }
+                ]
+
+            def get_purchase_invoices(self) -> list[dict[str, object]]:
+                return [
+                    {
+                        "doc_number": "PUR-001",
+                        "counterparty_name": "Supplier",
+                        "total_amount_tmt": "50.00",
+                        "status": "posted",
+                    }
+                ]
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        try:
+            self.assertEqual(window.dashboard_metric_values["sales_today"].text(), "14 320 TMT")
+            self.assertEqual(window.dashboard_metric_values["receivable"].text(), "82 400 TMT")
+            self.assertEqual(window.dashboard_metric_values["payable"].text(), "41 100 TMT")
+            self.assertEqual(window.dashboard_metric_values["low_stock"].text(), "1")
+            self.assertEqual(len(window.dashboard_chart.points), 2)
+            self.assertEqual(window.dashboard_recent_table.rowCount(), 2)
+            self.assertIn("products below minimum stock: 1", window.dashboard_alert_label.text())
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_grouped_sidebar_subitem_opens_existing_tab_offscreen(self) -> None:
+        """Sidebar subitems should navigate to the backing page and tab."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtCore import Qt
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Catalog Manager",
+                    role_name="Manager",
+                    permissions=["goods.view"],
+                )
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "running"}
+
+            def get_products(self, search: str | None = None) -> list[dict[str, object]]:
+                return []
+
+            def get_product_groups(self) -> list[dict[str, object]]:
+                return []
+
+            def get_services(self, search: str | None = None) -> list[dict[str, object]]:
+                return []
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        try:
+            target_row = -1
+            for index in range(window.nav.count()):
+                item = window.nav.item(index)
+                if (
+                    item.data(Qt.ItemDataRole.UserRole) == "catalog"
+                    and item.data(Qt.ItemDataRole.UserRole.value + 1) == "catalog_tabs"
+                    and item.data(Qt.ItemDataRole.UserRole.value + 2) == 1
+                ):
+                    target_row = index
+                    break
+
+            self.assertGreaterEqual(target_row, 0)
+            window.nav.setCurrentRow(target_row)
+            app.processEvents()
+
+            self.assertIs(window.stack.currentWidget(), window.pages["catalog"])
+            self.assertEqual(window.catalog_tabs.currentIndex(), 1)
+        finally:
+            window.close()
+            app.processEvents()
+
     def test_users_page_renders_filters_and_empty_state_offscreen(self) -> None:
         """Users list should render KPIs, search, status, role filtering, and empty state."""
 

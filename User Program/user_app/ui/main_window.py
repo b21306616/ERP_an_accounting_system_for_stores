@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 import json
 from typing import Any, Callable, Sequence
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QResizeEvent, QFontMetrics
+from PyQt6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QResizeEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -143,6 +143,111 @@ class FlowLayout(QLayout):
         return y + line_height - rect.y() + m.bottom()
 
 
+class DashboardLineChart(QWidget):
+    """Small native chart for the dashboard sales trend."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.points: list[tuple[str, Decimal]] = []
+        self.setMinimumHeight(260)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+
+    def set_points(self, points: Sequence[tuple[str, Decimal]]) -> None:
+        """Replace chart points and repaint."""
+
+        self.points = list(points)
+        self.update()
+
+    def paintEvent(self, event: Any) -> None:
+        """Paint a compact line/area chart without external dependencies."""
+
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = self.rect().adjusted(8, 12, -8, -12)
+        if rect.width() < 80 or rect.height() < 80:
+            return
+
+        plot = rect.adjusted(44, 12, -14, -34)
+        baseline = plot.bottom()
+        grid_pen = QPen(QColor("#e8edf5"))
+        grid_pen.setWidth(1)
+        painter.setPen(grid_pen)
+        for index in range(5):
+            y = plot.top() + int(plot.height() * index / 4)
+            painter.drawLine(plot.left(), y, plot.right(), y)
+
+        if not self.points:
+            painter.setPen(QColor("#94a3b8"))
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "No sales data for this period",
+            )
+            return
+
+        values = [value for _label, value in self.points]
+        max_value = max(values + [Decimal("1")])
+        min_value = min(values + [Decimal("0")])
+        if max_value == min_value:
+            max_value += Decimal("1")
+        value_span = max_value - min_value
+        denom = max(1, len(self.points) - 1)
+        coordinates: list[tuple[float, float]] = []
+        for index, (_label, value) in enumerate(self.points):
+            x = plot.left() + (plot.width() * index / denom)
+            ratio = float((value - min_value) / value_span)
+            y = baseline - (plot.height() * ratio)
+            coordinates.append((x, y))
+
+        area = QPainterPath()
+        first_x, first_y = coordinates[0]
+        area.moveTo(first_x, baseline)
+        area.lineTo(first_x, first_y)
+        line = QPainterPath()
+        line.moveTo(first_x, first_y)
+        for x, y in coordinates[1:]:
+            line.lineTo(x, y)
+            area.lineTo(x, y)
+        last_x, _last_y = coordinates[-1]
+        area.lineTo(last_x, baseline)
+        area.closeSubpath()
+
+        area_color = QColor("#7c3aed")
+        area_color.setAlpha(42)
+        painter.fillPath(area, area_color)
+
+        line_pen = QPen(QColor("#6d5dfc"))
+        line_pen.setWidth(3)
+        painter.setPen(line_pen)
+        painter.drawPath(line)
+
+        marker_brush = QColor("#ffffff")
+        marker_pen = QPen(QColor("#f97316"))
+        marker_pen.setWidth(2)
+        painter.setPen(marker_pen)
+        painter.setBrush(marker_brush)
+        for x, y in coordinates:
+            painter.drawEllipse(QPoint(int(x), int(y)), 4, 4)
+
+        axis_pen = QPen(QColor("#cbd5e1"))
+        axis_pen.setWidth(1)
+        painter.setPen(axis_pen)
+        painter.drawLine(plot.left(), baseline, plot.right(), baseline)
+
+        label_pen = QPen(QColor("#64748b"))
+        painter.setPen(label_pen)
+        font_metrics = QFontMetrics(painter.font())
+        for index, (label, _value) in enumerate(self.points):
+            if len(self.points) > 6 and index not in {0, len(self.points) - 1} and index % 2:
+                continue
+            x, _y = coordinates[index]
+            elided = font_metrics.elidedText(label, Qt.TextElideMode.ElideRight, 54)
+            painter.drawText(int(x) - 24, rect.bottom() - 18, 56, 18, Qt.AlignmentFlag.AlignCenter, elided)
+
+
 class MainWindow(QWidget):
     """Role-aware main shell for the endpoint client."""
 
@@ -164,6 +269,9 @@ class MainWindow(QWidget):
         self.status_label = QLabel()
         self.pages: dict[str, QWidget] = {}
         self.nav_items: dict[str, QListWidgetItem] = {}
+        self.nav_route_items: dict[str, list[QListWidgetItem]] = {}
+        self.nav_group_items: dict[str, QListWidgetItem] = {}
+        self.nav_current_route_item: QListWidgetItem | None = None
 
         self._build_ui()
         self._connect_signals()
@@ -177,30 +285,50 @@ class MainWindow(QWidget):
         self.setStyleSheet(
             """
             QWidget#MainWindow {
-                background: #eef3f8;
+                background: #f4f7fb;
                 color: #152238;
                 font-size: 10pt;
             }
+            QFrame#TopBar {
+                background: #ffffff;
+                border: 1px solid #e4eaf2;
+                border-radius: 12px;
+            }
+            QLabel#TopBrand {
+                color: #101828;
+                font-size: 17px;
+                font-weight: 900;
+            }
+            QLabel#TopMeta {
+                color: #475569;
+                font-size: 9pt;
+                font-weight: 600;
+            }
             QListWidget#Sidebar {
                 background: #ffffff;
-                border: 1px solid #d8e1ec;
-                border-radius: 12px;
-                padding: 8px;
+                border: 1px solid #e4eaf2;
+                border-radius: 14px;
+                padding: 10px 8px;
             }
             QListWidget#Sidebar::item {
-                border-radius: 8px;
-                color: #475569;
-                margin: 2px 0;
-                padding: 10px 12px;
+                border-radius: 9px;
+                color: #334155;
+                margin: 1px 2px;
+                padding: 9px 12px;
             }
             QListWidget#Sidebar::item:hover {
-                background: #f1f5f9;
+                background: #f6f8fb;
                 color: #0f172a;
             }
             QListWidget#Sidebar::item:selected {
-                background: #e0edff;
-                color: #1557c0;
-                font-weight: 700;
+                background: #eef4ff;
+                color: #2456d6;
+                font-weight: 800;
+                border-left: 3px solid #6d5dfc;
+            }
+            QListWidget#Sidebar::item:disabled {
+                color: #94a3b8;
+                background: transparent;
             }
             QStackedWidget {
                 background: transparent;
@@ -228,6 +356,92 @@ class MainWindow(QWidget):
                 background: #ffffff;
                 border: 1px solid #dce5ef;
                 border-radius: 10px;
+            }
+            QFrame#DashboardCard,
+            QFrame#DashboardMetricCard,
+            QFrame#DashboardHero,
+            QFrame#DashboardAlert,
+            QFrame#DashboardTopControls {
+                background: #ffffff;
+                border: 1px solid #e5ebf3;
+                border-radius: 12px;
+            }
+            QFrame#DashboardHero {
+                border-radius: 14px;
+            }
+            QLabel#DashboardEyebrow {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 700;
+            }
+            QLabel#DashboardTitle {
+                color: #0f172a;
+                font-size: 22px;
+                font-weight: 900;
+            }
+            QLabel#DashboardSubtitle {
+                color: #64748b;
+                font-size: 9pt;
+            }
+            QLabel#DashboardMetricIcon {
+                border-radius: 8px;
+                color: #ffffff;
+                font-size: 13px;
+                font-weight: 900;
+                min-height: 26px;
+                max-height: 26px;
+                min-width: 26px;
+                max-width: 26px;
+            }
+            QLabel#DashboardMetricTitle {
+                color: #64748b;
+                font-size: 9pt;
+                font-weight: 700;
+            }
+            QLabel#DashboardMetricValue {
+                color: #0f172a;
+                font-size: 20px;
+                font-weight: 900;
+            }
+            QLabel#DashboardMetricHint {
+                color: #16a34a;
+                font-size: 8pt;
+                font-weight: 700;
+            }
+            QLabel#DashboardSectionTitle {
+                color: #111827;
+                font-size: 14px;
+                font-weight: 900;
+            }
+            QLabel#DashboardMuted {
+                color: #64748b;
+                font-size: 9pt;
+            }
+            QPushButton#DashboardQuickButton {
+                background: #ffffff;
+                border: 1px solid #d8e1ec;
+                border-radius: 8px;
+                color: #0f172a;
+                font-weight: 800;
+                padding: 9px 14px;
+                text-align: left;
+            }
+            QPushButton#DashboardQuickButton:hover {
+                background: #f8fafc;
+                border-color: #93c5fd;
+                color: #2456d6;
+            }
+            QPushButton#DashboardPrimaryButton {
+                background: #2456d6;
+                border: 1px solid #2456d6;
+                border-radius: 8px;
+                color: #ffffff;
+                font-weight: 800;
+                padding: 9px 14px;
+            }
+            QPushButton#DashboardPrimaryButton:hover {
+                background: #1d4ed8;
+                border-color: #1d4ed8;
             }
             QLabel#MetricTitle {
                 color: #64748b;
@@ -1133,28 +1347,55 @@ class MainWindow(QWidget):
         )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(20, 20, 20, 20)
-        root.setSpacing(14)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
 
-        top = QHBoxLayout()
-        self.status_label.setObjectName("PageTitle")
-        top.addWidget(self.status_label)
-        top.addStretch(1)
+        top_bar = QFrame()
+        top_bar.setObjectName("TopBar")
+        top_bar_layout = QHBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(16, 10, 14, 10)
+        top_bar_layout.setSpacing(18)
+
+        brand = QLabel("MyFirstERP")
+        brand.setObjectName("TopBrand")
+        top_bar_layout.addWidget(brand)
+
+        self.top_store_label = QLabel()
+        self.top_store_label.setObjectName("TopMeta")
+        top_bar_layout.addWidget(self.top_store_label)
+
+        self.top_warehouse_label = QLabel()
+        self.top_warehouse_label.setObjectName("TopMeta")
+        top_bar_layout.addWidget(self.top_warehouse_label)
+
+        self.top_period_label = QLabel()
+        self.top_period_label.setObjectName("TopMeta")
+        top_bar_layout.addWidget(self.top_period_label)
+
+        top_bar_layout.addStretch(1)
+
+        self.top_notifications_label = QLabel()
+        self.top_notifications_label.setObjectName("TopMeta")
+        top_bar_layout.addWidget(self.top_notifications_label)
+
+        self.status_label.setObjectName("TopMeta")
+        top_bar_layout.addWidget(self.status_label)
         self.language_combo.addItem("Русский", "ru")
         self.language_combo.addItem("Türkmençe", "tk")
         self.language_combo.addItem("English", "en")
         index = self.language_combo.findData(self.translator.language)
         if index >= 0:
             self.language_combo.setCurrentIndex(index)
-        top.addWidget(self.language_combo)
+        top_bar_layout.addWidget(self.language_combo)
         self.logout_button.setObjectName("PrimaryButton")
-        top.addWidget(self.logout_button)
-        root.addLayout(top)
+        top_bar_layout.addWidget(self.logout_button)
+        root.addWidget(top_bar)
 
         body = QHBoxLayout()
+        body.setSpacing(10)
         self.nav.setObjectName("Sidebar")
         self.nav.setFixedWidth(238)
-        self.nav.setSpacing(2)
+        self.nav.setSpacing(3)
         self.stack.setObjectName("ContentStack")
         body.addWidget(self.nav)
         body.addWidget(self.stack, 1)
@@ -1173,6 +1414,7 @@ class MainWindow(QWidget):
         self._add_page("sales", self._build_sales_page())
         self._add_page("cashier", self._build_cashier_page())
         self._add_page("reports", self._build_reports_page())
+        self._build_sidebar_navigation()
 
         self.nav.setCurrentRow(0)
 
@@ -1186,14 +1428,99 @@ class MainWindow(QWidget):
         self.nav.currentRowChanged.connect(self._on_page_changed)
 
     def _add_page(self, page_id: str, page: QWidget) -> None:
-        """Register one page and matching nav item."""
+        """Register one stacked page."""
 
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, page_id)
-        self.nav.addItem(item)
         self.stack.addWidget(page)
         self.pages[page_id] = page
-        self.nav_items[page_id] = item
+
+    def _build_sidebar_navigation(self) -> None:
+        """Build the grouped sidebar menu used by the main shell."""
+
+        self.nav.clear()
+        self.nav_items = {}
+        self.nav_route_items = {}
+        self.nav_group_items = {}
+        routes: tuple[tuple[str, str | None, str | None, int | None, str | None, int], ...] = (
+            ("nav.dashboard", "dashboard", None, None, None, 0),
+            ("nav.cashier", "cashier", None, None, "cashier", 0),
+            ("nav.catalog", "catalog", None, None, "products", 0),
+            ("sidebar.product_directory", "catalog", "catalog_tabs", 0, "products", 1),
+            ("sidebar.product_groups", "catalog", "catalog_tabs", 1, "products", 1),
+            ("sidebar.price_lists", "pricing", "pricing_tabs", 0, "products", 1),
+            ("nav.sales", "sales", "sales_tabs", 0, "sales", 0),
+            ("sidebar.sales_documents", "sales", "sales_tabs", 0, "sales", 1),
+            ("sidebar.sales_returns", "sales", "sales_tabs", 1, "sales", 1),
+            ("nav.purchase", "purchase", "purchase_tabs", 1, "purchase", 0),
+            ("sidebar.purchase_invoices", "purchase", "purchase_tabs", 1, "purchase", 1),
+            ("sidebar.purchase_orders", "purchase", "purchase_tabs", 0, "purchase", 1),
+            ("nav.warehouse", "warehouse", "warehouse_tabs", 1, "warehouse", 0),
+            ("sidebar.stock_balances", "warehouse", "warehouse_tabs", 1, "warehouse", 1),
+            ("sidebar.stock_movements", "warehouse", "warehouse_tabs", 2, "warehouse", 1),
+            ("sidebar.inventory", "warehouse", "warehouse_tabs", 3, "warehouse", 1),
+            ("nav.counterparties", "counterparties", None, None, "counterparties", 0),
+            ("sidebar.counterparty_directory", "counterparties", None, None, "counterparties", 1),
+            ("sidebar.receivable_debt", "sales", "sales_tabs", 2, "counterparties", 1),
+            ("sidebar.payable_debt", "purchase", "purchase_tabs", 2, "counterparties", 1),
+            ("nav.reports", "reports", None, None, "reports", 0),
+            ("sidebar.admin_group", None, None, None, "admin", 0),
+            ("nav.users", "users", None, None, "admin", 1),
+            ("nav.roles", "roles", None, None, "admin", 1),
+            ("nav.settings", "settings", None, None, "admin", 1),
+            ("nav.hardware", "hardware", None, None, "admin", 1),
+        )
+        for text_key, page_id, tab_attr, tab_index, group_id, level in routes:
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, page_id or "")
+            item.setData(Qt.ItemDataRole.UserRole.value + 1, tab_attr or "")
+            item.setData(Qt.ItemDataRole.UserRole.value + 2, tab_index if tab_index is not None else -1)
+            item.setData(Qt.ItemDataRole.UserRole.value + 3, text_key)
+            item.setData(Qt.ItemDataRole.UserRole.value + 4, group_id or "")
+            item.setData(Qt.ItemDataRole.UserRole.value + 5, level)
+            item.setSizeHint(QSize(0, 34 if level == 0 else 28))
+            font = item.font()
+            font.setBold(level == 0)
+            item.setFont(font)
+            if page_id is None:
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+                self.nav_group_items[group_id or text_key] = item
+            else:
+                self.nav_route_items.setdefault(page_id, []).append(item)
+                self.nav_items.setdefault(page_id, item)
+            self.nav.addItem(item)
+        self._retranslate_navigation()
+
+    def _nav_item_label(self, text_key: str, level: int) -> str:
+        """Return a sidebar label with visual indentation for subitems."""
+
+        text = self.translator.text(text_key)
+        return f"   {text}" if level else text
+
+    def _retranslate_navigation(self) -> None:
+        """Apply translated labels to all sidebar rows."""
+
+        for index in range(self.nav.count()):
+            item = self.nav.item(index)
+            if item is None:
+                continue
+            text_key = str(item.data(Qt.ItemDataRole.UserRole.value + 3) or "")
+            level = int(item.data(Qt.ItemDataRole.UserRole.value + 5) or 0)
+            if text_key:
+                item.setText(self._nav_item_label(text_key, level))
+
+    def _sync_nav_group_visibility(self) -> None:
+        """Hide empty non-route sidebar group headers after permissions apply."""
+
+        for group_id, group_item in self.nav_group_items.items():
+            has_visible_child = False
+            for index in range(self.nav.count()):
+                item = self.nav.item(index)
+                if item is None or item is group_item:
+                    continue
+                item_group = str(item.data(Qt.ItemDataRole.UserRole.value + 4) or "")
+                if item_group == group_id and not item.isHidden():
+                    has_visible_child = True
+                    break
+            group_item.setHidden(not has_visible_child)
 
     def _page(self, title_key: str) -> tuple[QWidget, QVBoxLayout, QLabel]:
         """Create a page with a title label."""
@@ -1959,8 +2286,8 @@ class MainWindow(QWidget):
             id_field="name",
         )
 
-    def _build_dashboard_page(self) -> QWidget:
-        """Build dashboard page."""
+    def _build_legacy_dashboard_page(self) -> QWidget:
+        """Build the previous server-status dashboard page."""
 
         page, layout, _title = self._page("dashboard.title")
 
@@ -2225,6 +2552,229 @@ class MainWindow(QWidget):
         scroll.setWidget(container)
         layout.addWidget(scroll, 1)
         return page
+
+    def _build_dashboard_page(self) -> QWidget:
+        """Build the modern accounting dashboard page."""
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(16, 0, 0, 0)
+        layout.setSpacing(14)
+
+        self.dashboard_text = QPlainTextEdit()
+        self.dashboard_text.setReadOnly(True)
+        self.dashboard_text.hide()
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        container = QWidget()
+        container_layout = QVBoxLayout(container)
+        container_layout.setContentsMargins(0, 0, 16, 0)
+        container_layout.setSpacing(14)
+
+        hero = QFrame()
+        hero.setObjectName("DashboardHero")
+        self._add_shadow(hero, blur=18, alpha=18, y=6)
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(14)
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(4)
+        eyebrow = QLabel()
+        eyebrow.setObjectName("DashboardEyebrow")
+        eyebrow.setProperty("titleKey", "dashboard.eyebrow")
+        self.dashboard_welcome_label = QLabel()
+        self.dashboard_welcome_label.setObjectName("DashboardTitle")
+        self.dashboard_subtitle_label = QLabel()
+        self.dashboard_subtitle_label.setObjectName("DashboardSubtitle")
+        self.dashboard_subtitle_label.setProperty("titleKey", "dashboard.subtitle")
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self.dashboard_status_badge = QLabel("ONLINE")
+        self.dashboard_status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dashboard_status_badge.setStyleSheet(self._badge_style("#dcfce7", "#166534"))
+        self.dashboard_period_label = QLabel()
+        self.dashboard_period_label.setObjectName("DashboardMuted")
+        status_row.addWidget(self.dashboard_status_badge)
+        status_row.addWidget(self.dashboard_period_label)
+        status_row.addStretch(1)
+        title_box.addWidget(eyebrow)
+        title_box.addWidget(self.dashboard_welcome_label)
+        title_box.addWidget(self.dashboard_subtitle_label)
+        title_box.addLayout(status_row)
+        hero_layout.addLayout(title_box, 1)
+
+        self.dashboard_refresh_btn = QPushButton()
+        self.dashboard_refresh_btn.setObjectName("DashboardPrimaryButton")
+        self.dashboard_refresh_btn.setProperty("textKey", "dashboard.refresh")
+        self.dashboard_refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.dashboard_refresh_btn.clicked.connect(self.refresh_dashboard)
+        hero_layout.addWidget(self.dashboard_refresh_btn)
+        container_layout.addWidget(hero)
+
+        self.dashboard_metric_values: dict[str, QLabel] = {}
+        self.dashboard_metric_hints: dict[str, QLabel] = {}
+        metric_grid = QGridLayout()
+        metric_grid.setSpacing(12)
+        metrics = (
+            ("sales_today", "dashboard.metric.sales_today", "S", "#f97316"),
+            ("receivable", "dashboard.metric.receivable", "R", "#7c3aed"),
+            ("payable", "dashboard.metric.payable", "P", "#ef4444"),
+            ("low_stock", "dashboard.metric.low_stock", "!", "#0ea5e9"),
+        )
+        for index, (metric_id, title_key, icon, color) in enumerate(metrics):
+            card, value_label, hint_label = self._dashboard_metric_card(
+                title_key, icon, color
+            )
+            self.dashboard_metric_values[metric_id] = value_label
+            self.dashboard_metric_hints[metric_id] = hint_label
+            metric_grid.addWidget(card, 0, index)
+            metric_grid.setColumnStretch(index, 1)
+        container_layout.addLayout(metric_grid)
+
+        main_grid = QGridLayout()
+        main_grid.setSpacing(12)
+
+        chart_card, chart_layout = self._dashboard_card("dashboard.chart_title")
+        self.dashboard_chart_subtitle = QLabel()
+        self.dashboard_chart_subtitle.setObjectName("DashboardMuted")
+        self.dashboard_chart_subtitle.setProperty("titleKey", "dashboard.chart_subtitle")
+        self.dashboard_chart = DashboardLineChart()
+        chart_layout.addWidget(self.dashboard_chart_subtitle)
+        chart_layout.addWidget(self.dashboard_chart, 1)
+        main_grid.addWidget(chart_card, 0, 0, 2, 2)
+
+        quick_card, quick_layout = self._dashboard_card("dashboard.quick_actions")
+        quick_buttons = (
+            ("dashboard.quick.new_sale", "sales.create_sale", self.create_sale_dialog),
+            ("dashboard.quick.purchase_invoice", "purchase.create_invoice", self.create_purchase_invoice_dialog),
+            ("dashboard.quick.counterparty", "counterparties.create", self.create_counterparty_dialog),
+            ("dashboard.quick.open_cashier", "cashier.open_shift", self.open_cash_shift_dialog),
+        )
+        for text_key, permission_key, handler in quick_buttons:
+            button = QPushButton()
+            button.setObjectName("DashboardQuickButton")
+            button.setProperty("textKey", text_key)
+            button.setProperty("permissionKey", permission_key)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(handler)
+            quick_layout.addWidget(button)
+        quick_layout.addStretch(1)
+        main_grid.addWidget(quick_card, 0, 2)
+
+        recent_card, recent_layout = self._dashboard_card("dashboard.recent_documents")
+        self.dashboard_recent_table = QTableWidget(0, 4)
+        self._configure_table(self.dashboard_recent_table)
+        self.dashboard_recent_table.setMinimumHeight(170)
+        self._set_dashboard_recent_headers()
+        recent_layout.addWidget(self.dashboard_recent_table)
+        main_grid.addWidget(recent_card, 1, 2)
+
+        main_grid.setColumnStretch(0, 2)
+        main_grid.setColumnStretch(1, 2)
+        main_grid.setColumnStretch(2, 2)
+        container_layout.addLayout(main_grid)
+
+        self.dashboard_alert = QFrame()
+        self.dashboard_alert.setObjectName("DashboardAlert")
+        alert_layout = QHBoxLayout(self.dashboard_alert)
+        alert_layout.setContentsMargins(14, 12, 14, 12)
+        self.dashboard_alert_label = QLabel()
+        self.dashboard_alert_label.setObjectName("DashboardMuted")
+        self.dashboard_alert_label.setWordWrap(True)
+        alert_layout.addWidget(self.dashboard_alert_label)
+        container_layout.addWidget(self.dashboard_alert)
+        container_layout.addStretch(1)
+
+        scroll.setWidget(container)
+        layout.addWidget(scroll, 1)
+        return page
+
+    def _add_shadow(
+        self, widget: QWidget, *, blur: int = 14, alpha: int = 18, y: int = 4
+    ) -> None:
+        """Apply a subtle card shadow."""
+
+        shadow = QGraphicsDropShadowEffect(widget)
+        shadow.setBlurRadius(blur)
+        shadow.setColor(QColor(15, 23, 42, alpha))
+        shadow.setOffset(0, y)
+        widget.setGraphicsEffect(shadow)
+
+    def _badge_style(self, background: str, color: str) -> str:
+        """Return stylesheet for compact dashboard badges."""
+
+        return (
+            f"background: {background}; color: {color}; border-radius: 8px; "
+            "font-size: 10px; font-weight: 900; padding: 4px 9px;"
+        )
+
+    def _dashboard_card(self, title_key: str) -> tuple[QFrame, QVBoxLayout]:
+        """Create a reusable dashboard card."""
+
+        card = QFrame()
+        card.setObjectName("DashboardCard")
+        self._add_shadow(card, blur=14, alpha=14, y=4)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        title = QLabel()
+        title.setObjectName("DashboardSectionTitle")
+        title.setProperty("titleKey", title_key)
+        layout.addWidget(title)
+        return card, layout
+
+    def _dashboard_metric_card(
+        self, title_key: str, icon_text: str, color: str
+    ) -> tuple[QFrame, QLabel, QLabel]:
+        """Create one top-row dashboard metric card."""
+
+        card = QFrame()
+        card.setObjectName("DashboardMetricCard")
+        self._add_shadow(card, blur=12, alpha=12, y=4)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        top = QHBoxLayout()
+        icon = QLabel(icon_text)
+        icon.setObjectName("DashboardMetricIcon")
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(
+            f"background: {color}; color: #ffffff; border-radius: 8px; "
+            "font-size: 13px; font-weight: 900; min-height: 26px; "
+            "max-height: 26px; min-width: 26px; max-width: 26px;"
+        )
+        title = QLabel()
+        title.setObjectName("DashboardMetricTitle")
+        title.setProperty("titleKey", title_key)
+        top.addWidget(icon)
+        top.addWidget(title, 1)
+        layout.addLayout(top)
+        value = QLabel("-")
+        value.setObjectName("DashboardMetricValue")
+        hint = QLabel()
+        hint.setObjectName("DashboardMetricHint")
+        layout.addWidget(value)
+        layout.addWidget(hint)
+        return card, value, hint
+
+    def _set_dashboard_recent_headers(self) -> None:
+        """Apply localized recent-document table headers."""
+
+        if not hasattr(self, "dashboard_recent_table"):
+            return
+        self.dashboard_recent_table.setHorizontalHeaderLabels(
+            [
+                self.translator.text("dashboard.recent.number"),
+                self.translator.text("dashboard.recent.party"),
+                self.translator.text("dashboard.recent.total"),
+                self.translator.text("dashboard.recent.status"),
+            ]
+        )
 
     def _build_roles_page(self) -> QWidget:
         """Build the responsive Roles and Permissions list workflow."""
@@ -4493,20 +5043,20 @@ class MainWindow(QWidget):
                 [("field", self._ui("field")), ("value", self._ui("value"))],
             )
 
-    def refresh_dashboard(self) -> None:
+    def _legacy_refresh_dashboard(self) -> None:
         """Refresh server status."""
 
         def action() -> None:
             try:
                 data = self.api_client.get_status()
-                self._update_dashboard_ui(data)
+                self._legacy_update_dashboard_ui(data)
             except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
-                self._set_dashboard_offline(str(exc))
+                self._legacy_set_dashboard_offline(str(exc))
                 raise exc
 
         self._run_api(action)
 
-    def _update_dashboard_ui(self, data: dict[str, Any]) -> None:
+    def _legacy_update_dashboard_ui(self, data: dict[str, Any]) -> None:
         """Populate modern UI cards with active server data."""
 
         app_name = data.get("application") or "ERP Accounting Server"
@@ -4609,7 +5159,7 @@ class MainWindow(QWidget):
             else "Sessiýa tokeni dogry"
         )
 
-    def _set_dashboard_offline(self, error_msg: str) -> None:
+    def _legacy_set_dashboard_offline(self, error_msg: str) -> None:
         """Adjust dashboard to represent offline/error state."""
 
         lang = self.translator.language
@@ -4648,15 +5198,298 @@ class MainWindow(QWidget):
         )
         self.perm_desc.setText(error_msg)
 
+    def refresh_dashboard(self) -> None:
+        """Refresh the modern business dashboard."""
+
+        def action() -> None:
+            today = date.today()
+            month_start = today.replace(day=1)
+            try:
+                status = self.api_client.get_status()
+            except (ApiClientError, ValueError, json.JSONDecodeError) as exc:
+                self._set_dashboard_offline(str(exc))
+                raise exc
+
+            month_filters = {
+                "date_from": month_start.isoformat(),
+                "date_to": today.isoformat(),
+            }
+            today_filters = {
+                "date_from": today.isoformat(),
+                "date_to": today.isoformat(),
+            }
+            payload = {
+                "status": status,
+                "month_start": month_start,
+                "today": today,
+                "month_report": self._optional_api(
+                    "get_dashboard_report", {}, month_filters
+                ),
+                "today_report": self._optional_api(
+                    "get_dashboard_report", {}, today_filters
+                ),
+                "sales_report": self._optional_api(
+                    "get_sales_report", {"rows": []}, month_filters
+                ),
+                "products": self._optional_api("get_products", []),
+                "balances": self._optional_api("get_stock_balances", []),
+                "sales": self._optional_api("get_sales", []),
+                "purchases": self._optional_api("get_purchase_invoices", []),
+            }
+            self._update_dashboard_ui(payload)
+
+        self._run_api(action)
+
+    def _optional_api(self, method_name: str, fallback: object, *args: object) -> object:
+        """Call an optional API helper for dashboard decoration."""
+
+        method = getattr(self.api_client, method_name, None)
+        if not callable(method):
+            return fallback
+        try:
+            return method(*args)
+        except TypeError:
+            if args:
+                try:
+                    return method()
+                except (ApiClientError, ValueError, json.JSONDecodeError, TypeError):
+                    return fallback
+            return fallback
+        except (ApiClientError, ValueError, json.JSONDecodeError):
+            return fallback
+
+    def _update_dashboard_ui(self, data: dict[str, Any]) -> None:
+        """Populate the modern dashboard with business metrics."""
+
+        status = dict(data.get("status") or {})
+        month_report = dict(data.get("month_report") or {})
+        today_report = dict(data.get("today_report") or {})
+        sales_report = dict(data.get("sales_report") or {})
+        products = list(data.get("products") or [])
+        balances = list(data.get("balances") or [])
+        sales = list(data.get("sales") or [])
+        purchases = list(data.get("purchases") or [])
+        today = data.get("today") if isinstance(data.get("today"), date) else date.today()
+        month_start = (
+            data.get("month_start")
+            if isinstance(data.get("month_start"), date)
+            else today.replace(day=1)
+        )
+
+        user = self.api_client.current_user
+        display_name = user.full_name if user else self.translator.text("dashboard.unknown_user")
+        self.dashboard_welcome_label.setText(
+            f"{self.translator.text('dashboard.welcome')}, {display_name}"
+        )
+        self.dashboard_period_label.setText(
+            f"{self.translator.text('dashboard.period_label')}: "
+            f"{month_start.isoformat()} - {today.isoformat()}"
+        )
+
+        status_text = str(status.get("status") or "running").lower()
+        if status_text in {"running", "ok", "online"}:
+            self.dashboard_status_badge.setText(self.translator.text("dashboard.status.online"))
+            self.dashboard_status_badge.setStyleSheet(self._badge_style("#dcfce7", "#166534"))
+        else:
+            self.dashboard_status_badge.setText(str(status_text).upper())
+            self.dashboard_status_badge.setStyleSheet(self._badge_style("#fef3c7", "#92400e"))
+
+        low_stock_count = self._dashboard_low_stock_count(products, balances)
+        self._set_dashboard_metric(
+            "sales_today",
+            self._format_tmt(
+                today_report.get("net_sales_tmt")
+                or today_report.get("sales_total_tmt")
+                or "0"
+            ),
+            self.translator.text("dashboard.hint.today"),
+        )
+        self._set_dashboard_metric(
+            "receivable",
+            self._format_tmt(month_report.get("receivable_tmt") or "0"),
+            self.translator.text("dashboard.hint.receivable"),
+        )
+        self._set_dashboard_metric(
+            "payable",
+            self._format_tmt(month_report.get("payable_tmt") or "0"),
+            self.translator.text("dashboard.hint.payable"),
+        )
+        self._set_dashboard_metric(
+            "low_stock",
+            str(low_stock_count),
+            self.translator.text("dashboard.hint.low_stock"),
+        )
+
+        self.dashboard_chart.set_points(self._dashboard_chart_points(sales_report))
+        self._populate_dashboard_recent(sales, purchases)
+        open_shifts = int(self._safe_decimal(month_report.get("open_shift_count")))
+        if low_stock_count:
+            alert = self.translator.text("dashboard.alert.low_stock").format(
+                count=low_stock_count
+            )
+        else:
+            alert = self.translator.text("dashboard.alert.ok").format(
+                shifts=open_shifts
+            )
+        self.dashboard_alert_label.setText(alert)
+        self.dashboard_text.setPlainText(json.dumps(data, default=str, indent=2))
+
+    def _set_dashboard_metric(self, metric_id: str, value: str, hint: str) -> None:
+        """Update one KPI card."""
+
+        value_label = self.dashboard_metric_values.get(metric_id)
+        hint_label = self.dashboard_metric_hints.get(metric_id)
+        if value_label is not None:
+            value_label.setText(value)
+        if hint_label is not None:
+            hint_label.setText(hint)
+
+    def _format_tmt(self, value: object) -> str:
+        """Format a decimal value as compact TMT currency."""
+
+        amount = self._safe_decimal(value).quantize(Decimal("0.01"))
+        whole = amount == amount.quantize(Decimal("1"))
+        text = f"{amount:,.0f}" if whole else f"{amount:,.2f}"
+        return f"{text.replace(',', ' ')} TMT"
+
+    def _dashboard_low_stock_count(
+        self, products: Sequence[ApiRow], balances: Sequence[ApiRow]
+    ) -> int:
+        """Count active products whose total balance is below minimum stock."""
+
+        quantities: dict[int, Decimal] = {}
+        for balance in balances:
+            product_id = balance.get("product_id")
+            if product_id is None:
+                continue
+            try:
+                key = int(product_id)
+            except (TypeError, ValueError):
+                continue
+            quantities[key] = quantities.get(key, Decimal("0")) + self._safe_decimal(
+                balance.get("quantity")
+            )
+        count = 0
+        for product in products:
+            if product.get("is_active") is False:
+                continue
+            product_id = product.get("id")
+            if product_id is None:
+                continue
+            minimum = self._safe_decimal(product.get("min_stock"))
+            if minimum <= Decimal("0"):
+                continue
+            try:
+                available = quantities.get(int(product_id), Decimal("0"))
+            except (TypeError, ValueError):
+                available = Decimal("0")
+            if available < minimum:
+                count += 1
+        return count
+
+    def _dashboard_chart_points(
+        self, sales_report: dict[str, Any]
+    ) -> list[tuple[str, Decimal]]:
+        """Aggregate sales report rows into chart points by date."""
+
+        totals: dict[str, Decimal] = {}
+        for row in sales_report.get("rows") or []:
+            if not isinstance(row, dict):
+                continue
+            raw_date = str(row.get("doc_date") or "")
+            key = raw_date[:10]
+            if not key:
+                continue
+            totals[key] = totals.get(key, Decimal("0")) + self._safe_decimal(
+                row.get("signed_amount_tmt")
+            )
+        points = sorted(totals.items())
+        if len(points) > 10:
+            points = points[-10:]
+        return [(label[5:] if len(label) >= 10 else label, value) for label, value in points]
+
+    def _populate_dashboard_recent(
+        self, sales: Sequence[ApiRow], purchases: Sequence[ApiRow]
+    ) -> None:
+        """Render recent sales and purchase documents."""
+
+        rows: list[tuple[str, str, str, str]] = []
+        for row in list(sales)[:4]:
+            rows.append(
+                (
+                    str(row.get("doc_number") or row.get("id") or "-"),
+                    str(row.get("counterparty_name") or "-"),
+                    self._format_tmt(row.get("total_amount_tmt") or "0"),
+                    str(row.get("status") or "-"),
+                )
+            )
+        for row in list(purchases)[:4]:
+            rows.append(
+                (
+                    str(row.get("doc_number") or row.get("id") or "-"),
+                    str(row.get("counterparty_name") or "-"),
+                    self._format_tmt(row.get("total_amount_tmt") or "0"),
+                    str(row.get("status") or "-"),
+                )
+            )
+        rows = rows[:6]
+        self.dashboard_recent_table.setRowCount(len(rows))
+        for row_index, row_values in enumerate(rows):
+            for col_index, value in enumerate(row_values):
+                self.dashboard_recent_table.setItem(
+                    row_index, col_index, self._table_item(value)
+                )
+        if not rows:
+            self.dashboard_recent_table.setRowCount(1)
+            self.dashboard_recent_table.setItem(
+                0, 0, self._table_item(self.translator.text("dashboard.recent.empty"))
+            )
+            self.dashboard_recent_table.setSpan(0, 0, 1, 4)
+        else:
+            self.dashboard_recent_table.clearSpans()
+
+    def _set_dashboard_offline(self, error_msg: str) -> None:
+        """Adjust the modern dashboard to represent offline/error state."""
+
+        if hasattr(self, "dashboard_status_badge"):
+            self.dashboard_status_badge.setText(self.translator.text("dashboard.status.offline"))
+            self.dashboard_status_badge.setStyleSheet(self._badge_style("#fee2e2", "#991b1b"))
+        if hasattr(self, "dashboard_metric_values"):
+            for metric_id in ("sales_today", "receivable", "payable", "low_stock"):
+                self._set_dashboard_metric(metric_id, "-", self.translator.text("dashboard.hint.unavailable"))
+        if hasattr(self, "dashboard_chart"):
+            self.dashboard_chart.set_points([])
+        if hasattr(self, "dashboard_recent_table"):
+            self.dashboard_recent_table.setRowCount(0)
+        if hasattr(self, "dashboard_alert_label"):
+            self.dashboard_alert_label.setText(error_msg)
+
     def _on_page_changed(self, row: int) -> None:
         """Switch pages and refresh data for the selected foundation view."""
 
-        self.stack.setCurrentIndex(row)
         item = self.nav.item(row)
         if item is None:
             return
-        page_id = str(item.data(Qt.ItemDataRole.UserRole))
-        if page_id == "users":
+        page_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not page_id:
+            if self.nav_current_route_item is not None:
+                self.nav.setCurrentItem(self.nav_current_route_item)
+            return
+        page = self.pages.get(page_id)
+        if page is None:
+            return
+        self.nav_current_route_item = item
+        self.stack.setCurrentWidget(page)
+        tab_attr = str(item.data(Qt.ItemDataRole.UserRole.value + 1) or "")
+        tab_index_data = item.data(Qt.ItemDataRole.UserRole.value + 2)
+        tab_index = int(tab_index_data) if tab_index_data is not None else -1
+        if tab_attr and tab_index >= 0:
+            tabs = getattr(self, tab_attr, None)
+            if isinstance(tabs, QTabWidget) and tab_index < tabs.count():
+                tabs.setCurrentIndex(tab_index)
+        if page_id == "dashboard":
+            self.refresh_dashboard()
+        elif page_id == "users":
             self.refresh_users()
         elif page_id == "roles":
             self.refresh_roles()
@@ -8051,10 +8884,27 @@ class MainWindow(QWidget):
         self.status_label.setText(
             f"{self.translator.text('main.connected')}: {user_text}"
         )
+        if hasattr(self, "top_store_label"):
+            self.top_store_label.setText(self.translator.text("dashboard.store_default"))
+        if hasattr(self, "top_warehouse_label"):
+            self.top_warehouse_label.setText(self.translator.text("dashboard.warehouse_default"))
+        if hasattr(self, "top_period_label"):
+            self.top_period_label.setText(self.translator.text("dashboard.period_current"))
+        if hasattr(self, "top_notifications_label"):
+            self.top_notifications_label.setText(self.translator.text("dashboard.notifications"))
         self.logout_button.setText(self.translator.text("main.logout"))
-        for page_id, item in self.nav_items.items():
-            key = f"nav.{page_id}"
-            item.setText(self.translator.text(key))
+        self._retranslate_navigation()
+        if hasattr(self, "dashboard_recent_table"):
+            self._set_dashboard_recent_headers()
+        if hasattr(self, "dashboard_welcome_label"):
+            user_name = (
+                self.api_client.current_user.full_name
+                if self.api_client.current_user
+                else self.translator.text("dashboard.unknown_user")
+            )
+            self.dashboard_welcome_label.setText(
+                f"{self.translator.text('dashboard.welcome')}, {user_name}"
+            )
         for label in self.findChildren(QLabel):
             title_key = label.property("titleKey")
             body_key = label.property("bodyKey")
@@ -9585,9 +10435,10 @@ class MainWindow(QWidget):
             "reports": "reports.view",
         }
         for page_id, required in page_permissions.items():
-            item = self.nav_items.get(page_id)
-            if item is not None:
-                item.setHidden(required is not None and required not in permissions)
+            hidden = required is not None and required not in permissions
+            for item in self.nav_route_items.get(page_id, []):
+                item.setHidden(hidden)
+        self._sync_nav_group_visibility()
 
         action_permissions: dict[str, tuple[str, ...]] = {
             "users.create": ("admin.manage_users",),
@@ -9632,8 +10483,8 @@ class MainWindow(QWidget):
             "reports.save_filter": ("reports.filters_manage",),
         }
         for button in self.findChildren(QPushButton):
-            text_key = button.property("textKey")
-            required = action_permissions.get(str(text_key)) if text_key else None
+            permission_key = button.property("permissionKey") or button.property("textKey")
+            required = action_permissions.get(str(permission_key)) if permission_key else None
             if not required:
                 continue
             allowed = all(permission in permissions for permission in required)
