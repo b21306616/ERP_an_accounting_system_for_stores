@@ -813,7 +813,7 @@ class ClientCoreTests(unittest.TestCase):
             self.assertEqual(window.roles_drawer_title.text(), "Role 01")
             self.assertEqual(window.roles_drawer_avatar.text(), "R0")
             self.assertEqual(window.roles_drawer_count.text(), "3")
-            self.assertTrue(window.roles_drawer_hero.isVisible())
+            self.assertFalse(window.roles_drawer_hero.isVisible())
             self.assertTrue(window.roles_drawer_description.wordWrap())
             self.assertIn(
                 "should wrap cleanly",

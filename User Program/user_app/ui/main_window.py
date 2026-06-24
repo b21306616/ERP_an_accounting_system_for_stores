@@ -938,8 +938,8 @@ class MainWindow(QWidget):
             }
             QFrame#RolesPermissionsDrawer {
                 background: #f8fafc;
-                border: 1px solid #d8e4ef;
-                border-top: 4px solid #14b8a6;
+                border: 1px solid #e2e8f0;
+                border-top: 3px solid #0f766e;
                 border-radius: 16px;
             }
             QFrame#RolesDrawerHero {
@@ -950,14 +950,15 @@ class MainWindow(QWidget):
             }
             QFrame#RolesPermissionFilters {
                 background: #ffffff;
-                border: 1px solid #dbe6ef;
+                border: 1px solid #e2e8f0;
                 border-radius: 12px;
             }
             QLabel#RolesDrawerEyebrow {
-                color: #0f766e;
-                font-size: 9pt;
-                font-weight: 800;
-                letter-spacing: 0.5px;
+                color: #0f172a;
+                font-size: 14px;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                padding-left: 2px;
             }
             QLabel#RolesDrawerAvatar {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
@@ -985,29 +986,36 @@ class MainWindow(QWidget):
             QLineEdit#RolesPermissionSearch {
                 background: #ffffff;
                 border: 1px solid #cbd5e1;
-                border-radius: 10px;
-                min-height: 36px;
-                padding: 3px 12px;
+                border-radius: 8px;
+                color: #0f172a;
+                font-size: 13px;
+                min-height: 34px;
+                padding: 4px 12px;
             }
             QLineEdit#RolesPermissionSearch:focus {
-                border: 2px solid #14b8a6;
+                border: 1.5px solid #0d9488;
+                background: #ffffff;
             }
             QPushButton#RolesDrawerClose {
                 background: #ffffff;
-                border: 1px solid #d8e4ef;
+                border: 1px solid #e2e8f0;
                 border-radius: 8px;
                 color: #64748b;
-                font-size: 15px;
-                min-height: 30px;
-                min-width: 30px;
-                max-height: 30px;
-                max-width: 30px;
+                font-size: 16px;
+                font-weight: bold;
+                min-height: 28px;
+                min-width: 28px;
+                max-height: 28px;
+                max-width: 28px;
                 padding: 0;
             }
             QPushButton#RolesDrawerClose:hover {
-                background: #ecfeff;
-                border-color: #99f6e4;
-                color: #0f766e;
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #0f172a;
+            }
+            QPushButton#RolesDrawerClose:pressed {
+                background: #e2e8f0;
             }
             QPushButton#RolesBackButton {
                 background: #ffffff;
@@ -1024,18 +1032,18 @@ class MainWindow(QWidget):
             }
             QPushButton#RolesModuleChip {
                 background: #ffffff;
-                border: 1px solid #dbe4ee;
-                border-radius: 13px;
-                color: #334155;
-                font-size: 7pt;
-                font-weight: 700;
-                min-height: 24px;
-                padding: 2px 9px;
+                border: 1px solid #e2e8f0;
+                border-radius: 14px;
+                color: #475569;
+                font-size: 11px;
+                font-weight: 600;
+                min-height: 26px;
+                padding: 3px 12px;
             }
             QPushButton#RolesModuleChip:hover {
-                background: #ecfeff;
-                border-color: #5eead4;
-                color: #0f766e;
+                background: #f1f5f9;
+                border-color: #cbd5e1;
+                color: #0f172a;
             }
             QPushButton#RolesModuleChip[selected="true"] {
                 background: #0f766e;
@@ -1063,33 +1071,33 @@ class MainWindow(QWidget):
             }
             QFrame#RolesPermissionChipsArea {
                 background: #ffffff;
-                border: 1px solid #dbe6ef;
-                border-radius: 13px;
+                border: 1px solid #e2e8f0;
+                border-radius: 12px;
             }
             QFrame#RolesPermissionCard {
                 background: #f8fafc;
-                border: 1px solid #dbe4ee;
-                border-radius: 12px;
+                border: 1px solid #e2e8f0;
+                border-radius: 8px;
             }
             QFrame#RolesPermissionCard:hover,
             QFrame#RolesPermissionCard:focus {
                 background: #f0fdfa;
-                border: 1px solid #5eead4;
+                border-color: #99f6e4;
             }
             QLabel#RolesPermissionCode {
                 background: transparent;
                 border: 0;
                 color: #0f172a;
-                font-size: 8pt;
-                font-weight: 700;
+                font-size: 12px;
+                font-weight: 600;
             }
             QLabel#RolesPermissionCheck {
-                background: #ccfbf1;
-                border: 1px solid #99f6e4;
+                background: #d1fae5;
+                border: 1px solid #a7f3d0;
                 border-radius: 9px;
-                color: #0f766e;
-                font-size: 8pt;
-                font-weight: 900;
+                color: #065f46;
+                font-size: 10px;
+                font-weight: bold;
                 min-height: 18px;
                 min-width: 18px;
                 max-height: 18px;
@@ -1097,13 +1105,13 @@ class MainWindow(QWidget):
             }
             QLabel#RolesPermChipsHeading {
                 color: #0f172a;
-                font-size: 10pt;
-                font-weight: 800;
+                font-size: 14px;
+                font-weight: 700;
             }
             QLabel#RolesPermChipsSubtext {
-                color: #94a3b8;
-                font-size: 8pt;
-                font-weight: 600;
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 500;
             }
             QLabel#RolesPermissionEmptyIcon {
                 background: #f1f5f9;
@@ -2456,15 +2464,6 @@ class MainWindow(QWidget):
         self.roles_drawer_back.hide()
         header.addWidget(self.roles_drawer_back)
 
-        self.roles_drawer_eyebrow = QLabel(
-            self.translator.text("roles.drawer.title")
-        )
-        self.roles_drawer_eyebrow.setObjectName("RolesDrawerEyebrow")
-        self.roles_drawer_eyebrow.setProperty("titleKey", "roles.drawer.title")
-        header.addWidget(self.roles_drawer_eyebrow)
-
-        header.addStretch(1)
-
         self.roles_drawer_close = QPushButton("→")
         self.roles_drawer_close.setObjectName("RolesDrawerClose")
         self.roles_drawer_close.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -2476,6 +2475,15 @@ class MainWindow(QWidget):
         )
         self.roles_drawer_close.clicked.connect(self._close_role_permissions)
         header.addWidget(self.roles_drawer_close)
+
+        self.roles_drawer_eyebrow = QLabel(
+            self.translator.text("roles.drawer.title")
+        )
+        self.roles_drawer_eyebrow.setObjectName("RolesDrawerEyebrow")
+        self.roles_drawer_eyebrow.setProperty("titleKey", "roles.drawer.title")
+        header.addWidget(self.roles_drawer_eyebrow)
+
+        header.addStretch(1)
         self.roles_drawer_layout.addLayout(header)
 
         self.roles_drawer_hero = QFrame()
@@ -2507,6 +2515,7 @@ class MainWindow(QWidget):
             self.translator.text("roles.drawer.assigned")
         )
         self._layout_roles_drawer_hero(compact=False)
+        self.roles_drawer_hero.setVisible(self.roles_narrow_mode)
         self.roles_drawer_layout.addWidget(self.roles_drawer_hero)
 
         self.roles_permission_search = QLineEdit()
@@ -4171,6 +4180,8 @@ class MainWindow(QWidget):
             return
         content_width = self.roles_table_container.width()
         narrow = self.width() < 1320 or (0 < content_width < 900)
+        if hasattr(self, "roles_drawer_hero"):
+            self.roles_drawer_hero.setVisible(narrow)
         if narrow == self.roles_narrow_mode and (
             self.roles_table_container_layout.indexOf(self.roles_permissions_drawer) >= 0
             or self.roles_narrow_detail_layout.indexOf(
