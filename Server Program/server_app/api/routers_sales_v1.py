@@ -1912,6 +1912,78 @@ def _sale_return_report_row(row: SaleReturn) -> dict[str, Any]:
     }
 
 
+def _sales_chart_points(rows: list[Sale], return_rows: list[SaleReturn]) -> list[dict[str, Any]]:
+    """Aggregate posted sales and returns into daily chart points."""
+
+    totals: dict[str, dict[str, Any]] = {}
+
+    def bucket_for(value: datetime) -> dict[str, Any]:
+        key = value.date().isoformat()
+        if key not in totals:
+            totals[key] = {
+                "date": key,
+                "sales_total_tmt": Decimal("0.00"),
+                "returns_total_tmt": Decimal("0.00"),
+                "net_amount_tmt": Decimal("0.00"),
+                "document_count": 0,
+                "returns_count": 0,
+                "sold_quantity": Decimal("0.0000"),
+                "returned_quantity": Decimal("0.0000"),
+                "cash_tmt": Decimal("0.00"),
+                "transfer_tmt": Decimal("0.00"),
+                "bonus_tmt": Decimal("0.00"),
+                "debt_tmt": Decimal("0.00"),
+            }
+        return totals[key]
+
+    for row in rows:
+        bucket = bucket_for(row.doc_date)
+        amount = money(row.total_amount_tmt)
+        quantity = sum((qty4(line.quantity) for line in row.lines), Decimal("0.0000"))
+        bucket["sales_total_tmt"] = money(bucket["sales_total_tmt"] + amount)
+        bucket["net_amount_tmt"] = money(bucket["net_amount_tmt"] + amount)
+        bucket["document_count"] = int(bucket["document_count"]) + 1
+        bucket["sold_quantity"] = qty4(bucket["sold_quantity"] + quantity)
+        bucket["cash_tmt"] = money(bucket["cash_tmt"] + money(row.paid_cash_tmt))
+        bucket["transfer_tmt"] = money(bucket["transfer_tmt"] + money(row.paid_transfer_tmt))
+        bucket["bonus_tmt"] = money(bucket["bonus_tmt"] + money(row.paid_bonus_tmt))
+        bucket["debt_tmt"] = money(bucket["debt_tmt"] + money(row.debt_amount_tmt))
+
+    for row in return_rows:
+        bucket = bucket_for(row.doc_date)
+        amount = money(row.total_amount_tmt)
+        quantity = sum((qty4(line.quantity) for line in row.lines), Decimal("0.0000"))
+        bucket["returns_total_tmt"] = money(bucket["returns_total_tmt"] + amount)
+        bucket["net_amount_tmt"] = money(bucket["net_amount_tmt"] - amount)
+        bucket["returns_count"] = int(bucket["returns_count"]) + 1
+        bucket["returned_quantity"] = qty4(bucket["returned_quantity"] + quantity)
+        bucket["cash_tmt"] = money(bucket["cash_tmt"] - money(row.refund_cash_tmt))
+        bucket["transfer_tmt"] = money(bucket["transfer_tmt"] - money(row.refund_transfer_tmt))
+        bucket["bonus_tmt"] = money(bucket["bonus_tmt"] - money(row.refund_bonus_tmt))
+        bucket["debt_tmt"] = money(bucket["debt_tmt"] - money(row.receivable_correction_tmt))
+
+    chart_points: list[dict[str, Any]] = []
+    for key in sorted(totals):
+        bucket = totals[key]
+        chart_points.append(
+            {
+                "date": bucket["date"],
+                "sales_total_tmt": _decimal(bucket["sales_total_tmt"], "0.01"),
+                "returns_total_tmt": _decimal(bucket["returns_total_tmt"], "0.01"),
+                "net_amount_tmt": _decimal(bucket["net_amount_tmt"], "0.01"),
+                "document_count": int(bucket["document_count"]),
+                "returns_count": int(bucket["returns_count"]),
+                "sold_quantity": _decimal(bucket["sold_quantity"], "0.0001"),
+                "returned_quantity": _decimal(bucket["returned_quantity"], "0.0001"),
+                "cash_tmt": _decimal(bucket["cash_tmt"], "0.01"),
+                "transfer_tmt": _decimal(bucket["transfer_tmt"], "0.01"),
+                "bonus_tmt": _decimal(bucket["bonus_tmt"], "0.01"),
+                "debt_tmt": _decimal(bucket["debt_tmt"], "0.01"),
+            }
+        )
+    return chart_points
+
+
 def _sales_report_payload(
     session: Session,
     date_from: datetime | None = None,
@@ -1944,6 +2016,7 @@ def _sales_report_payload(
         "return_transfer_tmt": _decimal(sum((money(row.refund_transfer_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
         "return_bonus_tmt": _decimal(sum((money(row.refund_bonus_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
         "return_debt_correction_tmt": _decimal(sum((money(row.receivable_correction_tmt) for row in return_rows), Decimal("0.00")), "0.01"),
+        "chart_points": _sales_chart_points(rows, return_rows),
         "rows": report_rows,
     }
 

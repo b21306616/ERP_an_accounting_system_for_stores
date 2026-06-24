@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
 import json
 from typing import Any, Callable, Sequence
 
 from PyQt6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFontMetrics, QPainter, QPainterPath, QPen, QResizeEvent
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPen, QResizeEvent
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -62,6 +63,25 @@ ApiRow = dict[str, Any]
 TableColumn = tuple[str | Callable[[ApiRow], object], str]
 Metric = tuple[str, object]
 SelectorColumn = tuple[str, str]
+
+
+@dataclass(frozen=True)
+class DashboardChartPoint:
+    """One daily point in the dashboard sales chart."""
+
+    date: str
+    label: str
+    net_amount_tmt: Decimal
+    sales_total_tmt: Decimal
+    returns_total_tmt: Decimal
+    document_count: int
+    returns_count: int
+    sold_quantity: Decimal
+    returned_quantity: Decimal
+    cash_tmt: Decimal
+    transfer_tmt: Decimal
+    bonus_tmt: Decimal
+    debt_tmt: Decimal
 
 
 class ClickableFrame(QFrame):
@@ -148,17 +168,80 @@ class DashboardLineChart(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.points: list[tuple[str, Decimal]] = []
+        self.points: list[DashboardChartPoint] = []
+        self._hover_index: int | None = None
+        self._hover_labels: dict[str, str] = {
+            "net": "Net sales",
+            "sales": "Sales",
+            "returns": "Returns",
+            "documents": "Documents",
+            "quantity": "Quantity",
+            "sold": "sold",
+            "returned": "returned",
+            "payments": "Payments",
+            "cash": "Cash",
+            "transfer": "Transfer",
+            "bonus": "Bonus",
+            "debt": "Debt",
+        }
+        self._format_amount: Callable[[object], str] = self._default_format_amount
         self.setMinimumHeight(260)
+        self.setMouseTracking(True)
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
 
-    def set_points(self, points: Sequence[tuple[str, Decimal]]) -> None:
+    def set_hover_context(
+        self,
+        labels: dict[str, str],
+        amount_formatter: Callable[[object], str],
+    ) -> None:
+        """Update localized hover labels and amount formatting."""
+
+        self._hover_labels.update(labels)
+        self._format_amount = amount_formatter
+        self.update()
+
+    def set_points(self, points: Sequence[DashboardChartPoint]) -> None:
         """Replace chart points and repaint."""
 
         self.points = list(points)
+        if self._hover_index is not None and self._hover_index >= len(self.points):
+            self._hover_index = None
         self.update()
+
+    def hover_text_for_point(self, index: int) -> str:
+        """Return the multiline hover summary for one point."""
+
+        if not (0 <= index < len(self.points)):
+            return ""
+        title, primary, rows = self._hover_panel_content(index)
+        return "\n".join(
+            [
+                title,
+                primary,
+                *(f"{label}: {value}" for label, value in rows),
+            ]
+        )
+
+    def mouseMoveEvent(self, event: Any) -> None:
+        """Track the nearest point for the hover panel."""
+
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        _rect, plot, _baseline, coordinates = self._chart_geometry()
+        index = self._nearest_point_index(position, plot, coordinates)
+        if index != self._hover_index:
+            self._hover_index = index
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event: Any) -> None:
+        """Hide the hover panel when the cursor leaves the chart."""
+
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.update()
+        super().leaveEvent(event)
 
     def paintEvent(self, event: Any) -> None:
         """Paint a compact line/area chart without external dependencies."""
@@ -166,12 +249,10 @@ class DashboardLineChart(QWidget):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = self.rect().adjusted(8, 12, -8, -12)
+        rect, plot, baseline, coordinates = self._chart_geometry()
         if rect.width() < 80 or rect.height() < 80:
             return
 
-        plot = rect.adjusted(44, 12, -14, -34)
-        baseline = plot.bottom()
         grid_pen = QPen(QColor("#e8edf5"))
         grid_pen.setWidth(1)
         painter.setPen(grid_pen)
@@ -187,20 +268,6 @@ class DashboardLineChart(QWidget):
                 "No sales data for this period",
             )
             return
-
-        values = [value for _label, value in self.points]
-        max_value = max(values + [Decimal("1")])
-        min_value = min(values + [Decimal("0")])
-        if max_value == min_value:
-            max_value += Decimal("1")
-        value_span = max_value - min_value
-        denom = max(1, len(self.points) - 1)
-        coordinates: list[tuple[float, float]] = []
-        for index, (_label, value) in enumerate(self.points):
-            x = plot.left() + (plot.width() * index / denom)
-            ratio = float((value - min_value) / value_span)
-            y = baseline - (plot.height() * ratio)
-            coordinates.append((x, y))
 
         area = QPainterPath()
         first_x, first_y = coordinates[0]
@@ -224,13 +291,24 @@ class DashboardLineChart(QWidget):
         painter.setPen(line_pen)
         painter.drawPath(line)
 
+        if self._hover_index is not None and 0 <= self._hover_index < len(coordinates):
+            hover_x, _hover_y = coordinates[self._hover_index]
+            guide_pen = QPen(QColor("#a5b4fc"))
+            guide_pen.setWidth(1)
+            guide_pen.setStyle(Qt.PenStyle.DashLine)
+            painter.setPen(guide_pen)
+            painter.drawLine(int(hover_x), plot.top(), int(hover_x), baseline)
+
         marker_brush = QColor("#ffffff")
         marker_pen = QPen(QColor("#f97316"))
         marker_pen.setWidth(2)
-        painter.setPen(marker_pen)
-        painter.setBrush(marker_brush)
-        for x, y in coordinates:
-            painter.drawEllipse(QPoint(int(x), int(y)), 4, 4)
+        for index, (x, y) in enumerate(coordinates):
+            active = index == self._hover_index
+            marker_pen.setColor(QColor("#2563eb") if active else QColor("#f97316"))
+            marker_pen.setWidth(3 if active else 2)
+            painter.setPen(marker_pen)
+            painter.setBrush(marker_brush)
+            painter.drawEllipse(QPoint(int(x), int(y)), 7 if active else 4, 7 if active else 4)
 
         axis_pen = QPen(QColor("#cbd5e1"))
         axis_pen.setWidth(1)
@@ -240,12 +318,219 @@ class DashboardLineChart(QWidget):
         label_pen = QPen(QColor("#64748b"))
         painter.setPen(label_pen)
         font_metrics = QFontMetrics(painter.font())
-        for index, (label, _value) in enumerate(self.points):
-            if len(self.points) > 6 and index not in {0, len(self.points) - 1} and index % 2:
+        label_step = max(1, (len(self.points) + 5) // 6)
+        for index, point in enumerate(self.points):
+            if (
+                len(self.points) > 6
+                and index not in {0, len(self.points) - 1}
+                and index % label_step
+            ):
                 continue
             x, _y = coordinates[index]
-            elided = font_metrics.elidedText(label, Qt.TextElideMode.ElideRight, 54)
+            elided = font_metrics.elidedText(point.label, Qt.TextElideMode.ElideRight, 54)
             painter.drawText(int(x) - 24, rect.bottom() - 18, 56, 18, Qt.AlignmentFlag.AlignCenter, elided)
+
+        if self._hover_index is not None and 0 <= self._hover_index < len(coordinates):
+            self._draw_hover_panel(painter, rect, coordinates[self._hover_index], self._hover_index)
+
+    def _chart_geometry(self) -> tuple[QRect, QRect, int, list[tuple[float, float]]]:
+        """Return chart drawing rectangles and point coordinates."""
+
+        rect = self.rect().adjusted(8, 12, -8, -12)
+        plot = rect.adjusted(44, 12, -14, -34)
+        baseline = plot.bottom()
+        if rect.width() < 80 or rect.height() < 80 or not self.points:
+            return rect, plot, baseline, []
+
+        values = [point.net_amount_tmt for point in self.points]
+        max_value = max(values + [Decimal("1")])
+        min_value = min(values + [Decimal("0")])
+        if max_value == min_value:
+            max_value += Decimal("1")
+        value_span = max_value - min_value
+        denom = max(1, len(self.points) - 1)
+        coordinates: list[tuple[float, float]] = []
+        for index, point in enumerate(self.points):
+            x = plot.left() + (plot.width() * index / denom)
+            ratio = float((point.net_amount_tmt - min_value) / value_span)
+            y = baseline - (plot.height() * ratio)
+            coordinates.append((x, y))
+        return rect, plot, baseline, coordinates
+
+    def _nearest_point_index(
+        self,
+        position: QPoint,
+        plot: QRect,
+        coordinates: Sequence[tuple[float, float]],
+    ) -> int | None:
+        """Return the closest chart point within hover distance."""
+
+        if not coordinates or not plot.adjusted(-18, -24, 18, 24).contains(position):
+            return None
+        if plot.contains(position):
+            return min(
+                range(len(coordinates)),
+                key=lambda index: abs(position.x() - coordinates[index][0]),
+            )
+        best_index: int | None = None
+        best_distance = float("inf")
+        for index, (x, y) in enumerate(coordinates):
+            distance = (abs(position.x() - x) * 2) + abs(position.y() - y)
+            if distance < best_distance:
+                best_distance = distance
+                best_index = index
+        return best_index if best_distance <= 42 else None
+
+    def _draw_hover_panel(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        coordinate: tuple[float, float],
+        index: int,
+    ) -> None:
+        """Draw the custom floating details panel."""
+
+        lines = self.hover_text_for_point(index).splitlines()
+        if len(lines) < 2:
+            return
+        panel_size = self._hover_panel_size(index, max_width=max(260, rect.width() - 8))
+        panel_width = panel_size.width()
+        panel_height = panel_size.height()
+        x = int(coordinate[0]) + 14
+        y = int(coordinate[1]) - panel_height - 12
+        if x + panel_width > rect.right():
+            x = int(coordinate[0]) - panel_width - 14
+        x = max(rect.left() + 4, min(x, rect.right() - panel_width - 4))
+        y = max(rect.top() + 4, min(y, rect.bottom() - panel_height - 4))
+        panel = QRect(x, y, panel_width, panel_height)
+
+        painter.save()
+        painter.setPen(QPen(QColor("#c7d2fe")))
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawRoundedRect(panel, 12, 12)
+
+        title_font, value_font, body_font = self._hover_fonts()
+        painter.setFont(title_font)
+        painter.setPen(QColor("#64748b"))
+        painter.drawText(panel.left() + 14, panel.top() + 12, panel_width - 28, 18, Qt.AlignmentFlag.AlignLeft, lines[0])
+
+        painter.setFont(value_font)
+        painter.setPen(QColor("#172033"))
+        painter.drawText(panel.left() + 14, panel.top() + 34, panel_width - 28, 26, Qt.AlignmentFlag.AlignLeft, lines[1])
+
+        painter.setFont(body_font)
+        label_pen = QColor("#64748b")
+        value_pen = QColor("#334155")
+        _title, _primary, rows = self._hover_panel_content(index)
+        label_width = self._hover_label_width(rows, body_font)
+        text_y = panel.top() + 72
+        for label, value in rows:
+            painter.setPen(label_pen)
+            label_text = QFontMetrics(body_font).elidedText(label, Qt.TextElideMode.ElideRight, label_width)
+            painter.drawText(panel.left() + 14, text_y, label_width, 18, Qt.AlignmentFlag.AlignLeft, label_text)
+            painter.setPen(value_pen)
+            value_rect = QRect(panel.left() + 22 + label_width, text_y, panel_width - label_width - 36, 18)
+            value_text = QFontMetrics(body_font).elidedText(value, Qt.TextElideMode.ElideRight, value_rect.width())
+            painter.drawText(value_rect, Qt.AlignmentFlag.AlignRight, value_text)
+            text_y += 20
+        painter.restore()
+
+    def _hover_panel_content(self, index: int) -> tuple[str, str, list[tuple[str, str]]]:
+        """Return title, primary value, and compact hover rows."""
+
+        point = self.points[index]
+        labels = self._hover_labels
+        documents = (
+            f"{int(point.document_count)} {labels['sales']} / "
+            f"{int(point.returns_count)} {labels['returns']}"
+        )
+        quantity = (
+            f"{self._format_quantity(point.sold_quantity)} {labels['sold']} / "
+            f"{self._format_quantity(point.returned_quantity)} {labels['returned']}"
+        )
+        return (
+            point.date,
+            f"{labels['net']}: {self._format_amount(point.net_amount_tmt)}",
+            [
+                (labels["sales"], self._format_amount(point.sales_total_tmt)),
+                (labels["returns"], self._format_amount(point.returns_total_tmt)),
+                (labels["documents"], documents),
+                (labels["quantity"], quantity),
+                (
+                    f"{labels['cash']} / {labels['transfer']}",
+                    f"{self._format_amount(point.cash_tmt)} / {self._format_amount(point.transfer_tmt)}",
+                ),
+                (
+                    f"{labels['bonus']} / {labels['debt']}",
+                    f"{self._format_amount(point.bonus_tmt)} / {self._format_amount(point.debt_tmt)}",
+                ),
+            ],
+        )
+
+    def _hover_panel_size(self, index: int, max_width: int | None = None) -> QSize:
+        """Return a hover panel size that fits the current point content."""
+
+        title, primary, rows = self._hover_panel_content(index)
+        title_font, value_font, body_font = self._hover_fonts()
+        title_metrics = QFontMetrics(title_font)
+        value_metrics = QFontMetrics(value_font)
+        body_metrics = QFontMetrics(body_font)
+        label_width = self._hover_label_width(rows, body_font)
+        row_width = max(
+            (
+                label_width + body_metrics.horizontalAdvance(value) + 38
+                for _label, value in rows
+            ),
+            default=0,
+        )
+        content_width = max(
+            title_metrics.horizontalAdvance(title),
+            value_metrics.horizontalAdvance(primary),
+            row_width,
+        )
+        width = max(320, content_width + 28)
+        if max_width is not None:
+            width = min(width, max(260, max_width))
+        height = 88 + (len(rows) * 20) + 14
+        return QSize(width, height)
+
+    def _hover_label_width(self, rows: Sequence[tuple[str, str]], font: QFont) -> int:
+        """Return a compact label column width for hover rows."""
+
+        metrics = QFontMetrics(font)
+        widest = max((metrics.horizontalAdvance(label) for label, _value in rows), default=72)
+        return min(max(92, widest + 8), 150)
+
+    def _hover_fonts(self) -> tuple[QFont, QFont, QFont]:
+        """Return title, primary value, and body fonts for hover rendering."""
+
+        title_font = QFont(self.font())
+        title_font.setPixelSize(12)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        value_font = QFont(self.font())
+        value_font.setPixelSize(18)
+        value_font.setWeight(QFont.Weight.DemiBold)
+        body_font = QFont(self.font())
+        body_font.setPixelSize(11)
+        body_font.setWeight(QFont.Weight.Medium)
+        return title_font, value_font, body_font
+
+    def _format_quantity(self, value: Decimal) -> str:
+        """Format a quantity without distracting trailing zeroes."""
+
+        text = format(value.quantize(Decimal("0.0001")), "f").rstrip("0").rstrip(".")
+        return text or "0"
+
+    def _default_format_amount(self, value: object) -> str:
+        """Fallback TMT formatter used before MainWindow provides one."""
+
+        try:
+            amount = Decimal(str(value or "0")).quantize(Decimal("0.01"))
+        except Exception:
+            amount = Decimal("0.00")
+        whole = amount == amount.quantize(Decimal("1"))
+        text = f"{amount:,.0f}" if whole else f"{amount:,.2f}"
+        return f"{text.replace(',', ' ')} TMT"
 
 
 class MainWindow(QWidget):
@@ -262,6 +547,9 @@ class MainWindow(QWidget):
         self.cashier_cart: list[ApiRow] = []
         self.setObjectName("MainWindow")
         self.setMinimumSize(980, 620)
+        base_font = QFont("Segoe UI")
+        base_font.setPixelSize(14)
+        self.setFont(base_font)
         self.nav = QListWidget()
         self.stack = QStackedWidget()
         self.language_combo = QComboBox()
@@ -287,7 +575,22 @@ class MainWindow(QWidget):
             QWidget#MainWindow {
                 background: #f4f7fb;
                 color: #152238;
-                font-size: 10pt;
+                font-family: "Segoe UI", "Inter", "Arial", sans-serif;
+                font-size: 14px;
+            }
+            QLabel,
+            QPushButton,
+            QToolButton,
+            QLineEdit,
+            QComboBox,
+            QCheckBox,
+            QDialog,
+            QPlainTextEdit,
+            QTableWidget,
+            QTabWidget,
+            QMenu {
+                font-family: "Segoe UI", "Inter", "Arial", sans-serif;
+                font-size: 14px;
             }
             QFrame#TopBar {
                 background: #ffffff;
@@ -296,33 +599,35 @@ class MainWindow(QWidget):
             }
             QLabel#TopBrand {
                 color: #101828;
-                font-size: 17px;
-                font-weight: 900;
+                font-size: 18px;
+                font-weight: 800;
             }
             QLabel#TopMeta {
-                color: #475569;
-                font-size: 9pt;
+                color: #526174;
+                font-size: 13px;
                 font-weight: 600;
             }
             QListWidget#Sidebar {
                 background: #ffffff;
                 border: 1px solid #e4eaf2;
                 border-radius: 14px;
-                padding: 10px 8px;
+                font-family: "Segoe UI", "Inter", "Arial", sans-serif;
+                font-size: 14px;
+                padding: 12px 10px;
             }
             QListWidget#Sidebar::item {
                 border-radius: 9px;
-                color: #334155;
-                margin: 1px 2px;
-                padding: 9px 12px;
+                color: #2f3a4a;
+                margin: 2px 2px;
+                padding: 10px 13px;
             }
             QListWidget#Sidebar::item:hover {
-                background: #f6f8fb;
-                color: #0f172a;
+                background: #f4f7fb;
+                color: #111827;
             }
             QListWidget#Sidebar::item:selected {
-                background: #eef4ff;
-                color: #2456d6;
+                background: #edf6ff;
+                color: #0ea5e9;
                 font-weight: 800;
                 border-left: 3px solid #6d5dfc;
             }
@@ -335,17 +640,18 @@ class MainWindow(QWidget):
             }
             QLabel#PageTitle {
                 color: #0f172a;
-                font-size: 22px;
+                font-size: 30px;
                 font-weight: 700;
             }
             QLabel#SectionTitle {
                 color: #172033;
-                font-size: 13px;
-                font-weight: 700;
+                font-size: 16px;
+                font-weight: 800;
             }
             QLabel#MutedLabel {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
+                font-weight: 500;
             }
             QFrame#Card {
                 background: #ffffff;
@@ -370,60 +676,74 @@ class MainWindow(QWidget):
                 border-radius: 14px;
             }
             QLabel#DashboardEyebrow {
-                color: #64748b;
-                font-size: 9pt;
-                font-weight: 700;
+                color: #526174;
+                font-size: 12px;
+                font-weight: 800;
             }
             QLabel#DashboardTitle {
-                color: #0f172a;
-                font-size: 22px;
-                font-weight: 900;
+                color: #344054;
+                font-size: 42px;
+                font-weight: 500;
             }
             QLabel#DashboardSubtitle {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
+                font-weight: 500;
             }
             QLabel#DashboardMetricIcon {
                 border-radius: 8px;
                 color: #ffffff;
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 900;
-                min-height: 26px;
-                max-height: 26px;
-                min-width: 26px;
-                max-width: 26px;
+                min-height: 30px;
+                max-height: 30px;
+                min-width: 30px;
+                max-width: 30px;
             }
             QLabel#DashboardMetricTitle {
-                color: #64748b;
-                font-size: 9pt;
-                font-weight: 700;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
             }
             QLabel#DashboardMetricValue {
-                color: #0f172a;
-                font-size: 20px;
-                font-weight: 900;
+                color: #1d2939;
+                font-size: 26px;
+                font-weight: 800;
             }
             QLabel#DashboardMetricHint {
                 color: #16a34a;
-                font-size: 8pt;
-                font-weight: 700;
+                font-size: 13px;
+                font-weight: 600;
             }
             QLabel#DashboardSectionTitle {
-                color: #111827;
-                font-size: 14px;
-                font-weight: 900;
+                color: #344054;
+                font-size: 15px;
+                font-weight: 800;
             }
             QLabel#DashboardMuted {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
+                font-weight: 500;
+            }
+            QTableWidget#DashboardRecentTable {
+                color: #344054;
+                font-family: "Segoe UI", "Inter", "Arial", sans-serif;
+                font-size: 13px;
+            }
+            QTableWidget#DashboardRecentTable QHeaderView::section {
+                color: #667085;
+                font-size: 12px;
+                font-weight: 800;
+                padding: 9px;
             }
             QPushButton#DashboardQuickButton {
                 background: #ffffff;
                 border: 1px solid #d8e1ec;
                 border-radius: 8px;
-                color: #0f172a;
-                font-weight: 800;
-                padding: 9px 14px;
+                color: #1d2939;
+                font-size: 14px;
+                font-weight: 700;
+                padding: 11px 14px;
                 text-align: left;
             }
             QPushButton#DashboardQuickButton:hover {
@@ -436,21 +756,22 @@ class MainWindow(QWidget):
                 border: 1px solid #2456d6;
                 border-radius: 8px;
                 color: #ffffff;
-                font-weight: 800;
-                padding: 9px 14px;
+                font-size: 14px;
+                font-weight: 700;
+                padding: 11px 16px;
             }
             QPushButton#DashboardPrimaryButton:hover {
                 background: #1d4ed8;
                 border-color: #1d4ed8;
             }
             QLabel#MetricTitle {
-                color: #64748b;
-                font-size: 9pt;
-                font-weight: 700;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
             }
             QLabel#MetricValue {
-                color: #0f172a;
-                font-size: 16px;
+                color: #1d2939;
+                font-size: 24px;
                 font-weight: 800;
             }
             QPushButton {
@@ -458,8 +779,9 @@ class MainWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
                 color: #1557c0;
+                font-size: 14px;
                 font-weight: 700;
-                padding: 8px 12px;
+                padding: 10px 14px;
             }
             QPushButton:hover {
                 background: #f8fafc;
@@ -469,6 +791,8 @@ class MainWindow(QWidget):
                 background: #1f6feb;
                 border-color: #1f6feb;
                 color: #ffffff;
+                font-size: 14px;
+                font-weight: 800;
             }
             QPushButton#PrimaryButton:hover {
                 background: #1557c0;
@@ -485,7 +809,9 @@ class MainWindow(QWidget):
                 background: #ffffff;
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
-                padding: 6px 8px;
+                color: #1d2939;
+                font-size: 14px;
+                padding: 8px 10px;
             }
             QLineEdit:focus,
             QComboBox:focus {
@@ -496,6 +822,8 @@ class MainWindow(QWidget):
                 alternate-background-color: #f8fafc;
                 border: 1px solid #dce5ef;
                 border-radius: 10px;
+                color: #344054;
+                font-size: 14px;
                 gridline-color: #e7edf4;
                 selection-background-color: #dbeafe;
                 selection-color: #0f172a;
@@ -504,9 +832,25 @@ class MainWindow(QWidget):
                 background: #f8fafc;
                 border: 0;
                 border-bottom: 1px solid #dce5ef;
-                color: #475569;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
+                padding: 10px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #e5ebf3;
+                border-radius: 10px;
+                background: #ffffff;
+            }
+            QTabBar::tab {
+                color: #526174;
+                font-size: 14px;
                 font-weight: 700;
-                padding: 8px;
+                padding: 10px 14px;
+            }
+            QTabBar::tab:selected {
+                color: #1557c0;
+                background: #eef4ff;
             }
             QScrollArea {
                 background: transparent;
@@ -550,24 +894,25 @@ class MainWindow(QWidget):
             }
             QLabel#UsersPageHeading {
                 color: #0f172a;
-                font-size: 22px;
+                font-size: 30px;
                 font-weight: 800;
                 letter-spacing: 0.3px;
             }
             QLabel#UsersSubtitle,
             QLabel#UsersVisibleCount {
-                color: #94a3b8;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
+                font-weight: 500;
             }
             QLabel#UsersStatTitle,
             QLabel#UsersFieldLabel {
-                color: #64748b;
-                font-size: 8pt;
-                font-weight: 700;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
             }
             QLabel#UsersStatValue {
-                color: #0f172a;
-                font-size: 24px;
+                color: #1d2939;
+                font-size: 28px;
                 font-weight: 800;
             }
             QLabel#UsersAvatar {
@@ -586,9 +931,9 @@ class MainWindow(QWidget):
             QLabel#UsersBadgeInactive,
             QLabel#UsersRoleBadge {
                 border-radius: 10px;
-                font-size: 9pt;
+                font-size: 13px;
                 font-weight: 800;
-                padding: 4px 12px;
+                padding: 5px 12px;
             }
             QLabel#UsersBadgeActive {
                 background: #dcfce7;
@@ -615,8 +960,9 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 14px;
                 color: #475569;
-                font-weight: 600;
-                padding: 7px 14px;
+                font-size: 14px;
+                font-weight: 700;
+                padding: 9px 14px;
             }
             QPushButton#UsersFilterButton:hover {
                 background: #f1f5f9;
@@ -636,7 +982,8 @@ class MainWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
                 color: #1557c0;
-                padding: 6px 9px;
+                font-size: 14px;
+                padding: 8px 11px;
             }
             QPushButton#UsersInlineButton:hover,
             QToolButton#UsersPasswordToggle:hover {
@@ -667,6 +1014,7 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 6px;
                 color: #475569;
+                font-size: 14px;
                 font-weight: 600;
                 min-width: 34px;
                 min-height: 34px;
@@ -687,14 +1035,15 @@ class MainWindow(QWidget):
                 border: 1px solid #1f6feb;
                 border-radius: 6px;
                 color: #ffffff;
+                font-size: 14px;
                 font-weight: 700;
                 min-width: 34px;
                 min-height: 34px;
                 padding: 4px 10px;
             }
             QLabel#UsersPaginationInfo {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
                 font-weight: 600;
             }
             QComboBox#UsersPageSizeCombo {
@@ -750,14 +1099,14 @@ class MainWindow(QWidget):
             }
             QLabel#UsersFormSectionHeader {
                 color: #0f172a;
-                font-size: 13px;
+                font-size: 16px;
                 font-weight: 800;
                 letter-spacing: 0.5px;
             }
             QLabel#UsersFormFieldLabel {
-                color: #64748b;
-                font-size: 9pt;
-                font-weight: 700;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
                 padding-bottom: 2px;
             }
             QFrame#UsersFormSectionCard {
@@ -770,7 +1119,7 @@ class MainWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 10px;
                 color: #0f172a;
-                font-size: 10pt;
+                font-size: 14px;
                 padding: 10px 14px;
             }
             QLineEdit#UsersFormInput:focus {
@@ -785,7 +1134,7 @@ class MainWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 10px;
                 color: #0f172a;
-                font-size: 10pt;
+                font-size: 14px;
                 padding: 10px 14px;
             }
             QComboBox#UsersFormCombo:focus {
@@ -800,7 +1149,7 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 8px;
                 color: #64748b;
-                font-size: 9pt;
+                font-size: 14px;
                 font-weight: 600;
                 padding: 8px 12px;
             }
@@ -836,27 +1185,27 @@ class MainWindow(QWidget):
                     stop:0 #22c55e, stop:1 #4ade80);
             }
             QLabel#UsersPasswordStrengthLabel {
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QLabel#UsersPasswordStrengthLabelWeak {
                 color: #ef4444;
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QLabel#UsersPasswordStrengthLabelMedium {
                 color: #f59e0b;
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QLabel#UsersPasswordStrengthLabelGood {
                 color: #3b82f6;
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QLabel#UsersPasswordStrengthLabelStrong {
                 color: #22c55e;
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QCheckBox#UsersFormToggle {
@@ -879,12 +1228,12 @@ class MainWindow(QWidget):
             }
             QLabel#UsersFormToggleLabel {
                 color: #475569;
-                font-size: 10pt;
+                font-size: 14px;
                 font-weight: 600;
             }
             QLabel#UsersFormToggleLabelActive {
                 color: #16a34a;
-                font-size: 10pt;
+                font-size: 14px;
                 font-weight: 700;
             }
             QPushButton#UsersFormBackButton {
@@ -919,7 +1268,7 @@ class MainWindow(QWidget):
                 border: none;
                 border-radius: 10px;
                 color: #ffffff;
-                font-size: 10pt;
+                font-size: 14px;
                 font-weight: 800;
                 padding: 10px 32px;
             }
@@ -932,8 +1281,8 @@ class MainWindow(QWidget):
                 color: #94a3b8;
             }
             QLabel#UsersFormSubtitle {
-                color: #94a3b8;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
                 font-weight: 500;
             }
             
@@ -978,7 +1327,7 @@ class MainWindow(QWidget):
             }
             QLabel#UsersFieldValue {
                 color: #0f172a;
-                font-size: 11pt;
+                font-size: 15px;
                 font-weight: 600;
             }
             QPushButton#UsersCopyButton {
@@ -986,7 +1335,7 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 6px;
                 color: #64748b;
-                font-size: 8pt;
+                font-size: 12px;
                 font-weight: 600;
                 padding: 4px 8px;
                 min-width: 70px;
@@ -1055,13 +1404,13 @@ class MainWindow(QWidget):
             }
             QLabel#RolesPageHeading {
                 color: #0f172a;
-                font-size: 22px;
+                font-size: 30px;
                 font-weight: 800;
                 letter-spacing: 0.3px;
             }
             QLabel#RolesDrawerHeading {
                 color: #0f172a;
-                font-size: 17px;
+                font-size: 20px;
                 font-weight: 800;
             }
             QLabel#RolesSubtitle,
@@ -1069,24 +1418,25 @@ class MainWindow(QWidget):
             QLabel#RolesDrawerDescription,
             QLabel#RolesPermissionDescription,
             QLabel#RolesEmptyBody {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
+                font-weight: 500;
             }
             QLabel#RolesStatTitle {
-                color: #64748b;
-                font-size: 8pt;
-                font-weight: 700;
+                color: #667085;
+                font-size: 13px;
+                font-weight: 800;
             }
             QLabel#RolesStatValue {
-                color: #0f172a;
-                font-size: 24px;
+                color: #1d2939;
+                font-size: 28px;
                 font-weight: 800;
             }
             QLabel#RolesPermissionCountBadge {
                 background: #ccfbf1;
                 border-radius: 11px;
                 color: #0f766e;
-                font-size: 9pt;
+                font-size: 13px;
                 font-weight: 800;
                 padding: 5px 10px;
             }
@@ -1116,6 +1466,7 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 6px;
                 color: #475569;
+                font-size: 14px;
                 font-weight: 600;
                 min-width: 34px;
                 min-height: 34px;
@@ -1136,14 +1487,15 @@ class MainWindow(QWidget):
                 border: 1px solid #1f6feb;
                 border-radius: 6px;
                 color: #ffffff;
+                font-size: 14px;
                 font-weight: 700;
                 min-width: 34px;
                 min-height: 34px;
                 padding: 4px 10px;
             }
             QLabel#RolesPaginationInfo {
-                color: #64748b;
-                font-size: 9pt;
+                color: #667085;
+                font-size: 14px;
                 font-weight: 600;
             }
             QComboBox#RolesPageSizeCombo {
@@ -1180,7 +1532,7 @@ class MainWindow(QWidget):
                 border: 3px solid #ccfbf1;
                 border-radius: 25px;
                 color: #ffffff;
-                font-size: 14pt;
+                font-size: 20px;
                 font-weight: 900;
                 min-height: 50px;
                 min-width: 50px;
@@ -1189,12 +1541,12 @@ class MainWindow(QWidget):
             }
             QLabel#RolesPermissionFilterLabel {
                 color: #475569;
-                font-size: 8pt;
-                font-weight: 700;
+                font-size: 13px;
+                font-weight: 800;
             }
             QLabel#RolesPermissionResults {
-                color: #64748b;
-                font-size: 8pt;
+                color: #667085;
+                font-size: 13px;
                 font-weight: 600;
             }
             QLineEdit#RolesPermissionSearch {
@@ -1202,9 +1554,9 @@ class MainWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
                 color: #0f172a;
-                font-size: 13px;
-                min-height: 34px;
-                padding: 4px 12px;
+                font-size: 14px;
+                min-height: 38px;
+                padding: 6px 12px;
             }
             QLineEdit#RolesPermissionSearch:focus {
                 border: 1.5px solid #0d9488;
@@ -1236,8 +1588,9 @@ class MainWindow(QWidget):
                 border: 1px solid #d8e4ef;
                 border-radius: 8px;
                 color: #475569;
+                font-size: 14px;
                 font-weight: 700;
-                padding: 7px 12px;
+                padding: 9px 12px;
             }
             QPushButton#RolesBackButton:hover {
                 background: #ecfeff;
@@ -1249,10 +1602,10 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 14px;
                 color: #475569;
-                font-size: 11px;
-                font-weight: 600;
-                min-height: 26px;
-                padding: 3px 12px;
+                font-size: 13px;
+                font-weight: 700;
+                min-height: 30px;
+                padding: 5px 12px;
             }
             QPushButton#RolesModuleChip:hover {
                 background: #f1f5f9;
@@ -1277,7 +1630,7 @@ class MainWindow(QWidget):
                 background: transparent;
                 border: 0;
                 color: #94a3b8;
-                font-size: 7pt;
+                font-size: 12px;
                 font-weight: 700;
             }
             QPushButton#RolesModuleChip[selected="true"] QLabel#RolesModuleChipCount {
@@ -1302,15 +1655,15 @@ class MainWindow(QWidget):
                 background: transparent;
                 border: 0;
                 color: #0f172a;
-                font-size: 12px;
-                font-weight: 600;
+                font-size: 14px;
+                font-weight: 700;
             }
             QLabel#RolesPermissionCheck {
                 background: #d1fae5;
                 border: 1px solid #a7f3d0;
                 border-radius: 9px;
                 color: #065f46;
-                font-size: 10px;
+                font-size: 12px;
                 font-weight: bold;
                 min-height: 18px;
                 min-width: 18px;
@@ -1319,12 +1672,12 @@ class MainWindow(QWidget):
             }
             QLabel#RolesPermChipsHeading {
                 color: #0f172a;
-                font-size: 14px;
-                font-weight: 700;
+                font-size: 16px;
+                font-weight: 800;
             }
             QLabel#RolesPermChipsSubtext {
-                color: #64748b;
-                font-size: 11px;
+                color: #667085;
+                font-size: 13px;
                 font-weight: 500;
             }
             QLabel#RolesPermissionEmptyIcon {
@@ -1332,7 +1685,7 @@ class MainWindow(QWidget):
                 border: 1px solid #e2e8f0;
                 border-radius: 22px;
                 color: #64748b;
-                font-size: 16pt;
+                font-size: 22px;
                 font-weight: 800;
                 min-height: 44px;
                 min-width: 44px;
@@ -1356,7 +1709,7 @@ class MainWindow(QWidget):
         top_bar_layout.setContentsMargins(16, 10, 14, 10)
         top_bar_layout.setSpacing(18)
 
-        brand = QLabel("MyFirstERP")
+        brand = QLabel("Arassa Nusga")
         brand.setObjectName("TopBrand")
         top_bar_layout.addWidget(brand)
 
@@ -1476,9 +1829,19 @@ class MainWindow(QWidget):
             item.setData(Qt.ItemDataRole.UserRole.value + 3, text_key)
             item.setData(Qt.ItemDataRole.UserRole.value + 4, group_id or "")
             item.setData(Qt.ItemDataRole.UserRole.value + 5, level)
-            item.setSizeHint(QSize(0, 34 if level == 0 else 28))
-            font = item.font()
-            font.setBold(level == 0)
+            font = QFont("Segoe UI")
+            if page_id is None:
+                item.setSizeHint(QSize(0, 32))
+                font.setPixelSize(12)
+                font.setWeight(QFont.Weight.DemiBold)
+            elif level == 0:
+                item.setSizeHint(QSize(0, 40))
+                font.setPixelSize(15)
+                font.setWeight(QFont.Weight.Bold)
+            else:
+                item.setSizeHint(QSize(0, 32))
+                font.setPixelSize(13)
+                font.setWeight(QFont.Weight.Medium)
             item.setFont(font)
             if page_id is None:
                 item.setFlags(Qt.ItemFlag.ItemIsEnabled)
@@ -1493,6 +1856,8 @@ class MainWindow(QWidget):
         """Return a sidebar label with visual indentation for subitems."""
 
         text = self.translator.text(text_key)
+        if text_key == "sidebar.admin_group":
+            return text.upper()
         return f"   {text}" if level else text
 
     def _retranslate_navigation(self) -> None:
@@ -1605,7 +1970,7 @@ class MainWindow(QWidget):
         vertical_header = table.verticalHeader()
         if vertical_header is not None:
             vertical_header.setVisible(False)
-            vertical_header.setDefaultSectionSize(34)
+            vertical_header.setDefaultSectionSize(38)
         horizontal_header = table.horizontalHeader()
         if horizontal_header is not None:
             horizontal_header.setStretchLastSection(True)
@@ -2347,7 +2712,7 @@ class MainWindow(QWidget):
             QLabel#StatusBadge {
                 background-color: #dcfce7;
                 color: #15803d;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: bold;
                 padding: 4px 8px;
                 border-radius: 6px;
@@ -2416,7 +2781,7 @@ class MainWindow(QWidget):
             card_title = QLabel()
             card_title.setProperty("titleKey", title_prop_key)
             card_title.setStyleSheet(
-                "font-size: 11px; font-weight: bold; color: #64748b; text-transform: uppercase;"
+                "font-size: 12px; font-weight: bold; color: #64748b; text-transform: uppercase;"
             )
             card_layout.addWidget(card_title)
 
@@ -2589,9 +2954,11 @@ class MainWindow(QWidget):
         eyebrow.setProperty("titleKey", "dashboard.eyebrow")
         self.dashboard_welcome_label = QLabel()
         self.dashboard_welcome_label.setObjectName("DashboardTitle")
+        self.dashboard_welcome_label.setWordWrap(True)
         self.dashboard_subtitle_label = QLabel()
         self.dashboard_subtitle_label.setObjectName("DashboardSubtitle")
         self.dashboard_subtitle_label.setProperty("titleKey", "dashboard.subtitle")
+        self.dashboard_subtitle_label.setWordWrap(True)
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
         self.dashboard_status_badge = QLabel("ONLINE")
@@ -2668,6 +3035,7 @@ class MainWindow(QWidget):
 
         recent_card, recent_layout = self._dashboard_card("dashboard.recent_documents")
         self.dashboard_recent_table = QTableWidget(0, 4)
+        self.dashboard_recent_table.setObjectName("DashboardRecentTable")
         self._configure_table(self.dashboard_recent_table)
         self.dashboard_recent_table.setMinimumHeight(170)
         self._set_dashboard_recent_headers()
@@ -2710,7 +3078,7 @@ class MainWindow(QWidget):
 
         return (
             f"background: {background}; color: {color}; border-radius: 8px; "
-            "font-size: 10px; font-weight: 900; padding: 4px 9px;"
+            "font-size: 12px; font-weight: 800; padding: 5px 10px;"
         )
 
     def _dashboard_card(self, title_key: str) -> tuple[QFrame, QVBoxLayout]:
@@ -2745,8 +3113,8 @@ class MainWindow(QWidget):
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setStyleSheet(
             f"background: {color}; color: #ffffff; border-radius: 8px; "
-            "font-size: 13px; font-weight: 900; min-height: 26px; "
-            "max-height: 26px; min-width: 26px; max-width: 26px;"
+            "font-size: 14px; font-weight: 900; min-height: 30px; "
+            "max-height: 30px; min-width: 30px; max-width: 30px;"
         )
         title = QLabel()
         title.setObjectName("DashboardMetricTitle")
@@ -2775,6 +3143,25 @@ class MainWindow(QWidget):
                 self.translator.text("dashboard.recent.status"),
             ]
         )
+
+    def _dashboard_chart_hover_labels(self) -> dict[str, str]:
+        """Return localized labels used by the sales chart hover panel."""
+
+        keys = {
+            "net": "dashboard.chart.hover.net",
+            "sales": "dashboard.chart.hover.sales",
+            "returns": "dashboard.chart.hover.returns",
+            "documents": "dashboard.chart.hover.documents",
+            "quantity": "dashboard.chart.hover.quantity",
+            "sold": "dashboard.chart.hover.sold",
+            "returned": "dashboard.chart.hover.returned",
+            "payments": "dashboard.chart.hover.payments",
+            "cash": "dashboard.chart.hover.cash",
+            "transfer": "dashboard.chart.hover.transfer",
+            "bonus": "dashboard.chart.hover.bonus",
+            "debt": "dashboard.chart.hover.debt",
+        }
+        return {name: self.translator.text(key) for name, key in keys.items()}
 
     def _build_roles_page(self) -> QWidget:
         """Build the responsive Roles and Permissions list workflow."""
@@ -5077,7 +5464,7 @@ class MainWindow(QWidget):
             self.banner_status_badge.setStyleSheet("""
                 background-color: #dcfce7;
                 color: #15803d;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: bold;
                 padding: 4px 8px;
                 border-radius: 6px;
@@ -5088,7 +5475,7 @@ class MainWindow(QWidget):
             self.banner_status_badge.setStyleSheet("""
                 background-color: #fef3c7;
                 color: #d97706;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: bold;
                 padding: 4px 8px;
                 border-radius: 6px;
@@ -5170,7 +5557,7 @@ class MainWindow(QWidget):
         self.banner_status_badge.setStyleSheet("""
             background-color: #fee2e2;
             color: #dc2626;
-            font-size: 11px;
+            font-size: 12px;
             font-weight: bold;
             padding: 4px 8px;
             border-radius: 6px;
@@ -5320,7 +5707,9 @@ class MainWindow(QWidget):
             self.translator.text("dashboard.hint.low_stock"),
         )
 
-        self.dashboard_chart.set_points(self._dashboard_chart_points(sales_report))
+        self.dashboard_chart.set_points(
+            self._dashboard_chart_points(sales_report, month_start, today)
+        )
         self._populate_dashboard_recent(sales, purchases)
         open_shifts = int(self._safe_decimal(month_report.get("open_shift_count")))
         if low_stock_count:
@@ -5388,25 +5777,175 @@ class MainWindow(QWidget):
         return count
 
     def _dashboard_chart_points(
-        self, sales_report: dict[str, Any]
-    ) -> list[tuple[str, Decimal]]:
+        self,
+        sales_report: dict[str, Any],
+        period_start: date | None = None,
+        period_end: date | None = None,
+    ) -> list[DashboardChartPoint]:
         """Aggregate sales report rows into chart points by date."""
 
-        totals: dict[str, Decimal] = {}
-        for row in sales_report.get("rows") or []:
-            if not isinstance(row, dict):
-                continue
-            raw_date = str(row.get("doc_date") or "")
-            key = raw_date[:10]
-            if not key:
-                continue
-            totals[key] = totals.get(key, Decimal("0")) + self._safe_decimal(
-                row.get("signed_amount_tmt")
-            )
-        points = sorted(totals.items())
-        if len(points) > 10:
-            points = points[-10:]
-        return [(label[5:] if len(label) >= 10 else label, value) for label, value in points]
+        totals: dict[str, dict[str, Any]] = {}
+        raw_chart_points = sales_report.get("chart_points")
+        if isinstance(raw_chart_points, list):
+            for row in raw_chart_points:
+                if not isinstance(row, dict):
+                    continue
+                point = self._dashboard_chart_point_from_api(row)
+                if point is not None:
+                    totals[point.date] = self._dashboard_chart_values_from_point(point)
+        else:
+            for row in sales_report.get("rows") or []:
+                if not isinstance(row, dict):
+                    continue
+                raw_date = str(row.get("doc_date") or "")
+                key = raw_date[:10]
+                if not key:
+                    continue
+                bucket = totals.setdefault(key, self._empty_dashboard_chart_values(key))
+                signed_amount = self._safe_decimal(row.get("signed_amount_tmt"))
+                document_type = str(row.get("document_type") or "sale")
+                is_return = document_type == "sale_return"
+                if is_return:
+                    return_amount = self._safe_decimal(
+                        row.get("returns_amount_tmt") or -signed_amount
+                    )
+                    bucket["returns_total_tmt"] += return_amount
+                    bucket["returns_count"] += 1
+                    bucket["returned_quantity"] += self._safe_decimal(row.get("quantity"))
+                else:
+                    sale_amount = self._safe_decimal(
+                        row.get("gross_amount_tmt") or signed_amount
+                    )
+                    bucket["sales_total_tmt"] += sale_amount
+                    bucket["document_count"] += 1
+                    bucket["sold_quantity"] += self._safe_decimal(row.get("quantity"))
+                bucket["net_amount_tmt"] += signed_amount
+                bucket["cash_tmt"] += self._safe_decimal(row.get("cash_tmt"))
+                bucket["transfer_tmt"] += self._safe_decimal(row.get("transfer_tmt"))
+                bucket["bonus_tmt"] += self._safe_decimal(row.get("bonus_tmt"))
+                bucket["debt_tmt"] += self._safe_decimal(row.get("debt_tmt"))
+
+        if period_start is not None and period_end is not None:
+            if period_start > period_end:
+                period_start, period_end = period_end, period_start
+            points: list[DashboardChartPoint] = []
+            current = period_start
+            while current <= period_end:
+                key = current.isoformat()
+                points.append(
+                    self._dashboard_chart_point_from_values(
+                        totals.get(key) or self._empty_dashboard_chart_values(key)
+                    )
+                )
+                current += timedelta(days=1)
+            return points
+
+        points = [
+            self._dashboard_chart_point_from_values(bucket)
+            for _date, bucket in sorted(totals.items())
+        ]
+        return points
+
+    def _dashboard_chart_point_from_api(
+        self, row: dict[str, Any]
+    ) -> DashboardChartPoint | None:
+        """Convert one API chart point into the UI chart model."""
+
+        raw_date = str(row.get("date") or row.get("doc_date") or "")
+        key = raw_date[:10]
+        if not key:
+            return None
+        net_amount = self._safe_decimal(
+            row.get("net_amount_tmt") or row.get("signed_amount_tmt")
+        )
+        return self._dashboard_chart_point_from_values(
+            {
+                "date": key,
+                "sales_total_tmt": self._safe_decimal(
+                    row.get("sales_total_tmt")
+                    or row.get("gross_amount_tmt")
+                    or (net_amount if net_amount > 0 else "0")
+                ),
+                "returns_total_tmt": self._safe_decimal(
+                    row.get("returns_total_tmt") or row.get("returns_amount_tmt")
+                ),
+                "net_amount_tmt": net_amount,
+                "document_count": self._safe_int(row.get("document_count")),
+                "returns_count": self._safe_int(row.get("returns_count")),
+                "sold_quantity": self._safe_decimal(row.get("sold_quantity")),
+                "returned_quantity": self._safe_decimal(row.get("returned_quantity")),
+                "cash_tmt": self._safe_decimal(row.get("cash_tmt")),
+                "transfer_tmt": self._safe_decimal(row.get("transfer_tmt")),
+                "bonus_tmt": self._safe_decimal(row.get("bonus_tmt")),
+                "debt_tmt": self._safe_decimal(row.get("debt_tmt")),
+            }
+        )
+
+    def _dashboard_chart_point_from_values(self, values: dict[str, Any]) -> DashboardChartPoint:
+        """Build a chart point from normalized aggregate values."""
+
+        key = str(values.get("date") or "")
+        return DashboardChartPoint(
+            date=key,
+            label=key[5:] if len(key) >= 10 else key,
+            net_amount_tmt=self._safe_decimal(values.get("net_amount_tmt")),
+            sales_total_tmt=self._safe_decimal(values.get("sales_total_tmt")),
+            returns_total_tmt=self._safe_decimal(values.get("returns_total_tmt")),
+            document_count=self._safe_int(values.get("document_count")),
+            returns_count=self._safe_int(values.get("returns_count")),
+            sold_quantity=self._safe_decimal(values.get("sold_quantity")),
+            returned_quantity=self._safe_decimal(values.get("returned_quantity")),
+            cash_tmt=self._safe_decimal(values.get("cash_tmt")),
+            transfer_tmt=self._safe_decimal(values.get("transfer_tmt")),
+            bonus_tmt=self._safe_decimal(values.get("bonus_tmt")),
+            debt_tmt=self._safe_decimal(values.get("debt_tmt")),
+        )
+
+    def _dashboard_chart_values_from_point(
+        self, point: DashboardChartPoint
+    ) -> dict[str, Any]:
+        """Convert a chart point back into aggregate values for merging."""
+
+        return {
+            "date": point.date,
+            "sales_total_tmt": point.sales_total_tmt,
+            "returns_total_tmt": point.returns_total_tmt,
+            "net_amount_tmt": point.net_amount_tmt,
+            "document_count": point.document_count,
+            "returns_count": point.returns_count,
+            "sold_quantity": point.sold_quantity,
+            "returned_quantity": point.returned_quantity,
+            "cash_tmt": point.cash_tmt,
+            "transfer_tmt": point.transfer_tmt,
+            "bonus_tmt": point.bonus_tmt,
+            "debt_tmt": point.debt_tmt,
+        }
+
+    def _empty_dashboard_chart_values(self, key: str) -> dict[str, Any]:
+        """Return a zero-value aggregate row for one chart date."""
+
+        return {
+            "date": key,
+            "sales_total_tmt": Decimal("0"),
+            "returns_total_tmt": Decimal("0"),
+            "net_amount_tmt": Decimal("0"),
+            "document_count": 0,
+            "returns_count": 0,
+            "sold_quantity": Decimal("0"),
+            "returned_quantity": Decimal("0"),
+            "cash_tmt": Decimal("0"),
+            "transfer_tmt": Decimal("0"),
+            "bonus_tmt": Decimal("0"),
+            "debt_tmt": Decimal("0"),
+        }
+
+    def _safe_int(self, value: object) -> int:
+        """Parse an integer-ish API value."""
+
+        try:
+            return int(self._safe_decimal(value))
+        except Exception:
+            return 0
 
     def _populate_dashboard_recent(
         self, sales: Sequence[ApiRow], purchases: Sequence[ApiRow]
@@ -8896,6 +9435,11 @@ class MainWindow(QWidget):
         self._retranslate_navigation()
         if hasattr(self, "dashboard_recent_table"):
             self._set_dashboard_recent_headers()
+        if hasattr(self, "dashboard_chart"):
+            self.dashboard_chart.set_hover_context(
+                self._dashboard_chart_hover_labels(),
+                self._format_tmt,
+            )
         if hasattr(self, "dashboard_welcome_label"):
             user_name = (
                 self.api_client.current_user.full_name
@@ -9660,13 +10204,13 @@ class MainWindow(QWidget):
         
         name = QLabel(str(row.get("full_name") or row.get("username") or "-"))
         name.setObjectName("UsersPageHeading")
-        name.setStyleSheet("font-size: 15pt; font-weight: 800; color: #0f172a; margin-top: 10px;")
+        name.setStyleSheet("font-size: 20px; font-weight: 800; color: #0f172a; margin-top: 10px;")
         name.setWordWrap(True)
         name.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         username = QLabel(f"@{row.get('username') or '-'}")
         username.setObjectName("UsersSubtitle")
-        username.setStyleSheet("font-size: 10pt; color: #3b82f6; font-weight: 600;")
+        username.setStyleSheet("font-size: 14px; color: #3b82f6; font-weight: 600;")
         username.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         separator = QFrame()
@@ -9707,7 +10251,7 @@ class MainWindow(QWidget):
 
         card_title = QLabel(self.translator.text("users.details"))
         card_title.setObjectName("UsersPageHeading")
-        card_title.setStyleSheet("font-size: 13pt; font-weight: 800; color: #0f172a; margin-bottom: 16px;")
+        card_title.setStyleSheet("font-size: 18px; font-weight: 800; color: #0f172a; margin-bottom: 16px;")
         details_layout.addWidget(card_title)
 
         fields = (
@@ -9741,7 +10285,7 @@ class MainWindow(QWidget):
 
             lbl = QLabel(self.translator.text(label_key).upper())
             lbl.setObjectName("UsersFieldLabel")
-            lbl.setStyleSheet("font-size: 8pt; font-weight: 700; color: #64748b; letter-spacing: 0.5px;")
+            lbl.setStyleSheet("font-size: 13px; font-weight: 800; color: #667085; letter-spacing: 0.5px;")
 
             val = QLabel(self._format_value(val_value))
             val.setObjectName("UsersFieldValue")

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import io
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import fresh_seed as fresh_seed_cli
+from server_app.api.routers_sales_v1 import _sales_chart_points, _sales_report_payload
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
 from server_app.core.constants import SUPER_ADMIN_USERNAME
 from server_app.core.security import verify_password
@@ -128,6 +131,72 @@ class FreshSeedDataTests(unittest.TestCase):
             for table in Base.metadata.sorted_tables:
                 db_count = session.execute(select(func.count()).select_from(table)).scalar_one()
                 self.assertEqual(result.table_counts[table.name], db_count, table.name)
+
+    def test_seed_demo_data_creates_current_period_sales_report_rows(self) -> None:
+        """Fresh demo data should give the dashboard sales chart real rows."""
+
+        with self.session_factory() as session:
+            seed_demo_data(
+                session,
+                DemoSeedOptions(super_admin_password="admin123", scale="small", seed=321),
+            )
+            session.commit()
+
+            today = datetime.now(timezone.utc).date()
+            month_start = today.replace(day=1)
+            date_from = datetime(month_start.year, month_start.month, month_start.day, tzinfo=timezone.utc)
+            date_to = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+            report = _sales_report_payload(session, date_from, date_to)
+
+        self.assertGreater(len(report["rows"]), 0)
+        self.assertGreater(len(report["chart_points"]), 0)
+
+    def test_sales_chart_points_aggregate_sales_and_returns_by_date(self) -> None:
+        """Daily chart points should summarize sales and returns precisely."""
+
+        doc_date = datetime(2026, 6, 24, 10, 0, tzinfo=timezone.utc)
+        sale_one = SimpleNamespace(
+            doc_date=doc_date,
+            lines=[SimpleNamespace(quantity="2.0000")],
+            total_amount_tmt="30.00",
+            paid_cash_tmt="10.00",
+            paid_transfer_tmt="0.00",
+            paid_bonus_tmt="0.00",
+            debt_amount_tmt="20.00",
+        )
+        sale_two = SimpleNamespace(
+            doc_date=doc_date,
+            lines=[SimpleNamespace(quantity="1.0000")],
+            total_amount_tmt="5.00",
+            paid_cash_tmt="0.00",
+            paid_transfer_tmt="5.00",
+            paid_bonus_tmt="0.00",
+            debt_amount_tmt="0.00",
+        )
+        sale_return = SimpleNamespace(
+            doc_date=doc_date,
+            lines=[SimpleNamespace(quantity="1.0000")],
+            total_amount_tmt="10.00",
+            refund_cash_tmt="0.00",
+            refund_transfer_tmt="0.00",
+            refund_bonus_tmt="0.00",
+            receivable_correction_tmt="10.00",
+        )
+
+        points = _sales_chart_points([sale_one, sale_two], [sale_return])
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0]["date"], "2026-06-24")
+        self.assertEqual(points[0]["sales_total_tmt"], "35.00")
+        self.assertEqual(points[0]["returns_total_tmt"], "10.00")
+        self.assertEqual(points[0]["net_amount_tmt"], "25.00")
+        self.assertEqual(points[0]["document_count"], 2)
+        self.assertEqual(points[0]["returns_count"], 1)
+        self.assertEqual(points[0]["sold_quantity"], "3.0000")
+        self.assertEqual(points[0]["returned_quantity"], "1.0000")
+        self.assertEqual(points[0]["cash_tmt"], "10.00")
+        self.assertEqual(points[0]["transfer_tmt"], "5.00")
+        self.assertEqual(points[0]["debt_tmt"], "10.00")
 
 
 class FreshSchemaTests(unittest.TestCase):

@@ -1188,141 +1188,152 @@ class DemoSeeder:
     ) -> tuple[Sale, SaleLine]:
         customer = next(row for row in counterparties if row.role_flags in {2, 3})
         contract = contracts[customer.id]
-        product = products[2]
-        product_uom = next(row for row in product_uoms if row.product_id == product.id and row.is_base)
-        sale_qty = qty4("2")
-        unit_price = price(product.retail_price)
-        discount_percent = Decimal("5.00")
-        gross = money(sale_qty * unit_price)
-        discount_amount = money(gross * Decimal("0.05"))
-        total = money(gross - discount_amount)
         card = loyalty_cards[0] if loyalty_cards else None
 
-        sale = Sale(
-            doc_number=generate_doc_number(self.session, Sale, "SALE"),
-            doc_date=self.now - timedelta(hours=2),
-            sale_type="wholesale",
-            cash_register=cash_registers[0],
-            cash_shift=shifts[0],
-            counterparty=customer,
-            contract=contract,
-            warehouse=warehouses[0],
-            price_list=price_lists[0],
-            currency=currencies["TMT"],
-            currency_rate=Decimal("1.000000"),
-            discount_percent=discount_percent,
-            discount_amount_tmt=discount_amount,
-            total_amount_tmt=total,
-            payment_type="debt",
-            paid_cash_tmt=money("0.00"),
-            paid_transfer_tmt=money("0.00"),
-            paid_bonus_tmt=money("0.00"),
-            debt_amount_tmt=total,
-            loyalty_card=card,
-            status="posted",
-            admin_override_by_user=users[0],
-            created_by_user=users[0],
-            posted_by_user=users[0],
-            posted_at=self.now - timedelta(hours=1, minutes=45),
-        )
-        self.session.add(sale)
-        self.session.flush()
+        seeded_sales: list[tuple[Sale, SaleLine]] = []
+        sale_datetimes = self._dashboard_sale_datetimes()
+        for index, doc_date in enumerate(sale_datetimes):
+            product = products[(index + 2) % len(products)]
+            product_uom = next(row for row in product_uoms if row.product_id == product.id and row.is_base)
+            sale_qty = qty4(str(1 + (index % 4)))
+            unit_price = price(product.retail_price)
+            discount_percent = Decimal("5.00") if index % 2 == 0 else Decimal("0.00")
+            discount_rate = discount_percent / Decimal("100")
+            gross = money(sale_qty * unit_price)
+            discount_amount = money(gross * discount_rate)
+            total = money(gross - discount_amount)
+            paid_cash = money(total / Decimal("2")) if index % 3 == 0 else money("0.00")
+            paid_transfer = money(total / Decimal("2")) if index % 3 == 1 else money("0.00")
+            paid_total = money(paid_cash + paid_transfer)
+            debt_amount = money(total - paid_total)
+            if paid_total == 0:
+                payment_type = "debt"
+            elif debt_amount:
+                payment_type = "mixed"
+            else:
+                payment_type = "cash" if paid_cash else "transfer"
 
-        line = SaleLine(
-            sale=sale,
-            line_type="product",
-            product=product,
-            product_uom=product_uom,
-            uom=product_uom.uom,
-            quantity=sale_qty,
-            price_list_price=unit_price,
-            price_final=price(unit_price * Decimal("0.95")),
-            discount_percent=discount_percent,
-            discount_amount=discount_amount,
-            amount_tmt=total,
-            avg_cost_tmt=price(product.last_known_cost),
-            promotion=promotions[0],
-            price_override=False,
-        )
-        self.session.add(line)
-        self.session.flush()
+            sale = Sale(
+                doc_number=generate_doc_number(self.session, Sale, "SALE"),
+                doc_date=doc_date,
+                sale_type="wholesale",
+                cash_register=cash_registers[0],
+                cash_shift=shifts[0],
+                counterparty=customer,
+                contract=contract,
+                warehouse=warehouses[0],
+                price_list=price_lists[0],
+                currency=currencies["TMT"],
+                currency_rate=Decimal("1.000000"),
+                discount_percent=discount_percent,
+                discount_amount_tmt=discount_amount,
+                total_amount_tmt=total,
+                payment_type=payment_type,
+                paid_cash_tmt=paid_cash,
+                paid_transfer_tmt=paid_transfer,
+                paid_bonus_tmt=money("0.00"),
+                debt_amount_tmt=debt_amount,
+                loyalty_card=card,
+                status="posted",
+                admin_override_by_user=users[0],
+                created_by_user=users[0],
+                posted_by_user=users[0],
+                posted_at=doc_date + timedelta(minutes=15),
+            )
+            self.session.add(sale)
+            self.session.flush()
 
-        post_stock_movement(
-            self.session,
-            warehouse_id=warehouses[0].id,
-            product_id=product.id,
-            uom_id=product_uom.uom_id,
-            movement_type="sale",
-            document_type="sale",
-            document_id=sale.id,
-            quantity_delta=quantity("-2"),
-            unit_cost_tmt=money(product.last_known_cost),
-            user_id=users[0].id,
-        )
-        post_debt_entry(
-            self.session,
-            counterparty_id=customer.id,
-            contract_id=contract.id,
-            debt_type="receivable",
-            doc_type="sale",
-            doc_id=sale.id,
-            doc_number=sale.doc_number,
-            doc_date=sale.doc_date,
-            amount_tmt=total,
-            currency_id=currencies["TMT"].id,
-            amount_cur=total,
-            note="Seeded sale receivable.",
-            user_id=users[0].id,
-        )
-        if card is not None:
-            post_loyalty_transaction(
+            line = SaleLine(
+                sale=sale,
+                line_type="product",
+                product=product,
+                product_uom=product_uom,
+                uom=product_uom.uom,
+                quantity=sale_qty,
+                price_list_price=unit_price,
+                price_final=price(unit_price * (Decimal("1") - discount_rate)),
+                discount_percent=discount_percent,
+                discount_amount=discount_amount,
+                amount_tmt=total,
+                avg_cost_tmt=price(product.last_known_cost),
+                promotion=promotions[0] if promotions and index % 2 == 0 else None,
+                price_override=False,
+            )
+            self.session.add(line)
+            self.session.flush()
+
+            post_stock_movement(
                 self.session,
-                card,
-                transaction_type="earn",
-                amount_tmt=money(total * Decimal("0.02")),
-                doc_type="sale",
-                doc_id=sale.id,
-                note="Seeded loyalty earn.",
+                warehouse_id=warehouses[0].id,
+                product_id=product.id,
+                uom_id=product_uom.uom_id,
+                movement_type="sale",
+                document_type="sale",
+                document_id=sale.id,
+                quantity_delta=quantity(-sale_qty),
+                unit_cost_tmt=money(product.last_known_cost),
                 user_id=users[0].id,
             )
+            if debt_amount:
+                post_debt_entry(
+                    self.session,
+                    counterparty_id=customer.id,
+                    contract_id=contract.id,
+                    debt_type="receivable",
+                    doc_type="sale",
+                    doc_id=sale.id,
+                    doc_number=sale.doc_number,
+                    doc_date=sale.doc_date,
+                    amount_tmt=debt_amount,
+                    currency_id=currencies["TMT"].id,
+                    amount_cur=debt_amount,
+                    note="Seeded sale receivable.",
+                    user_id=users[0].id,
+                )
+            if card is not None:
+                post_loyalty_transaction(
+                    self.session,
+                    card,
+                    transaction_type="earn",
+                    amount_tmt=money(total * Decimal("0.02")),
+                    doc_type="sale",
+                    doc_id=sale.id,
+                    note="Seeded loyalty earn.",
+                    user_id=users[0].id,
+                )
 
-        payment_amount = money(total / Decimal("2"))
-        payment = Payment(
-            doc_number=generate_doc_number(self.session, Payment, "PAY"),
-            doc_date=self.now - timedelta(minutes=45),
-            counterparty=customer,
-            contract=contract,
-            direction="incoming",
-            payment_method="transfer",
-            amount_tmt=payment_amount,
-            currency=currencies["TMT"],
-            amount_cur=payment_amount,
-            currency_rate=Decimal("1.000000"),
-            cash_shift=shifts[0],
-            status="posted",
-            note="Seeded customer payment.",
-            created_by_user_id=users[0].id,
-        )
-        self.session.add(payment)
+            if paid_total:
+                payment = Payment(
+                    doc_number=generate_doc_number(self.session, Payment, "PAY"),
+                    doc_date=doc_date + timedelta(minutes=30),
+                    counterparty=customer,
+                    contract=contract,
+                    direction="incoming",
+                    payment_method="cash" if paid_cash else "transfer",
+                    amount_tmt=paid_total,
+                    currency=currencies["TMT"],
+                    amount_cur=paid_total,
+                    currency_rate=Decimal("1.000000"),
+                    cash_shift=shifts[0],
+                    status="posted",
+                    note="Seeded customer payment.",
+                    created_by_user_id=users[0].id,
+                )
+                self.session.add(payment)
+                self.session.flush()
+                self.session.add(
+                    PaymentAllocation(
+                        payment=payment,
+                        doc_type="sale",
+                        doc_id=sale.id,
+                        allocated_amount=paid_total,
+                    )
+                )
+
+            seeded_sales.append((sale, line))
+
         self.session.flush()
-        self.session.add(PaymentAllocation(payment=payment, doc_type="sale", doc_id=sale.id, allocated_amount=payment_amount))
-        post_debt_entry(
-            self.session,
-            counterparty_id=customer.id,
-            contract_id=contract.id,
-            debt_type="receivable",
-            doc_type="payment",
-            doc_id=payment.id,
-            doc_number=payment.doc_number,
-            doc_date=payment.doc_date,
-            amount_tmt=-payment_amount,
-            currency_id=currencies["TMT"].id,
-            amount_cur=-payment_amount,
-            note="Seeded receivable payment.",
-            user_id=users[0].id,
-        )
-        self.session.flush()
-        return sale, line
+        return seeded_sales[0]
 
     def _seed_sale_return(
         self,
@@ -1336,9 +1347,10 @@ class DemoSeeder:
     ) -> None:
         return_qty = qty4("1")
         amount = money(sale_line.price_final * return_qty)
+        return_doc_date = sale.doc_date + timedelta(hours=2)
         sale_return = SaleReturn(
             doc_number=generate_doc_number(self.session, SaleReturn, "SR"),
-            doc_date=self.now - timedelta(minutes=20),
+            doc_date=return_doc_date,
             sale=sale,
             cash_register=cash_registers[0],
             cash_shift=shifts[0],
@@ -1356,7 +1368,7 @@ class DemoSeeder:
             note="Seeded sale return.",
             created_by_user=users[0],
             posted_by_user=users[0],
-            posted_at=self.now - timedelta(minutes=10),
+            posted_at=return_doc_date + timedelta(minutes=10),
         )
         self.session.add(sale_return)
         self.session.flush()
@@ -1418,6 +1430,40 @@ class DemoSeeder:
     def _safe_text(self, value: str, max_length: int) -> str:
         value = " ".join(value.split())
         return value[:max_length]
+
+    def _dashboard_sale_datetimes(self) -> list[datetime]:
+        """Return current-period sale dates that fit the dashboard date filter."""
+
+        month_start = self.today.replace(day=1)
+        last_offset = max(0, self.today.day - 1)
+        if last_offset == 0:
+            offsets = [0]
+        else:
+            desired_offsets = [
+                0,
+                max(1, last_offset // 4),
+                max(1, last_offset // 2),
+                max(1, (last_offset * 3) // 4),
+                last_offset,
+            ]
+            offsets = sorted({min(last_offset, offset) for offset in desired_offsets})
+
+        sale_datetimes: list[datetime] = []
+        for index, offset in enumerate(offsets):
+            sale_date = month_start + timedelta(days=offset)
+            hour = 0 if sale_date == self.today else 9 + (index % 6)
+            minute = 0 if sale_date == self.today else (index * 11) % 60
+            sale_datetimes.append(
+                datetime(
+                    sale_date.year,
+                    sale_date.month,
+                    sale_date.day,
+                    hour,
+                    minute,
+                    tzinfo=timezone.utc,
+                )
+            )
+        return sale_datetimes
 
     def _as_datetime(self, value: date) -> datetime:
         return datetime(value.year, value.month, value.day, tzinfo=timezone.utc)

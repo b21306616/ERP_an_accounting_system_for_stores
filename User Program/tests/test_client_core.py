@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 from decimal import Decimal
 import os
 from pathlib import Path
@@ -482,11 +483,22 @@ class ClientCoreTests(unittest.TestCase):
                 }
 
             def get_sales_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                month_start = date.today().replace(day=1)
+                rows = [
+                    {
+                        "doc_date": month_start.isoformat(),
+                        "signed_amount_tmt": "100.00",
+                    }
+                ]
+                if date.today().day >= 2:
+                    rows.append(
+                        {
+                            "doc_date": (month_start + timedelta(days=1)).isoformat(),
+                            "signed_amount_tmt": "150.00",
+                        }
+                    )
                 return {
-                    "rows": [
-                        {"doc_date": "2026-06-01", "signed_amount_tmt": "100.00"},
-                        {"doc_date": "2026-06-02", "signed_amount_tmt": "150.00"},
-                    ]
+                    "rows": rows,
                 }
 
             def get_products(self) -> list[dict[str, object]]:
@@ -521,13 +533,133 @@ class ClientCoreTests(unittest.TestCase):
         app = QApplication.instance() or QApplication([])
         window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
         try:
+            today = date.today()
+            month_start = today.replace(day=1)
+            expected_days = (today - month_start).days + 1
             self.assertEqual(window.dashboard_metric_values["sales_today"].text(), "14 320 TMT")
             self.assertEqual(window.dashboard_metric_values["receivable"].text(), "82 400 TMT")
             self.assertEqual(window.dashboard_metric_values["payable"].text(), "41 100 TMT")
             self.assertEqual(window.dashboard_metric_values["low_stock"].text(), "1")
-            self.assertEqual(len(window.dashboard_chart.points), 2)
+            self.assertEqual(len(window.dashboard_chart.points), expected_days)
+            self.assertEqual(window.dashboard_chart.points[0].date, month_start.isoformat())
+            self.assertEqual(window.dashboard_chart.points[0].net_amount_tmt, Decimal("100.00"))
+            self.assertIn(month_start.isoformat(), window.dashboard_chart.hover_text_for_point(0))
+            self.assertIn("Net sales: 100 TMT", window.dashboard_chart.hover_text_for_point(0))
+            if expected_days >= 3:
+                self.assertEqual(window.dashboard_chart.points[2].net_amount_tmt, Decimal("0"))
+                self.assertIn("Net sales: 0 TMT", window.dashboard_chart.hover_text_for_point(2))
             self.assertEqual(window.dashboard_recent_table.rowCount(), 2)
             self.assertIn("products below minimum stock: 1", window.dashboard_alert_label.text())
+        finally:
+            window.close()
+            app.processEvents()
+
+    def test_dashboard_uses_sales_report_chart_points_for_hover_offscreen(self) -> None:
+        """Server-provided chart points should drive chart values and hover text."""
+
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PyQt6.QtCore import QPoint
+        from PyQt6.QtWidgets import QApplication
+        from user_app.ui.main_window import MainWindow
+
+        today = date.today()
+        month_start = today.replace(day=1)
+        target_date = month_start + timedelta(days=min(2, today.day - 1))
+        target_iso = target_date.isoformat()
+
+        class FakeApiClient:
+            def __init__(self) -> None:
+                self.current_user = SimpleNamespace(
+                    full_name="Chart User",
+                    username="chart",
+                    role_name="Cashier",
+                    permissions=["sale.view", "reports.view"],
+                )
+
+            def get_status(self) -> dict[str, str]:
+                return {"status": "running"}
+
+            def get_dashboard_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                if filters and filters.get("date_from") == filters.get("date_to"):
+                    return {"net_sales_tmt": "80.00"}
+                return {"receivable_tmt": "0.00", "payable_tmt": "0.00", "open_shift_count": 1}
+
+            def get_sales_report(self, filters: dict[str, str] | None = None) -> dict[str, object]:
+                return {
+                    "chart_points": [
+                        {
+                            "date": target_iso,
+                            "sales_total_tmt": "100.00",
+                            "returns_total_tmt": "20.00",
+                            "net_amount_tmt": "80.00",
+                            "document_count": 2,
+                            "returns_count": 1,
+                            "sold_quantity": "3.0000",
+                            "returned_quantity": "1.0000",
+                            "cash_tmt": "30.00",
+                            "transfer_tmt": "50.00",
+                            "bonus_tmt": "0.00",
+                            "debt_tmt": "0.00",
+                        }
+                    ],
+                    "rows": [
+                        {"doc_date": target_iso, "signed_amount_tmt": "999.00"},
+                    ],
+                }
+
+            def get_products(self) -> list[dict[str, object]]:
+                return []
+
+            def get_stock_balances(self) -> list[dict[str, object]]:
+                return []
+
+            def get_sales(self) -> list[dict[str, object]]:
+                return []
+
+            def get_purchase_invoices(self) -> list[dict[str, object]]:
+                return []
+
+        app = QApplication.instance() or QApplication([])
+        window = MainWindow(FakeApiClient(), Translator("en"))  # type: ignore[arg-type]
+        try:
+            expected_days = (today - month_start).days + 1
+            self.assertEqual(len(window.dashboard_chart.points), expected_days)
+            point_index = next(
+                index
+                for index, point in enumerate(window.dashboard_chart.points)
+                if point.date == target_iso
+            )
+            point = window.dashboard_chart.points[point_index]
+            self.assertEqual(point.date, target_iso)
+            self.assertEqual(point.net_amount_tmt, Decimal("80.00"))
+            self.assertEqual(point.sales_total_tmt, Decimal("100.00"))
+            self.assertEqual(point.returns_total_tmt, Decimal("20.00"))
+            self.assertEqual(point.document_count, 2)
+            self.assertEqual(point.returns_count, 1)
+            hover_text = window.dashboard_chart.hover_text_for_point(point_index)
+            self.assertIn(target_iso, hover_text)
+            self.assertIn("Net sales: 80 TMT", hover_text)
+            self.assertIn("Documents: 2 Sales / 1 Returns", hover_text)
+            self.assertIn("Cash / Transfer: 30 TMT / 50 TMT", hover_text)
+            if expected_days > 1:
+                zero_index = next(
+                    index
+                    for index, point in enumerate(window.dashboard_chart.points)
+                    if point.date != target_iso
+                )
+                self.assertEqual(window.dashboard_chart.points[zero_index].net_amount_tmt, Decimal("0"))
+                self.assertIn("Net sales: 0 TMT", window.dashboard_chart.hover_text_for_point(zero_index))
+
+            window.dashboard_chart.resize(720, 320)
+            _rect, plot, _baseline, coordinates = window.dashboard_chart._chart_geometry()
+            hover_index = window.dashboard_chart._nearest_point_index(
+                QPoint(plot.center().x(), plot.top() + 4),
+                plot,
+                coordinates,
+            )
+            self.assertIsNotNone(hover_index)
+            self.assertGreater(window.dashboard_chart._hover_panel_size(point_index, max_width=500).height(), 146)
+            self.assertGreaterEqual(window.dashboard_chart._hover_panel_size(point_index, max_width=500).width(), 320)
         finally:
             window.close()
             app.processEvents()

@@ -948,6 +948,14 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(sales_report.json()["data"]["debt_tmt"], "20.00")
         self.assertEqual(len(sales_report.json()["data"]["rows"]), 1)
         self.assertEqual(sales_report.json()["data"]["rows"][0]["signed_amount_tmt"], "30.00")
+        chart_points = sales_report.json()["data"]["chart_points"]
+        self.assertEqual(len(chart_points), 1)
+        self.assertEqual(chart_points[0]["sales_total_tmt"], "30.00")
+        self.assertEqual(chart_points[0]["returns_total_tmt"], "0.00")
+        self.assertEqual(chart_points[0]["net_amount_tmt"], "30.00")
+        self.assertEqual(chart_points[0]["document_count"], 1)
+        self.assertEqual(chart_points[0]["cash_tmt"], "10.00")
+        self.assertEqual(chart_points[0]["debt_tmt"], "20.00")
 
         filtered_sales = requests.get(
             f"{self.base_url}/reports/sales",
@@ -1334,6 +1342,14 @@ class ApiV1ContractTests(unittest.TestCase):
         self.assertEqual(sales_report.status_code, 200)
         self.assertEqual(sales_report.json()["data"]["returns_amount_tmt"], "10.00")
         self.assertEqual(sales_report.json()["data"]["net_amount_tmt"], "10.00")
+        chart_points = sales_report.json()["data"]["chart_points"]
+        self.assertEqual(len(chart_points), 1)
+        self.assertEqual(chart_points[0]["sales_total_tmt"], "20.00")
+        self.assertEqual(chart_points[0]["returns_total_tmt"], "10.00")
+        self.assertEqual(chart_points[0]["net_amount_tmt"], "10.00")
+        self.assertEqual(chart_points[0]["document_count"], 1)
+        self.assertEqual(chart_points[0]["returns_count"], 1)
+        self.assertEqual(chart_points[0]["debt_tmt"], "10.00")
 
         cancelled_return = requests.post(f"{self.base_url}/sale-returns/{sale_return_id}/cancel", headers=headers, timeout=2)
         self.assertEqual(cancelled_return.status_code, 200)
