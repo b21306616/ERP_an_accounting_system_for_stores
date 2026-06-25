@@ -546,7 +546,7 @@ class MainWindow(QWidget):
         self.hardware = HardwareSimulator()
         self.cashier_cart: list[ApiRow] = []
         self.setObjectName("MainWindow")
-        self.setMinimumSize(980, 620)
+        self.setMinimumSize(1095, 620)
         base_font = QFont("Segoe UI")
         base_font.setPixelSize(14)
         self.setFont(base_font)
