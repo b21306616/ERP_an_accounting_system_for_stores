@@ -94,6 +94,8 @@ class SetupWindow(QWidget):
         self.back_button = QPushButton()
         self.next_button = QPushButton()
         self.submit_button = QPushButton()
+        self.header_title_block = QWidget()
+        self.header_language_block = QWidget()
 
         self._build_ui()
         self._connect_signals()
@@ -107,6 +109,9 @@ class SetupWindow(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
+
+        self.header_bar = self._build_header()
+        main_layout.addWidget(self.header_bar, 0)
 
         scroll_area = QScrollArea()
         scroll_area.setObjectName("SetupScrollArea")
@@ -134,8 +139,6 @@ class SetupWindow(QWidget):
         content_layout.setSpacing(18)
         content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        content_layout.addWidget(self._build_header())
-        content_layout.addWidget(self._build_setup_card())
         content_layout.addWidget(self._build_stepper())
 
         self.wizard_stack = QStackedWidget()
@@ -207,13 +210,11 @@ class SetupWindow(QWidget):
 
     def _build_header(self) -> QWidget:
         header = QWidget()
-        header.setObjectName("SetupHeader")
-        layout = QGridLayout(header)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(16)
-        layout.setVerticalSpacing(4)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 0)
+        header.setObjectName("SetupHeaderBar")
+        self.header_layout = QGridLayout(header)
+        self.header_layout.setContentsMargins(24, 14, 24, 14)
+        self.header_layout.setHorizontalSpacing(18)
+        self.header_layout.setVerticalSpacing(10)
 
         self.title_label.setObjectName("SetupTitle")
         self.subtitle_label.setObjectName("SetupSubtitle")
@@ -221,13 +222,26 @@ class SetupWindow(QWidget):
         self.language_combo.setObjectName("LanguageCombo")
         self.language_combo.setMinimumWidth(150)
 
-        layout.addWidget(self.title_label, 0, 0)
-        layout.addWidget(self.subtitle_label, 1, 0)
-        layout.addWidget(self.language_label, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
-        layout.addWidget(self.language_combo, 1, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        self.header_title_block.setObjectName("HeaderTitleBlock")
+        title_layout = QVBoxLayout(self.header_title_block)
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(2)
+        title_layout.addWidget(self.title_label)
+        title_layout.addWidget(self.subtitle_label)
+
+        self.header_language_block.setObjectName("HeaderLanguageBlock")
+        language_layout = QGridLayout(self.header_language_block)
+        language_layout.setContentsMargins(0, 0, 0, 0)
+        language_layout.setHorizontalSpacing(8)
+        language_layout.setVerticalSpacing(4)
+        language_layout.addWidget(self.language_label, 0, 0, alignment=Qt.AlignmentFlag.AlignRight)
+        language_layout.addWidget(self.language_combo, 1, 0)
+
+        self._build_setup_card()
+        self._reflow_header(compact=False)
         return header
 
-    def _build_setup_card(self) -> QFrame:
+    def _build_setup_card(self) -> None:
         card = QFrame()
         card.setObjectName("ConnectionCard")
         card.setProperty("serviceState", "neutral")
@@ -247,7 +261,7 @@ class SetupWindow(QWidget):
         outer_layout.addWidget(content, 1)
 
         card_layout = QHBoxLayout(content)
-        card_layout.setContentsMargins(20, 18, 20, 18)
+        card_layout.setContentsMargins(14, 10, 14, 10)
         card_layout.setSpacing(14)
 
         self.card_title_label = QLabel()
@@ -259,7 +273,6 @@ class SetupWindow(QWidget):
         card_layout.addWidget(self.card_title_label)
         card_layout.addStretch(1)
         card_layout.addWidget(self.setup_status_label)
-        return card
 
     def _build_stepper(self) -> QWidget:
         stepper = QWidget()
@@ -767,10 +780,11 @@ class SetupWindow(QWidget):
         return config, current_password or None, new_password
 
     def _apply_responsive_layout(self) -> None:
-        """Reflow footer controls and keep content readable across sizes."""
+        """Reflow fixed shell controls and keep content readable across sizes."""
 
         compact = self.width() < self.COMPACT_WIDTH
         self._update_content_width(compact)
+        self._reflow_header(compact)
         self._apply_footer_button_sizing(compact)
         if compact == self._is_compact_layout:
             return
@@ -794,6 +808,58 @@ class SetupWindow(QWidget):
             )
             self.footer_layout.setColumnStretch(0, 1)
             self.footer_layout.setColumnStretch(1, 0)
+
+    def _reflow_header(self, compact: bool) -> None:
+        """Keep the fixed header full-width and readable at each window size."""
+
+        for widget in (self.header_title_block, self.header_language_block, self.connection_card):
+            self.header_layout.removeWidget(widget)
+
+        if compact:
+            self.header_layout.addWidget(self.header_title_block, 0, 0, 1, 2)
+            self.header_layout.addWidget(
+                self.header_language_block,
+                1,
+                0,
+                alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            )
+            self.header_layout.addWidget(
+                self.connection_card,
+                1,
+                1,
+                alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            )
+            self.header_layout.setColumnStretch(0, 1)
+            self.header_layout.setColumnStretch(1, 0)
+            self.connection_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            self.connection_card.setMinimumWidth(210)
+            self.connection_card.setMaximumWidth(280)
+            return
+
+        self.header_layout.addWidget(
+            self.header_title_block,
+            0,
+            0,
+            alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.header_layout.addWidget(
+            self.header_language_block,
+            0,
+            1,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.header_layout.addWidget(
+            self.connection_card,
+            0,
+            2,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+        self.header_layout.setColumnStretch(0, 1)
+        self.header_layout.setColumnStretch(1, 0)
+        self.header_layout.setColumnStretch(2, 0)
+        self.connection_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.connection_card.setMinimumWidth(240)
+        self.connection_card.setMaximumWidth(320)
 
     def _apply_footer_button_sizing(self, compact: bool) -> None:
         """Keep wizard buttons easy to hit without wasting wide-window space."""
@@ -842,6 +908,10 @@ class SetupWindow(QWidget):
             }
             QWidget#SetupScrollHost {
                 background: #f3f6fb;
+            }
+            QWidget#SetupHeaderBar {
+                background: #ffffff;
+                border-bottom: 1px solid #dce4ef;
             }
             QLabel#SetupTitle {
                 color: #111827;
