@@ -39,6 +39,13 @@ from server_app.gui.i18n import LANGUAGE_OPTIONS, get_language, set_language, tr
 from server_app.service_control import ServiceStartType, ServiceStatus
 
 
+class NonScrollableComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel scroll events when hovered to prevent accidental changes."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 class SummaryWindow(QWidget):
     """Show connection details, editable setup values, and service controls."""
 
@@ -72,7 +79,7 @@ class SummaryWindow(QWidget):
         self.title_label = QLabel()
         self.subtitle_label = QLabel()
         self.language_label = QLabel()
-        self.language_combo = QComboBox()
+        self.language_combo = NonScrollableComboBox()
         self.status_label = QLabel()
         self.base_url_label = QLabel()
         self.docs_url_label = QLabel()

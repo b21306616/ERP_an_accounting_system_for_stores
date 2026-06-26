@@ -36,14 +36,25 @@ from server_app.gui.i18n import (
 )
 
 
+class NonScrollableComboBox(QComboBox):
+    """QComboBox that ignores mouse wheel scroll events when hovered to prevent accidental changes."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 class SetupWindow(QWidget):
     """Collect all first-run settings needed to start the server."""
 
     setup_requested = pyqtSignal(object, object, str)
 
     COMPACT_WIDTH = 760
-    MAX_CONTENT_WIDTH = 880
+    MAX_CONTENT_WIDTH = 1120
     COMPACT_CONTENT_WIDTH = 620
+    DESKTOP_STEP_MIN_HEIGHT = 58
+    COMPACT_STEP_MIN_HEIGHT = 40
+    DESKTOP_PAGE_MARGIN = 36
+    COMPACT_PAGE_MARGIN = 24
     STEP_COUNT = 3
 
     def __init__(self, error_message: str | None = None) -> None:
@@ -62,6 +73,7 @@ class SetupWindow(QWidget):
         self.field_labels: dict[str, QLabel] = {}
         self.validation_labels: dict[str, QLabel] = {}
         self.step_labels: list[QLabel] = []
+        self.page_layouts: list[QGridLayout] = []
 
         self.server_edit = QLineEdit(self.default_config.database.server)
         self.database_edit = QLineEdit(self.default_config.database.database)
@@ -88,7 +100,7 @@ class SetupWindow(QWidget):
         self.title_label = QLabel()
         self.subtitle_label = QLabel()
         self.language_label = QLabel()
-        self.language_combo = QComboBox()
+        self.language_combo = NonScrollableComboBox()
         self.setup_status_label = QLabel()
         self.message_label = QLabel(error_message or "")
         self.back_button = QPushButton()
@@ -134,12 +146,12 @@ class SetupWindow(QWidget):
         scroll_layout.addWidget(self.content_widget)
         scroll_layout.addStretch(1)
 
-        content_layout = QVBoxLayout(self.content_widget)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(18)
-        content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(0, 0, 0, 0)
+        self.content_layout.setSpacing(18)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        content_layout.addWidget(self._build_stepper())
+        self.content_layout.addWidget(self._build_stepper())
 
         self.wizard_stack = QStackedWidget()
         self.wizard_stack.setObjectName("SetupWizardStack")
@@ -149,8 +161,8 @@ class SetupWindow(QWidget):
         self.wizard_stack.addWidget(self.database_group)
         self.wizard_stack.addWidget(self.api_group)
         self.wizard_stack.addWidget(self.super_admin_group)
-        content_layout.addWidget(self.wizard_stack)
-        content_layout.addStretch(1)
+        self.content_layout.addWidget(self.wizard_stack)
+        self.content_layout.addStretch(1)
 
         footer = QWidget()
         footer.setObjectName("SetupFooter")
@@ -211,7 +223,18 @@ class SetupWindow(QWidget):
     def _build_header(self) -> QWidget:
         header = QWidget()
         header.setObjectName("SetupHeaderBar")
-        self.header_layout = QGridLayout(header)
+
+        # Top-level vertical layout for the entire header bar
+        header_main_layout = QVBoxLayout(header)
+        header_main_layout.setContentsMargins(0, 0, 0, 0)
+        header_main_layout.setSpacing(0)
+
+        # Container for top-row header widgets (title, language chooser)
+        self.header_top_widget = QWidget()
+        self.header_top_widget.setObjectName("SetupHeaderTop")
+        header_main_layout.addWidget(self.header_top_widget)
+
+        self.header_layout = QGridLayout(self.header_top_widget)
         self.header_layout.setContentsMargins(24, 14, 24, 14)
         self.header_layout.setHorizontalSpacing(18)
         self.header_layout.setVerticalSpacing(10)
@@ -238,6 +261,9 @@ class SetupWindow(QWidget):
         language_layout.addWidget(self.language_combo, 1, 0)
 
         self._build_setup_card()
+        # Add the connection card directly to the vertical layout so it fills the bottom full-width
+        header_main_layout.addWidget(self.connection_card)
+
         self._reflow_header(compact=False)
         return header
 
@@ -261,7 +287,7 @@ class SetupWindow(QWidget):
         outer_layout.addWidget(content, 1)
 
         card_layout = QHBoxLayout(content)
-        card_layout.setContentsMargins(14, 10, 14, 10)
+        card_layout.setContentsMargins(20, 10, 24, 10)
         card_layout.setSpacing(14)
 
         self.card_title_label = QLabel()
@@ -277,9 +303,9 @@ class SetupWindow(QWidget):
     def _build_stepper(self) -> QWidget:
         stepper = QWidget()
         stepper.setObjectName("SetupStepper")
-        layout = QHBoxLayout(stepper)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        self.stepper_layout = QHBoxLayout(stepper)
+        self.stepper_layout.setContentsMargins(0, 0, 0, 0)
+        self.stepper_layout.setSpacing(10)
         for _index in range(self.STEP_COUNT):
             label = QLabel()
             label.setObjectName("WizardStep")
@@ -288,7 +314,7 @@ class SetupWindow(QWidget):
             label.setWordWrap(True)
             label.setMinimumHeight(40)
             self.step_labels.append(label)
-            layout.addWidget(label, 1)
+            self.stepper_layout.addWidget(label, 1)
         return stepper
 
     def _build_page_shell(self, title_key: str, help_key: str) -> tuple[QFrame, QGridLayout]:
@@ -303,6 +329,7 @@ class SetupWindow(QWidget):
         layout.setVerticalSpacing(8)
         layout.setColumnStretch(0, 0)
         layout.setColumnStretch(1, 1)
+        self.page_layouts.append(layout)
 
         title = QLabel()
         title.setObjectName("PageTitle")
@@ -785,6 +812,7 @@ class SetupWindow(QWidget):
         compact = self.width() < self.COMPACT_WIDTH
         self._update_content_width(compact)
         self._reflow_header(compact)
+        self._apply_body_scale(compact)
         self._apply_footer_button_sizing(compact)
         if compact == self._is_compact_layout:
             return
@@ -812,28 +840,22 @@ class SetupWindow(QWidget):
     def _reflow_header(self, compact: bool) -> None:
         """Keep the fixed header full-width and readable at each window size."""
 
-        for widget in (self.header_title_block, self.header_language_block, self.connection_card):
+        for widget in (self.header_title_block, self.header_language_block):
             self.header_layout.removeWidget(widget)
 
         if compact:
-            self.header_layout.addWidget(self.header_title_block, 0, 0, 1, 2)
+            self.header_layout.addWidget(self.header_title_block, 0, 0, 1, 1)
             self.header_layout.addWidget(
                 self.header_language_block,
                 1,
                 0,
                 alignment=Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             )
-            self.header_layout.addWidget(
-                self.connection_card,
-                1,
-                1,
-                alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            )
             self.header_layout.setColumnStretch(0, 1)
             self.header_layout.setColumnStretch(1, 0)
-            self.connection_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            self.connection_card.setMinimumWidth(210)
-            self.connection_card.setMaximumWidth(280)
+            self.connection_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            self.connection_card.setMinimumWidth(0)
+            self.connection_card.setMaximumWidth(16777215)
             return
 
         self.header_layout.addWidget(
@@ -848,18 +870,33 @@ class SetupWindow(QWidget):
             1,
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
-        self.header_layout.addWidget(
-            self.connection_card,
-            0,
-            2,
-            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-        )
         self.header_layout.setColumnStretch(0, 1)
         self.header_layout.setColumnStretch(1, 0)
-        self.header_layout.setColumnStretch(2, 0)
-        self.connection_card.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.connection_card.setMinimumWidth(240)
-        self.connection_card.setMaximumWidth(320)
+        self.connection_card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.connection_card.setMinimumWidth(0)
+        self.connection_card.setMaximumWidth(16777215)
+
+    def _apply_body_scale(self, compact: bool) -> None:
+        """Scale wizard body density for compact versus desktop layouts."""
+
+        step_height = self.COMPACT_STEP_MIN_HEIGHT if compact else self.DESKTOP_STEP_MIN_HEIGHT
+        page_margin = self.COMPACT_PAGE_MARGIN if compact else self.DESKTOP_PAGE_MARGIN
+        row_label_width = 160 if compact else 190
+        input_height = 36 if compact else 42
+        self.content_layout.setSpacing(18 if compact else 24)
+        self.stepper_layout.setSpacing(10 if compact else 16)
+
+        for label in self.step_labels:
+            label.setMinimumHeight(step_height)
+        for layout in self.page_layouts:
+            layout.setContentsMargins(page_margin, page_margin, page_margin, page_margin)
+            layout.setHorizontalSpacing(18 if compact else 24)
+            layout.setVerticalSpacing(8 if compact else 12)
+        for label in self.field_labels.values():
+            label.setMinimumWidth(row_label_width)
+        for widget in self._input_widgets():
+            if isinstance(widget, (QLineEdit, QComboBox, QSpinBox)):
+                widget.setMinimumHeight(input_height)
 
     def _apply_footer_button_sizing(self, compact: bool) -> None:
         """Keep wizard buttons easy to hit without wasting wide-window space."""
@@ -900,7 +937,7 @@ class SetupWindow(QWidget):
                 background: #f3f6fb;
                 color: #182033;
                 font-family: "Segoe UI", "Arial", sans-serif;
-                font-size: 10.5pt;
+                font-size: 11pt;
             }
             QScrollArea#SetupScrollArea {
                 background: transparent;
@@ -935,23 +972,23 @@ class SetupWindow(QWidget):
             }
             QLabel#PageTitle {
                 color: #111827;
-                font-size: 20px;
+                font-size: 24px;
                 font-weight: 700;
             }
             QLabel#PageHelp {
                 color: #64748b;
-                font-size: 12px;
+                font-size: 14px;
                 font-weight: 500;
-                margin-bottom: 10px;
+                margin-bottom: 14px;
             }
             QLabel#WizardStep {
                 background: #ffffff;
                 border: 1px solid #dce4ef;
                 border-radius: 8px;
                 color: #64748b;
-                font-size: 11px;
+                font-size: 13px;
                 font-weight: 700;
-                padding: 7px 8px;
+                padding: 10px 12px;
             }
             QLabel#WizardStep[stepState="current"] {
                 background: #eff6ff;
@@ -965,28 +1002,28 @@ class SetupWindow(QWidget):
             }
             QLabel#RowTitle {
                 color: #475569;
-                font-size: 12px;
+                font-size: 13px;
                 font-weight: 700;
                 min-width: 160px;
-                padding-top: 7px;
+                padding-top: 9px;
             }
             QLabel#ValidationMessage {
                 color: #b42318;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 600;
-                padding-bottom: 4px;
+                padding-bottom: 6px;
             }
             QLabel#PortHint {
                 color: #94a3b8;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 500;
                 padding-top: 2px;
             }
             QLabel#PortStatus {
                 border-radius: 6px;
-                font-size: 11px;
+                font-size: 12px;
                 font-weight: 700;
-                padding: 7px 10px;
+                padding: 8px 11px;
             }
             QLabel#PortStatus[messageState="success"] {
                 background: #ecfdf3;
@@ -1017,16 +1054,21 @@ class SetupWindow(QWidget):
             }
             QFrame#ConnectionCard {
                 background: #ffffff;
-                border: 1px solid #dce4ef;
-                border-radius: 8px;
+                border-top: 1px solid #dce4ef;
+                border-bottom: 1px solid #dce4ef;
+                border-left: none;
+                border-right: none;
+                border-radius: 0px;
             }
             QFrame#ConnectionCard[serviceState="neutral"] {
                 background: #f8fafc;
-                border-color: #cbd5e1;
+                border-top-color: #cbd5e1;
+                border-bottom-color: #cbd5e1;
             }
             QFrame#ConnectionCard[serviceState="error"] {
                 background: #fef2f2;
-                border-color: #fee2e2;
+                border-top-color: #fee2e2;
+                border-bottom-color: #fee2e2;
             }
             QWidget#ConnectionCardContent {
                 background: transparent;
@@ -1034,8 +1076,8 @@ class SetupWindow(QWidget):
             QFrame#ConnectionAccent {
                 background-color: #2563eb;
                 border: none;
-                border-top-left-radius: 8px;
-                border-bottom-left-radius: 8px;
+                border-top-left-radius: 0px;
+                border-bottom-left-radius: 0px;
             }
             QFrame#ConnectionCard[serviceState="error"] QFrame#ConnectionAccent {
                 background-color: #dc2626;
@@ -1056,8 +1098,8 @@ class SetupWindow(QWidget):
                 border: 1px solid #cbd5e1;
                 border-radius: 6px;
                 color: #111827;
-                min-height: 36px;
-                padding: 5px 9px;
+                min-height: 38px;
+                padding: 6px 11px;
                 selection-background-color: #2563eb;
             }
             QLineEdit:focus,

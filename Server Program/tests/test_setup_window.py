@@ -87,11 +87,15 @@ class SetupWindowTests(unittest.TestCase):
         window.resize(900, 700)
         self.app.processEvents()
         self.assertFalse(window._is_compact_layout)
+        self.assertEqual(window.MAX_CONTENT_WIDTH, 1120)
         self.assertEqual(window.header_bar.width(), window.width())
         self.assertGreater(window.header_bar.width(), window.content_widget.width())
         self.assertIs(window.header_bar.parent(), window)
         self.assertIs(window.connection_card.parent(), window.header_bar)
         self.assertLessEqual(window.content_widget.width(), window.MAX_CONTENT_WIDTH)
+        self.assertTrue(
+            all(label.minimumHeight() == window.DESKTOP_STEP_MIN_HEIGHT for label in window.step_labels)
+        )
         self.assertIs(window.wizard_stack.currentWidget(), window.database_group)
 
         window.resize(520, 560)
@@ -100,8 +104,12 @@ class SetupWindowTests(unittest.TestCase):
         self.assertEqual(window.header_bar.width(), window.width())
         self.assertIs(window.header_layout.itemAtPosition(0, 0).widget(), window.header_title_block)
         self.assertIs(window.header_layout.itemAtPosition(1, 0).widget(), window.header_language_block)
-        self.assertIs(window.header_layout.itemAtPosition(1, 1).widget(), window.connection_card)
+        self.assertIs(window.connection_card.parent(), window.header_bar)
+        self.assertTrue(window.connection_card.isVisible())
         self.assertLessEqual(window.content_widget.width(), window.COMPACT_CONTENT_WIDTH)
+        self.assertTrue(
+            all(label.minimumHeight() == window.COMPACT_STEP_MIN_HEIGHT for label in window.step_labels)
+        )
         self.assertTrue(window.message_label.isVisible())
 
     def test_fixed_header_contains_required_controls(self) -> None:
@@ -161,6 +169,7 @@ class SetupWindowTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertFalse(window._is_compact_layout)
+        self.assertEqual(window.content_widget.width(), window.MAX_CONTENT_WIDTH)
         self.assertEqual(window.next_button.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed)
 
     def test_validation_rejects_invalid_database_name(self) -> None:
