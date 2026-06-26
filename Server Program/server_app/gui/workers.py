@@ -8,6 +8,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from server_app.core.config import AppConfig
 from server_app.db.bootstrap import bootstrap_database
+from server_app.gui.i18n import tr
 
 
 class DatabaseStartupWorker(QThread):
@@ -32,7 +33,7 @@ class DatabaseStartupWorker(QThread):
 
         try:
             if self.new_super_admin_password is None:
-                raise ValueError("New Super Admin password is required for first setup.")
+                raise ValueError(tr("setup.required", field=tr("field.new_password")))
 
             bootstrap_database(
                 self.config,

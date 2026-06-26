@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox
 from server_app.core.config import AppConfig, ConfigManager
 from server_app.core.constants import APP_NAME
 from server_app.core.network import check_tcp_port, is_port_bind_error_message
+from server_app.gui.i18n import format_port_check_message, tr
 from server_app.gui.setup_window import SetupWindow
 from server_app.gui.summary_window import SummaryWindow
 from server_app.gui.workers import DatabaseStartupWorker, ServiceActionWorker
@@ -59,7 +60,7 @@ class ApplicationCoordinator(QObject):
             self.config_manager.migrate_legacy_if_needed()
             config = self.config_manager.load()
         except Exception as exc:
-            self.show_setup(f"Could not load saved config: {exc}")
+            self.show_setup(tr("coordinator.load_config_failed", message=exc))
             return
 
         self.show_summary(config)
@@ -112,7 +113,7 @@ class ApplicationCoordinator(QObject):
 
         port_result = check_tcp_port(config.api.host, config.api.port)
         if not port_result.available:
-            self._show_setup_port_error(port_result.full_message)
+            self._show_setup_port_error(format_port_check_message(port_result, include_diagnostic=True))
             return
 
         self.pending_config = config
@@ -136,8 +137,10 @@ class ApplicationCoordinator(QObject):
         port_result = check_tcp_port(config.api.host, config.api.port)
         if not port_result.available:
             self._show_setup_port_error(
-                "Database is ready, but the API port is no longer available. "
-                f"{port_result.full_message}"
+                tr(
+                    "coordinator.port_no_longer_available",
+                    message=format_port_check_message(port_result, include_diagnostic=True),
+                )
             )
             return
 
@@ -145,16 +148,13 @@ class ApplicationCoordinator(QObject):
             self.config_manager.save(config)
         except Exception as exc:
             if self.setup_window is not None:
-                self.setup_window.show_error(f"Database is ready, but config could not be saved: {exc}")
+                self.setup_window.show_error(tr("coordinator.config_save_failed", message=exc))
             else:
-                QMessageBox.critical(None, APP_NAME, f"Config could not be saved: {exc}")
+                QMessageBox.critical(None, APP_NAME, tr("coordinator.config_save_failed_short", message=exc))
             return
 
         if self.setup_window is not None:
-            self.setup_window.show_message(
-                "Database is ready. Installing and starting Windows service...",
-                "info",
-            )
+            self.setup_window.show_message(tr("setup.db_ready"), "info")
 
         self._run_service_action(
             lambda: self._start_service_for_config(config),
@@ -170,7 +170,7 @@ class ApplicationCoordinator(QObject):
             return
 
         QMessageBox.critical(None, APP_NAME, message)
-        self.show_setup(f"Saved configuration could not start: {message}")
+        self.show_setup(tr("coordinator.saved_config_failed", message=message))
 
     def handle_service_started_from_setup(self, config: AppConfig) -> None:
         """Close setup and show the running service window."""
@@ -194,16 +194,14 @@ class ApplicationCoordinator(QObject):
             port_result.is_bind_problem or is_port_bind_error_message(message)
         )
         if is_bind_failure and port_result is not None:
-            detail = (
-                "Database and config were saved, but the API bind settings are not usable. "
-                f"{port_result.full_message if port_result.is_bind_problem else message} "
-                "Choose a different local host/IP or port and run setup again."
+            bind_message = (
+                format_port_check_message(port_result, include_diagnostic=True)
+                if port_result.is_bind_problem
+                else message
             )
+            detail = tr("coordinator.bind_failed_after_save", message=bind_message)
         else:
-            detail = (
-                "Database and config were saved, but the API did not start. "
-                f"{message}"
-            )
+            detail = tr("coordinator.api_failed_after_save", message=message)
 
         if self.setup_window is not None:
             if is_bind_failure:
@@ -275,7 +273,7 @@ class ApplicationCoordinator(QObject):
         config = self.summary_window.config
         port_result = check_tcp_port(config.api.host, config.api.port)
         if not port_result.available:
-            self.summary_window.show_update_error(port_result.full_message)
+            self.summary_window.show_update_error(format_port_check_message(port_result, include_diagnostic=True))
             return
 
         self.summary_window.mark_starting()
@@ -309,7 +307,9 @@ class ApplicationCoordinator(QObject):
         if api_changed and not was_running:
             port_result = check_tcp_port(config.api.host, config.api.port)
             if not port_result.available:
-                self.summary_window.show_update_error(port_result.full_message)
+                self.summary_window.show_update_error(
+                    format_port_check_message(port_result, include_diagnostic=True)
+                )
                 return
 
         self.summary_window.set_updates_enabled(False)
@@ -317,15 +317,12 @@ class ApplicationCoordinator(QObject):
         try:
             self.config_manager.save(config)
         except Exception as exc:
-            self.summary_window.show_update_error(f"Configuration could not be saved: {exc}")
+            self.summary_window.show_update_error(tr("coordinator.config_save_update_failed", message=exc))
             return
 
         self.summary_window.set_config(config)
         if was_running:
-            self.summary_window.show_update_message(
-                "Configuration updated. Stopping Windows service before restart...",
-                "info",
-            )
+            self.summary_window.show_update_message(tr("summary.update_stopping"), "info")
             self.summary_window.mark_stopping()
             self._run_service_action(
                 self.service_controller.stop_and_disable,
@@ -334,7 +331,7 @@ class ApplicationCoordinator(QObject):
             )
             return
 
-        self.summary_window.show_update_message("Configuration updated.", "success")
+        self.summary_window.show_update_message(tr("summary.update_saved"), "success")
         self.summary_window.set_updates_enabled(True)
 
     def handle_summary_password_update_requested(self, current_password: str, new_password: str) -> None:
@@ -343,12 +340,12 @@ class ApplicationCoordinator(QObject):
         if self.summary_window is None:
             return
         if self.startup_worker is not None and self.startup_worker.isRunning():
-            self.summary_window.show_update_error("Another database update is already running.")
+            self.summary_window.show_update_error(tr("coordinator.another_update_running"))
             return
 
         was_running = self.summary_window.is_running
         self.summary_window.set_updates_enabled(False)
-        self.summary_window.show_update_message("Updating Super Admin password...", "info")
+        self.summary_window.show_update_message(tr("summary.password_updating"), "info")
         self.startup_worker = DatabaseStartupWorker(
             self.summary_window.config,
             current_super_admin_password=current_password,
@@ -368,10 +365,7 @@ class ApplicationCoordinator(QObject):
             return
 
         if was_running:
-            self.summary_window.show_update_message(
-                "Super Admin password updated. Stopping Windows service before restart...",
-                "info",
-            )
+            self.summary_window.show_update_message(tr("summary.password_stopping"), "info")
             self.summary_window.mark_stopping()
             self._run_service_action(
                 self.service_controller.stop_and_disable,
@@ -380,34 +374,30 @@ class ApplicationCoordinator(QObject):
             )
             return
 
-        self.summary_window.show_update_message("Super Admin password updated.", "success")
+        self.summary_window.show_update_message(tr("summary.password_updated"), "success")
         self.summary_window.set_updates_enabled(True)
 
     def _handle_summary_password_update_failed(self, message: str) -> None:
         """Show a Super Admin password update failure."""
 
         if self.summary_window is not None:
-            self.summary_window.show_update_error(f"Super Admin password could not be updated: {message}")
+            self.summary_window.show_update_error(tr("summary.password_failed", message=message))
 
     def _handle_summary_update_stopped(self) -> None:
         """Update the summary after an edit forces the service to stop."""
 
         if self.summary_window is not None:
             self.summary_window.mark_stopped()
-            self.summary_window.show_update_message(
-                "Update saved. Use Start Connection to run with the latest settings.",
-                "success",
-            )
+            self.summary_window.show_update_message(tr("summary.update_stopped"), "success")
             self.summary_window.set_updates_enabled(True)
 
     def _handle_summary_update_stop_failed(self, message: str) -> None:
         """Show a failure to stop the service after a successful edit."""
 
         if self.summary_window is not None:
-            self.summary_window.mark_error(f"Service stop failed: {message}")
+            self.summary_window.mark_error(tr("summary.service_stop_failed_status", message=message))
             self.summary_window.show_update_error(
-                "Update was saved, but the Windows service could not be stopped. "
-                f"{message}"
+                tr("summary.service_stop_failed", message=message)
             )
 
     def _mark_service_running(self) -> None:
@@ -421,7 +411,7 @@ class ApplicationCoordinator(QObject):
 
         port_result = check_tcp_port(config.api.host, config.api.port)
         if not port_result.available:
-            raise RuntimeError(port_result.full_message)
+            raise RuntimeError(format_port_check_message(port_result, include_diagnostic=True))
 
         self.service_controller.ensure_installed()
         grant_windows_service_database_access(config)

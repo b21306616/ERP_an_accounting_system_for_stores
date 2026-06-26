@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QSizePolicy
 
 from server_app.core.constants import DEFAULT_ODBC_DRIVER
 from server_app.core.network import PortCheckResult, PortCheckStatus
+from server_app.gui.i18n import format_port_check_message, set_language
 from server_app.gui.setup_window import SetupWindow
 
 
@@ -35,6 +36,9 @@ class SetupWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        set_language("en", persist=False)
 
     def create_window(self, error_message: str | None = None) -> SetupWindow:
         with patch("server_app.gui.setup_window.pyodbc.drivers", return_value=[DEFAULT_ODBC_DRIVER]):
@@ -83,17 +87,51 @@ class SetupWindowTests(unittest.TestCase):
         window.resize(900, 700)
         self.app.processEvents()
         self.assertFalse(window._is_compact_layout)
-        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.database_group)
-        self.assertIs(window.sections_layout.itemAtPosition(0, 1).widget(), window.api_group)
-        self.assertIs(window.sections_layout.itemAtPosition(1, 1).widget(), window.super_admin_group)
+        self.assertLessEqual(window.content_widget.width(), window.MAX_CONTENT_WIDTH)
+        self.assertIs(window.wizard_stack.currentWidget(), window.database_group)
 
         window.resize(520, 560)
         self.app.processEvents()
         self.assertTrue(window._is_compact_layout)
-        self.assertIs(window.sections_layout.itemAtPosition(0, 0).widget(), window.database_group)
-        self.assertIs(window.sections_layout.itemAtPosition(1, 0).widget(), window.api_group)
-        self.assertIs(window.sections_layout.itemAtPosition(2, 0).widget(), window.super_admin_group)
+        self.assertLessEqual(window.content_widget.width(), window.COMPACT_CONTENT_WIDTH)
         self.assertTrue(window.message_label.isVisible())
+
+    def test_wizard_navigation_and_live_validation(self) -> None:
+        window = self.create_window()
+
+        window.show()
+        self.app.processEvents()
+
+        self.assertEqual(window.wizard_stack.currentIndex(), 0)
+        self.assertTrue(window.next_button.isEnabled())
+        self.assertFalse(window.back_button.isVisible())
+
+        window._on_next()
+        self.assertEqual(window.wizard_stack.currentIndex(), 1)
+        self.assertTrue(window.back_button.isVisible())
+
+        unavailable = make_port_result(
+            PortCheckStatus.IN_USE,
+            "Port 8000 is already in use on 0.0.0.0.",
+        )
+        with patch("server_app.gui.setup_window.check_tcp_port", return_value=unavailable):
+            window._on_next()
+        self.assertEqual(window.wizard_stack.currentIndex(), 1)
+        self.assertFalse(window.next_button.isEnabled())
+
+        available = make_port_result(
+            PortCheckStatus.AVAILABLE,
+            "Port 8000 is available on 0.0.0.0.",
+        )
+        with patch("server_app.gui.setup_window.check_tcp_port", return_value=available):
+            window._update_port_status()
+            window._on_next()
+        self.assertEqual(window.wizard_stack.currentIndex(), 2)
+        self.assertFalse(window.submit_button.isEnabled())
+
+        window.new_password_edit.setText("secret123")
+        window.confirm_password_edit.setText("secret123")
+        self.assertTrue(window.submit_button.isEnabled())
 
     def test_primary_button_stays_content_sized_on_wide_windows(self) -> None:
         window = self.create_window()
@@ -103,14 +141,7 @@ class SetupWindowTests(unittest.TestCase):
         self.app.processEvents()
 
         self.assertFalse(window._is_compact_layout)
-        self.assertEqual(
-            window.submit_button.sizePolicy().horizontalPolicy(),
-            QSizePolicy.Policy.Fixed,
-        )
-        self.assertLessEqual(
-            window.submit_button.width(),
-            window.submit_button.sizeHint().width() + 2,
-        )
+        self.assertEqual(window.next_button.sizePolicy().horizontalPolicy(), QSizePolicy.Policy.Fixed)
 
     def test_validation_rejects_invalid_database_name(self) -> None:
         window = self.create_window()
@@ -137,7 +168,7 @@ class SetupWindowTests(unittest.TestCase):
             window._update_port_status()
             self.app.processEvents()
 
-        self.assertEqual(window.port_status_label.text(), unavailable.message)
+        self.assertEqual(window.port_status_label.text(), format_port_check_message(unavailable))
         self.assertEqual(window.port_status_label.property("messageState"), "error")
 
         available = make_port_result(
@@ -149,7 +180,7 @@ class SetupWindowTests(unittest.TestCase):
             window._port_check_timer.timeout.emit()
             self.app.processEvents()
 
-        self.assertEqual(window.port_status_label.text(), available.message)
+        self.assertEqual(window.port_status_label.text(), format_port_check_message(available))
         self.assertEqual(window.port_status_label.property("messageState"), "success")
 
     def test_submit_blocks_when_port_is_unavailable(self) -> None:
@@ -176,7 +207,18 @@ class SetupWindowTests(unittest.TestCase):
 
         emitted.assert_not_called()
         warning_dialog.assert_called_once()
-        self.assertEqual(window.port_status_label.text(), unavailable.message)
+        self.assertEqual(window.port_status_label.text(), format_port_check_message(unavailable))
+
+    def test_language_switch_updates_wizard_text(self) -> None:
+        window = self.create_window()
+
+        russian_index = window.language_combo.findData("ru")
+        window.language_combo.setCurrentIndex(russian_index)
+
+        self.assertEqual(window.database_group.property("titleKey"), "section.mssql")
+        self.assertEqual(window.title_label.text(), "ERP Accounting Server")
+        self.assertEqual(window.next_button.text(), "Далее")
+        self.assertEqual(window.field_labels["database.server"].text(), "Хост/экземпляр SQL Server")
 
 
 if __name__ == "__main__":

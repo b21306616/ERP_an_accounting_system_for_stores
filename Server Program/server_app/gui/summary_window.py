@@ -30,12 +30,12 @@ from PyQt6.QtWidgets import (
 
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
 from server_app.core.constants import (
-    APP_NAME,
     DEFAULT_ODBC_DRIVER,
     SUPER_ADMIN_FULL_NAME,
     SUPER_ADMIN_USERNAME,
 )
 from server_app.db.bootstrap import validate_database_name
+from server_app.gui.i18n import LANGUAGE_OPTIONS, get_language, set_language, tr
 from server_app.service_control import ServiceStartType, ServiceStatus
 
 
@@ -55,26 +55,37 @@ class SummaryWindow(QWidget):
         super().__init__()
         self.config = config
         self.setObjectName("SummaryWindow")
-        self.setWindowTitle(f"{APP_NAME} - Starting")
+        self.setWindowTitle(tr("summary.window_title", state=tr("summary.subtitle_starting")))
         self.setMinimumSize(500, 520)
         self._is_compact_layout: bool | None = None
         self._updates_enabled = True
         self.is_running = False
         self.value_labels: dict[str, QLabel] = {}
         self.update_buttons: dict[str, QPushButton] = {}
+        self.row_title_labels: dict[str, QLabel] = {}
+        self.static_title_labels: dict[str, QLabel] = {}
+        self.copy_buttons: list[QPushButton] = []
+        self._status_text_key: str | None = "summary.status.starting"
+        self._window_state_key = "summary.subtitle_starting"
+        self._action_button_key = "summary.stop_connection"
 
-        self.status_label = QLabel("Starting...")
-        self.subtitle_label = QLabel("Starting")
+        self.title_label = QLabel()
+        self.subtitle_label = QLabel()
+        self.language_label = QLabel()
+        self.language_combo = QComboBox()
+        self.status_label = QLabel()
         self.base_url_label = QLabel()
         self.docs_url_label = QLabel()
         self.database_label = QLabel()
         self.auth_label = QLabel()
         self.message_label = QLabel("")
-        self.action_button = QPushButton("Stop Connection")
+        self.action_button = QPushButton()
         self.stop_button = self.action_button
 
         self._build_ui()
         self._connect_signals()
+        self._populate_language_combo()
+        self._retranslate_ui()
         self.set_config(config)
         self.mark_starting()
 
@@ -129,48 +140,54 @@ class SummaryWindow(QWidget):
         header = QWidget()
         header.setObjectName("SummaryHeader")
         header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        header_layout = QVBoxLayout(header)
+        header_layout = QGridLayout(header)
         header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(2)
-        header_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        header_layout.setHorizontalSpacing(16)
+        header_layout.setVerticalSpacing(4)
+        header_layout.setColumnStretch(0, 1)
+        header_layout.setColumnStretch(1, 0)
 
-        title_label = QLabel("ERP Accounting Server")
-        title_label.setObjectName("SummaryTitle")
+        self.title_label.setObjectName("SummaryTitle")
         self.subtitle_label.setObjectName("SummarySubtitle")
-        title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.language_label.setObjectName("LanguageLabel")
+        self.language_combo.setObjectName("LanguageCombo")
+        self.language_combo.setMinimumWidth(150)
+        self.title_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.subtitle_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        header_layout.addWidget(title_label)
-        header_layout.addWidget(self.subtitle_label)
+        header_layout.addWidget(self.title_label, 0, 0)
+        header_layout.addWidget(self.subtitle_label, 1, 0)
+        header_layout.addWidget(self.language_label, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        header_layout.addWidget(self.language_combo, 1, 1, alignment=Qt.AlignmentFlag.AlignRight)
         content_layout.addWidget(header)
 
         self.service_group = self._build_connection_card()
         content_layout.addWidget(self.service_group)
 
-        self.database_group = QGroupBox("MSSQL connection")
+        self.database_group = QGroupBox()
         database_layout = QGridLayout(self.database_group)
         self._prepare_summary_layout(database_layout)
-        self._add_update_row(database_layout, 0, "SQL Server host/instance", "database.server")
-        self._add_update_row(database_layout, 1, "Database name", "database.database")
-        self._add_update_row(database_layout, 2, "ODBC driver", "database.driver")
-        self._add_update_row(database_layout, 3, "Authentication", "database.auth_mode")
-        self._add_update_row(database_layout, 4, "SQL username", "database.username")
-        self._add_update_row(database_layout, 5, "SQL password", "database.password")
-        self._add_update_row(database_layout, 6, "Trust SQL Server certificate", "database.trust_server_certificate")
+        self._add_update_row(database_layout, 0, "field.sql_server", "database.server")
+        self._add_update_row(database_layout, 1, "field.database", "database.database")
+        self._add_update_row(database_layout, 2, "field.odbc_driver", "database.driver")
+        self._add_update_row(database_layout, 3, "field.authentication", "database.auth_mode")
+        self._add_update_row(database_layout, 4, "field.sql_username", "database.username")
+        self._add_update_row(database_layout, 5, "field.sql_password", "database.password")
+        self._add_update_row(database_layout, 6, "field.trust_certificate", "database.trust_server_certificate")
         self.database_label = self.value_labels["database.database"]
         self.auth_label = self.value_labels["database.auth_mode"]
 
-        self.api_group = QGroupBox("API server")
+        self.api_group = QGroupBox()
         api_layout = QGridLayout(self.api_group)
         self._prepare_summary_layout(api_layout)
-        self._add_update_row(api_layout, 0, "Bind host/IP", "api.host")
-        self._add_update_row(api_layout, 1, "Port", "api.port")
+        self._add_update_row(api_layout, 0, "field.bind_host", "api.host")
+        self._add_update_row(api_layout, 1, "field.port", "api.port")
 
-        self.admin_group = QGroupBox("Super Admin account")
+        self.admin_group = QGroupBox()
         admin_layout = QGridLayout(self.admin_group)
         self._prepare_summary_layout(admin_layout)
-        self._add_static_row(admin_layout, 0, "Username", QLabel(SUPER_ADMIN_USERNAME))
-        self._add_static_row(admin_layout, 1, "Full name", QLabel(SUPER_ADMIN_FULL_NAME))
-        self._add_update_row(admin_layout, 2, "Password", "super_admin.password")
+        self._add_static_row(admin_layout, 0, "field.username", QLabel(SUPER_ADMIN_USERNAME))
+        self._add_static_row(admin_layout, 1, "field.full_name", QLabel(SUPER_ADMIN_FULL_NAME))
+        self._add_update_row(admin_layout, 2, "field.password", "super_admin.password")
 
         self.sections_layout = QGridLayout()
         self.sections_layout.setContentsMargins(0, 0, 0, 0)
@@ -229,14 +246,14 @@ class SummaryWindow(QWidget):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 0)
 
-        card_title = QLabel("Connection")
-        card_title.setObjectName("CardTitle")
+        self.card_title_label = QLabel()
+        self.card_title_label.setObjectName("CardTitle")
 
         self.status_label.setObjectName("ServiceStatus")
         self.status_label.setWordWrap(True)
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        header_layout.addWidget(card_title)
+        header_layout.addWidget(self.card_title_label)
         header_layout.addStretch(1)
         header_layout.addWidget(self.status_label)
 
@@ -255,35 +272,37 @@ class SummaryWindow(QWidget):
         details_layout.setColumnStretch(1, 1)
         details_layout.setColumnStretch(2, 0)
 
-        api_title = QLabel("API base URL")
-        api_title.setObjectName("CardRowTitle")
+        self.api_title_label = QLabel()
+        self.api_title_label.setObjectName("CardRowTitle")
         self.base_url_label.setObjectName("CardRowValue")
         self.base_url_label.setWordWrap(True)
         self.base_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.base_url_label.setOpenExternalLinks(True)
 
-        copy_api_btn = QPushButton("Copy")
+        copy_api_btn = QPushButton()
         copy_api_btn.setObjectName("CardCopyButton")
         copy_api_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_api_btn.clicked.connect(lambda: self._copy_to_clipboard(self.base_url, copy_api_btn))
+        self.copy_buttons.append(copy_api_btn)
 
-        details_layout.addWidget(api_title, 0, 0)
+        details_layout.addWidget(self.api_title_label, 0, 0)
         details_layout.addWidget(self.base_url_label, 0, 1)
         details_layout.addWidget(copy_api_btn, 0, 2)
 
-        docs_title = QLabel("Swagger docs")
-        docs_title.setObjectName("CardRowTitle")
+        self.docs_title_label = QLabel()
+        self.docs_title_label.setObjectName("CardRowTitle")
         self.docs_url_label.setObjectName("CardRowValue")
         self.docs_url_label.setWordWrap(True)
         self.docs_url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
         self.docs_url_label.setOpenExternalLinks(True)
 
-        copy_docs_btn = QPushButton("Copy")
+        copy_docs_btn = QPushButton()
         copy_docs_btn.setObjectName("CardCopyButton")
         copy_docs_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_docs_btn.clicked.connect(lambda: self._copy_to_clipboard(f"{self._service_root_url()}/docs", copy_docs_btn))
+        self.copy_buttons.append(copy_docs_btn)
 
-        details_layout.addWidget(docs_title, 1, 0)
+        details_layout.addWidget(self.docs_title_label, 1, 0)
         details_layout.addWidget(self.docs_url_label, 1, 1)
         details_layout.addWidget(copy_docs_btn, 1, 2)
 
@@ -296,7 +315,7 @@ class SummaryWindow(QWidget):
         from PyQt6.QtWidgets import QApplication
         QApplication.clipboard().setText(text)
 
-        button.setText("Copied!")
+        button.setText(tr("summary.copied"))
         button.setProperty("copiedState", True)
         button.style().unpolish(button)
         button.style().polish(button)
@@ -307,7 +326,7 @@ class SummaryWindow(QWidget):
     def _reset_copy_button(self, button: QPushButton) -> None:
         """Reset copy button text and state."""
 
-        button.setText("Copy")
+        button.setText(tr("summary.copy"))
         button.setProperty("copiedState", False)
         button.style().unpolish(button)
         button.style().polish(button)
@@ -323,27 +342,30 @@ class SummaryWindow(QWidget):
         layout.setColumnStretch(1, 1)
         layout.setColumnStretch(2, 0)
 
-    def _add_static_row(self, layout: QGridLayout, row: int, title: str, value_label: QLabel) -> None:
+    def _add_static_row(self, layout: QGridLayout, row: int, title_key: str, value_label: QLabel) -> None:
         """Add a read-only row to a summary section."""
 
-        title_label = QLabel(title)
+        title_label = QLabel()
         title_label.setObjectName("RowTitle")
+        title_label.setProperty("i18nKey", title_key)
         value_label.setObjectName("RowValue")
         value_label.setWordWrap(True)
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(title_label, row, 0)
         layout.addWidget(value_label, row, 1, 1, 2)
+        self.static_title_labels[title_key] = title_label
 
-    def _add_update_row(self, layout: QGridLayout, row: int, title: str, field_id: str) -> None:
+    def _add_update_row(self, layout: QGridLayout, row: int, title_key: str, field_id: str) -> None:
         """Add a summary row with an update action."""
 
-        title_label = QLabel(title)
+        title_label = QLabel()
         title_label.setObjectName("RowTitle")
+        title_label.setProperty("i18nKey", title_key)
         value_label = QLabel()
         value_label.setObjectName("RowValue")
         value_label.setWordWrap(True)
         value_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        button = QPushButton("Update this field")
+        button = QPushButton()
         button.setObjectName("InlineButton")
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.clicked.connect(lambda _checked=False, name=field_id: self._on_update_field(name))
@@ -352,13 +374,59 @@ class SummaryWindow(QWidget):
         layout.addWidget(button, row, 2, alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
         self.value_labels[field_id] = value_label
         self.update_buttons[field_id] = button
+        self.row_title_labels[field_id] = title_label
 
     def _connect_signals(self) -> None:
         """Connect user actions to summary-window signals."""
 
         self.action_button.clicked.connect(self._on_action_clicked)
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
 
-    def _on_action_clicked(self) -> None:
+    def _populate_language_combo(self) -> None:
+        self.language_combo.blockSignals(True)
+        self.language_combo.clear()
+        for option in LANGUAGE_OPTIONS:
+            self.language_combo.addItem(option.label, option.code)
+        index = self.language_combo.findData(get_language())
+        self.language_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.language_combo.blockSignals(False)
+
+    def _on_language_changed(self, *_args: object) -> None:
+        language = self.language_combo.currentData()
+        if language:
+            set_language(str(language))
+            self._retranslate_ui()
+
+    def _retranslate_ui(self) -> None:
+        """Apply active translations to all static and stateful summary text."""
+
+        self.title_label.setText(tr("app.title"))
+        self.language_label.setText(tr("language.label"))
+        self.database_group.setTitle(tr("section.mssql"))
+        self.api_group.setTitle(tr("section.api"))
+        self.admin_group.setTitle(tr("section.super_admin"))
+        self.card_title_label.setText(tr("summary.connection"))
+        self.api_title_label.setText(tr("summary.api_base_url"))
+        self.docs_title_label.setText(tr("summary.swagger_docs"))
+        for button in self.copy_buttons:
+            if not button.property("copiedState"):
+                button.setText(tr("summary.copy"))
+        for field_id, label in self.row_title_labels.items():
+            key = str(label.property("i18nKey") or "")
+            label.setText(tr(key))
+            self.update_buttons[field_id].setText(tr("summary.update_field"))
+        for label in self.static_title_labels.values():
+            key = str(label.property("i18nKey") or "")
+            label.setText(tr(key))
+        if self._status_text_key:
+            self.status_label.setText(tr(self._status_text_key))
+        self.subtitle_label.setText(tr(self._window_state_key))
+        self.setWindowTitle(tr("summary.window_title", state=tr(self._window_state_key)))
+        self.action_button.setText(tr(self._action_button_key))
+        if self.value_labels:
+            self.set_config(self.config)
+
+    def _on_action_clicked(self, *_args: object) -> None:
         """Emit the correct action for the current service state."""
 
         if self.is_running:
@@ -379,21 +447,21 @@ class SummaryWindow(QWidget):
         self.value_labels["database.database"].setText(config.database.database)
         self.value_labels["database.driver"].setText(config.database.driver)
         self.value_labels["database.auth_mode"].setText(self._display_auth_mode(config.database.auth_mode))
-        self.value_labels["database.username"].setText(config.database.username or "Not set")
+        self.value_labels["database.username"].setText(config.database.username or tr("common.not_set"))
         self.value_labels["database.password"].setText(
-            "Saved (hidden)" if config.database.password else "Not set"
+            tr("common.saved_hidden") if config.database.password else tr("common.not_set")
         )
         self.value_labels["database.trust_server_certificate"].setText(
-            "Yes" if config.database.trust_server_certificate else "No"
+            tr("common.yes") if config.database.trust_server_certificate else tr("common.no")
         )
         self.value_labels["api.host"].setText(config.api.host)
         self.value_labels["api.port"].setText(str(config.api.port))
-        self.value_labels["super_admin.password"].setText("Configured (hidden)")
+        self.value_labels["super_admin.password"].setText(tr("common.configured_hidden"))
 
     def _display_auth_mode(self, auth_mode: str) -> str:
         """Return the user-facing auth-mode label."""
 
-        return "SQL Login" if auth_mode == "sql" else "Windows Authentication"
+        return tr("auth.sql") if auth_mode == "sql" else tr("auth.windows")
 
     def _on_update_field(self, field_id: str) -> None:
         """Prompt for a field update and emit the validated result."""
@@ -413,7 +481,7 @@ class SummaryWindow(QWidget):
             config = self._updated_config(field_id, value)
             self._validate_config(config)
         except ValueError as exc:
-            QMessageBox.warning(self, "Invalid update", str(exc))
+            QMessageBox.warning(self, tr("summary.update_invalid_title"), str(exc))
             return
 
         self.config_update_requested.emit(config)
@@ -424,39 +492,39 @@ class SummaryWindow(QWidget):
         database = self.config.database
         api = self.config.api
         if field_id == "database.server":
-            return self._prompt_text("Update SQL Server host/instance", "SQL Server host/instance", database.server)
+            return self._prompt_text(tr("dialog.update_sql_server"), tr("field.sql_server"), database.server)
         if field_id == "database.database":
-            return self._prompt_text("Update database name", "Database name", database.database)
+            return self._prompt_text(tr("dialog.update_database"), tr("field.database"), database.database)
         if field_id == "database.driver":
-            return self._prompt_choice("Update ODBC driver", "ODBC driver", self._driver_options(), database.driver)
+            return self._prompt_choice(tr("dialog.update_driver"), tr("field.odbc_driver"), self._driver_options(), database.driver)
         if field_id == "database.auth_mode":
             return self._prompt_choice(
-                "Update authentication",
-                "Authentication",
-                [("Windows Authentication", "windows"), ("SQL Login", "sql")],
+                tr("dialog.update_auth"),
+                tr("field.authentication"),
+                [(tr("auth.windows"), "windows"), (tr("auth.sql"), "sql")],
                 database.auth_mode,
             )
         if field_id == "database.username":
-            return self._prompt_text("Update SQL username", "SQL username", database.username or "")
+            return self._prompt_text(tr("dialog.update_sql_username"), tr("field.sql_username"), database.username or "")
         if field_id == "database.password":
             return self._prompt_text(
-                "Update SQL password",
-                "New SQL password",
+                tr("dialog.update_sql_password"),
+                tr("field.sql_password"),
                 "",
                 password=True,
-                placeholder="Leave blank to clear when Windows Authentication is used",
+                placeholder=tr("dialog.sql_password_placeholder"),
             )
         if field_id == "database.trust_server_certificate":
             return self._prompt_checkbox(
-                "Update certificate trust",
-                "Trust SQL Server certificate",
+                tr("dialog.update_certificate"),
+                tr("field.trust_certificate"),
                 database.trust_server_certificate,
             )
         if field_id == "api.host":
-            return self._prompt_text("Update API bind host/IP", "Bind host/IP", api.host)
+            return self._prompt_text(tr("dialog.update_api_host"), tr("field.bind_host"), api.host)
         if field_id == "api.port":
             return self._prompt_port(api.port)
-        raise ValueError(f"Unknown update field: {field_id}")
+        raise ValueError(tr("common.unknown_field", field_id=field_id))
 
     def _updated_config(self, field_id: str, value: object) -> AppConfig:
         """Return a copied config with one updated field."""
@@ -489,7 +557,7 @@ class SummaryWindow(QWidget):
         elif field_id == "api.port":
             api = replace(api, port=int(value))
         else:
-            raise ValueError(f"Unknown update field: {field_id}")
+            raise ValueError(tr("common.unknown_field", field_id=field_id))
 
         return AppConfig(database=database, api=api, jwt_secret=self.config.jwt_secret)
 
@@ -497,20 +565,23 @@ class SummaryWindow(QWidget):
         """Validate updated config values before saving."""
 
         if not config.database.server:
-            raise ValueError("SQL Server host/instance is required.")
+            raise ValueError(tr("setup.required", field=tr("field.sql_server")))
         if not config.database.database:
-            raise ValueError("Database name is required.")
-        validate_database_name(config.database.database)
+            raise ValueError(tr("setup.required", field=tr("field.database")))
+        try:
+            validate_database_name(config.database.database)
+        except ValueError as exc:
+            raise ValueError(tr("validation.database_name", message=str(exc))) from exc
         if not config.database.driver:
-            raise ValueError("ODBC driver is required.")
+            raise ValueError(tr("validation.odbc_driver_required"))
         if config.database.auth_mode == "sql" and not config.database.username:
-            raise ValueError("SQL username is required for SQL Login mode.")
+            raise ValueError(tr("validation.sql_username_required"))
         if config.database.auth_mode == "sql" and not config.database.password:
-            raise ValueError("SQL password is required for SQL Login mode.")
+            raise ValueError(tr("validation.sql_password_required"))
         if not config.api.host:
-            raise ValueError("API bind host/IP is required.")
+            raise ValueError(tr("setup.required", field=tr("field.bind_host")))
         if not 1 <= config.api.port <= 65535:
-            raise ValueError("API port must be between 1 and 65535.")
+            raise ValueError(tr("validation.api_port_range"))
 
     def _driver_options(self) -> list[tuple[str, str]]:
         """Return available ODBC drivers with the current/default values included."""
@@ -520,6 +591,16 @@ class SummaryWindow(QWidget):
             if driver and driver not in drivers:
                 drivers.insert(0, driver)
         return [(driver, driver) for driver in drivers]
+
+    def _localize_dialog_buttons(self, buttons: QDialogButtonBox) -> None:
+        """Apply the active app language to standard dialog buttons."""
+
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        if save_button is not None:
+            save_button.setText(tr("common.save"))
+        if cancel_button is not None:
+            cancel_button.setText(tr("common.cancel"))
 
     def _prompt_text(
         self,
@@ -543,6 +624,7 @@ class SummaryWindow(QWidget):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self._localize_dialog_buttons(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -572,6 +654,7 @@ class SummaryWindow(QWidget):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self._localize_dialog_buttons(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -591,6 +674,7 @@ class SummaryWindow(QWidget):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self._localize_dialog_buttons(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
@@ -602,15 +686,16 @@ class SummaryWindow(QWidget):
         """Prompt for the API port."""
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Update API port")
+        dialog.setWindowTitle(tr("dialog.update_api_port"))
         form = QFormLayout(dialog)
         spin = QSpinBox()
         spin.setRange(1, 65535)
         spin.setValue(current)
-        form.addRow("Port", spin)
+        form.addRow(tr("field.port"), spin)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
+        self._localize_dialog_buttons(buttons)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -623,19 +708,20 @@ class SummaryWindow(QWidget):
 
         while True:
             dialog = QDialog(self)
-            dialog.setWindowTitle("Update Super Admin password")
+            dialog.setWindowTitle(tr("dialog.update_admin_password"))
             form = QFormLayout(dialog)
             current_edit = QLineEdit()
             new_edit = QLineEdit()
             confirm_edit = QLineEdit()
             for edit in (current_edit, new_edit, confirm_edit):
                 edit.setEchoMode(QLineEdit.EchoMode.Password)
-            form.addRow("Current password", current_edit)
-            form.addRow("New password", new_edit)
-            form.addRow("Confirm new password", confirm_edit)
+            form.addRow(tr("field.current_password"), current_edit)
+            form.addRow(tr("field.new_password"), new_edit)
+            form.addRow(tr("field.confirm_new_password"), confirm_edit)
             buttons = QDialogButtonBox(
                 QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
             )
+            self._localize_dialog_buttons(buttons)
             buttons.accepted.connect(dialog.accept)
             buttons.rejected.connect(dialog.reject)
             form.addRow(buttons)
@@ -645,20 +731,24 @@ class SummaryWindow(QWidget):
             current_password = current_edit.text()
             new_password = new_edit.text()
             if not current_password:
-                QMessageBox.warning(self, "Invalid password update", "Current Super Admin password is required.")
+                QMessageBox.warning(
+                    self,
+                    tr("summary.password_invalid_title"),
+                    tr("validation.current_admin_required"),
+                )
                 continue
             if len(new_password) < 6:
                 QMessageBox.warning(
                     self,
-                    "Invalid password update",
-                    "Super Admin password must contain at least 6 characters.",
+                    tr("summary.password_invalid_title"),
+                    tr("validation.admin_password_length"),
                 )
                 continue
             if new_password != confirm_edit.text():
                 QMessageBox.warning(
                     self,
-                    "Invalid password update",
-                    "Super Admin password and confirmation do not match.",
+                    tr("summary.password_invalid_title"),
+                    tr("validation.admin_password_match"),
                 )
                 continue
             return current_password, new_password
@@ -671,7 +761,10 @@ class SummaryWindow(QWidget):
             button.setEnabled(enabled)
         if not enabled:
             self.action_button.setEnabled(False)
-        elif self.status_label.text() not in {"Starting...", "Stopping..."}:
+        elif self.status_label.text() not in {
+            tr("summary.status.starting"),
+            tr("summary.status.stopping"),
+        }:
             self.action_button.setEnabled(True)
 
     def show_update_message(self, message: str, state: str = "info") -> None:
@@ -694,12 +787,21 @@ class SummaryWindow(QWidget):
         """Update the summary header and OS window title."""
 
         self.subtitle_label.setText(label)
-        self.setWindowTitle(f"{APP_NAME} - {label}")
+        self.setWindowTitle(tr("summary.window_title", state=label))
 
-    def _set_service_status(self, text: str, state: str, window_state: str) -> None:
+    def _set_service_status(
+        self,
+        text: str,
+        state: str,
+        window_state_key: str,
+        *,
+        text_key: str | None = None,
+    ) -> None:
         """Update the styled service status value."""
 
-        self._set_window_state(window_state)
+        self._window_state_key = window_state_key
+        self._status_text_key = text_key
+        self._set_window_state(tr(window_state_key))
         self.status_label.setProperty("serviceState", state)
         self.status_label.setText(text)
         self.status_label.style().unpolish(self.status_label)
@@ -715,24 +817,42 @@ class SummaryWindow(QWidget):
         """Update the UI after the Windows service starts."""
 
         self.is_running = True
-        self._set_service_status("Running", "running", "Running")
-        self.action_button.setText("Stop Connection")
+        self._set_service_status(
+            tr("summary.status.running"),
+            "running",
+            "summary.status.running",
+            text_key="summary.status.running",
+        )
+        self._action_button_key = "summary.stop_connection"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(self._updates_enabled)
 
     def mark_starting(self) -> None:
         """Update the UI while service startup is in progress."""
 
         self.is_running = False
-        self._set_service_status("Starting...", "neutral", "Starting")
-        self.action_button.setText("Starting...")
+        self._set_service_status(
+            tr("summary.status.starting"),
+            "neutral",
+            "summary.subtitle_starting",
+            text_key="summary.status.starting",
+        )
+        self._action_button_key = "summary.status.starting"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(False)
 
     def mark_stopping(self) -> None:
         """Update the UI while shutdown is in progress."""
 
         self.is_running = True
-        self._set_service_status("Stopping...", "warning", "Stopping")
-        self.action_button.setText("Stopping...")
+        self._set_service_status(
+            tr("summary.status.stopping"),
+            "warning",
+            "summary.subtitle_stopping",
+            text_key="summary.status.stopping",
+        )
+        self._action_button_key = "summary.status.stopping"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(False)
 
     def mark_stopped(self, status: ServiceStatus | None = None) -> None:
@@ -740,30 +860,43 @@ class SummaryWindow(QWidget):
 
         self.is_running = False
         if status is not None and status.start_type == ServiceStartType.DISABLED:
-            text = "Stopped (disabled)"
+            text_key = "summary.status.stopped_disabled"
         elif status is not None and status.needs_repair:
-            text = "Stopped (service needs repair)"
+            text_key = "summary.status.needs_repair"
         else:
-            text = "Stopped"
+            text_key = "summary.status.stopped"
 
-        self._set_service_status(text, "warning", "Stopped")
-        self.action_button.setText("Start Connection")
+        self._set_service_status(
+            tr(text_key),
+            "warning",
+            "summary.status.stopped",
+            text_key=text_key,
+        )
+        self._action_button_key = "summary.start_connection"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(self._updates_enabled)
 
     def mark_not_installed(self, status: ServiceStatus | None = None) -> None:
         """Update the UI when the Windows service is not registered."""
 
         self.is_running = False
-        self._set_service_status("Not installed", "warning", "Not installed")
-        self.action_button.setText("Start Connection")
+        self._set_service_status(
+            tr("summary.status.not_installed"),
+            "warning",
+            "summary.status.not_installed",
+            text_key="summary.status.not_installed",
+        )
+        self._action_button_key = "summary.start_connection"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(self._updates_enabled)
 
     def mark_error(self, message: str) -> None:
         """Show a startup or runtime error."""
 
         self.is_running = False
-        self._set_service_status(message, "error", "Error")
-        self.action_button.setText("Start Connection")
+        self._set_service_status(message, "error", "summary.status.error")
+        self._action_button_key = "summary.start_connection"
+        self.action_button.setText(tr(self._action_button_key))
         self.action_button.setEnabled(self._updates_enabled)
 
     def _apply_responsive_layout(self) -> None:
@@ -861,6 +994,11 @@ class SummaryWindow(QWidget):
                 color: #64748b;
                 font-size: 12px;
                 font-weight: 600;
+            }
+            QLabel#LanguageLabel {
+                color: #64748b;
+                font-size: 11px;
+                font-weight: 700;
             }
             QGroupBox {
                 background: #ffffff;

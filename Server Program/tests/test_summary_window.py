@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 from server_app.core.config import ApiConfig, AppConfig, DatabaseConfig
 from server_app.core.constants import APP_NAME, DEFAULT_ODBC_DRIVER
 from server_app.core.network import PortCheckResult, PortCheckStatus
+from server_app.gui.i18n import format_port_check_message, set_language
 from server_app.gui.main import ApplicationCoordinator
 from server_app.gui.summary_window import SummaryWindow
 from server_app.service_control import ServiceRunState, ServiceStartType, ServiceStatus
@@ -97,6 +98,9 @@ class SummaryWindowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    def setUp(self) -> None:
+        set_language("en", persist=False)
+
     def create_window(self, config: AppConfig | None = None) -> SummaryWindow:
         window = SummaryWindow(config or make_config())
         self.addCleanup(window.close)
@@ -180,6 +184,18 @@ class SummaryWindowTests(unittest.TestCase):
         self.assertEqual(window.windowTitle(), f"{APP_NAME} - Error")
         self.assertEqual(window.subtitle_label.text(), "Error")
 
+    def test_language_switch_updates_summary_text(self) -> None:
+        window = self.create_window()
+
+        window.mark_running()
+        russian_index = window.language_combo.findData("ru")
+        window.language_combo.setCurrentIndex(russian_index)
+
+        self.assertEqual(window.database_group.title(), "Подключение MSSQL")
+        self.assertEqual(window.status_label.text(), "Работает")
+        self.assertEqual(window.action_button.text(), "Остановить подключение")
+        self.assertEqual(window.value_labels["database.auth_mode"].text(), "SQL-логин")
+
     def test_not_installed_status_is_distinct(self) -> None:
         window = self.create_window()
 
@@ -205,6 +221,9 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        set_language("en", persist=False)
 
     def create_coordinator(self) -> tuple[ApplicationCoordinator, FakeConfigManager, FakeServiceController]:
         manager = FakeConfigManager()
@@ -266,7 +285,9 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
 
         self.assertIsNone(coordinator.startup_worker)
         self.assertEqual(manager.saved_configs, [])
-        coordinator.setup_window.show_port_error.assert_called_once_with(blocked.full_message)
+        coordinator.setup_window.show_port_error.assert_called_once_with(
+            format_port_check_message(blocked, include_diagnostic=True)
+        )
 
     def test_database_ready_rechecks_port_before_saving_config(self) -> None:
         coordinator, manager, _controller = self.create_coordinator()
@@ -320,7 +341,10 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
             coordinator.start_connection()
 
         self.assertIsNone(coordinator.service_worker)
-        self.assertEqual(coordinator.summary_window.message_label.text(), blocked.full_message)
+        self.assertEqual(
+            coordinator.summary_window.message_label.text(),
+            format_port_check_message(blocked, include_diagnostic=True),
+        )
         self.assertEqual(coordinator.summary_window.action_button.text(), "Start Connection")
 
     def test_stopped_summary_api_update_blocks_unavailable_port(self) -> None:
@@ -339,7 +363,10 @@ class SummaryUpdateCoordinatorTests(unittest.TestCase):
             coordinator.handle_summary_config_update(updated)
 
         self.assertEqual(manager.saved_configs, [])
-        self.assertEqual(coordinator.summary_window.message_label.text(), blocked.full_message)
+        self.assertEqual(
+            coordinator.summary_window.message_label.text(),
+            format_port_check_message(blocked, include_diagnostic=True),
+        )
 
     def test_password_update_success_stops_running_service(self) -> None:
         coordinator, _manager, controller = self.create_coordinator()
@@ -364,6 +391,9 @@ class SummaryServicePollingCoordinatorTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self) -> None:
+        set_language("en", persist=False)
 
     def create_coordinator(
         self,
